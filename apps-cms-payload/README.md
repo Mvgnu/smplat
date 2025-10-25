@@ -59,4 +59,4 @@ The collections mirror the content expected by `apps/web`:
 - `blog-posts` – long-form insights rendered on `/blog`
 - `faqs`, `testimonials`, `case-studies`, `pricing-tiers`, `site-settings`
 
-Rich text fields leverage the Lexical editor so seed scripts and the frontend use the same structures.
+Rich text fields leverage the Lexical editor so seed scripts and the frontend use the same structures. The marketing kit registers hero, metrics, testimonial, and product card blocks so editors can compose full sections inside a single rich-text stream.

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import dotenv from "dotenv";
 import { postgresAdapter } from "@payloadcms/db-postgres";
-import { lexicalEditor } from "@payloadcms/richtext-lexical";
+import { BlocksFeature, lexicalEditor } from "@payloadcms/richtext-lexical";
 import { buildConfig } from "payload";
 
 import { BlogPosts } from "@/collections/BlogPosts";
@@ -14,6 +14,8 @@ import { PricingTiers } from "@/collections/PricingTiers";
 import { SiteSettings } from "@/collections/SiteSettings";
 import { Testimonials } from "@/collections/Testimonials";
 import { Users } from "@/collections/Users";
+
+import { marketingBlocks } from "./lexical/marketing";
 
 const filename = fileURLToPath(import.meta.url);
 const dirname = path.dirname(filename);
@@ -33,7 +35,14 @@ export default buildConfig({
       importMapFile: path.resolve(dirname, "../importMap.js")
     }
   },
-  editor: lexicalEditor(),
+  editor: lexicalEditor({
+    features: ({ defaultFeatures }) => [
+      ...defaultFeatures,
+      BlocksFeature({
+        blocks: marketingBlocks
+      })
+    ]
+  }),
   collections: [Users, Pages, BlogPosts, Faqs, Testimonials, CaseStudies, PricingTiers, SiteSettings],
   cors: [WEB_ORIGIN],
   csrf: [WEB_ORIGIN],
