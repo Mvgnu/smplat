@@ -1,5 +1,10 @@
 import { PortableText, type PortableTextComponents } from "next-sanity";
-import { convertLexicalToHTML } from "@payloadcms/richtext-lexical/html";
+import {
+  RichText as PayloadLexicalRichText,
+  type JSXConverters,
+  type JSXConvertersFunction
+} from "@payloadcms/richtext-lexical/react";
+import type { SerializedEditorState, SerializedLexicalNode } from "lexical";
 
 const defaultPortableTextComponents: PortableTextComponents = {
   types: {
@@ -22,13 +27,39 @@ const defaultPortableTextComponents: PortableTextComponents = {
 const defaultLexicalClassName =
   "space-y-4 [&_*]:text-white [&_a]:underline [&_h2]:text-3xl [&_h3]:text-2xl [&_p]:text-white/80";
 
+type LexicalEditorState = SerializedEditorState<SerializedLexicalNode>;
+
 type RichTextProps = {
   value?: unknown;
   components?: PortableTextComponents;
   lexicalClassName?: string;
+  lexicalConverters?: JSXConverters | JSXConvertersFunction;
 };
 
-export function RichText({ value, components = defaultPortableTextComponents, lexicalClassName = defaultLexicalClassName }: RichTextProps) {
+const isLexicalEditorState = (value: unknown): value is LexicalEditorState => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const root = (value as { root?: unknown }).root;
+
+  if (!root || typeof root !== "object") {
+    return false;
+  }
+
+  const { type, children } = root as { type?: unknown; children?: unknown };
+
+  return type === "root" && Array.isArray(children);
+};
+
+const hasLexicalContent = (state: LexicalEditorState) => state.root.children.length > 0;
+
+export function RichText({
+  value,
+  components = defaultPortableTextComponents,
+  lexicalClassName = defaultLexicalClassName,
+  lexicalConverters
+}: RichTextProps) {
   if (!value) {
     return null;
   }
@@ -37,20 +68,26 @@ export function RichText({ value, components = defaultPortableTextComponents, le
     if (value.length === 0) {
       return null;
     }
+
     return <PortableText value={value} components={components} />;
   }
 
-  if (typeof value === "object") {
-    try {
-      const html = convertLexicalToHTML({ data: value, disableContainer: true });
-      if (!html) {
-        return null;
-      }
-      return <div className={lexicalClassName} dangerouslySetInnerHTML={{ __html: html }} />;
-    } catch (error) {
-      console.warn("Failed to render Payload rich text", error);
+  if (isLexicalEditorState(value)) {
+    if (!hasLexicalContent(value)) {
       return null;
     }
+
+    return (
+      <PayloadLexicalRichText
+        className={lexicalClassName}
+        converters={lexicalConverters}
+        data={value}
+      />
+    );
+  }
+
+  if (typeof value === "object") {
+    console.warn("RichText received an unsupported value", value);
   }
 
   return null;

@@ -8,43 +8,71 @@ jest.mock("next-sanity", () => ({
   )
 }));
 
-jest.mock("@payloadcms/richtext-lexical/html", () => ({
-  convertLexicalToHTML: ({ data }: { data: any; disableContainer?: boolean }) => {
-    const nodes: any[] = data?.root?.children ?? [];
-    const toHTML = (items: any[]): string =>
-      items
-        .map((item) => {
-          if (!item) {
-            return "";
-          }
-          if (item.type === "text") {
-            return item.text ?? "";
-          }
-          if (item.type === "link") {
-            const href = item.fields?.url ?? "";
-            return `<a href="${href}">${toHTML(item.children ?? [])}</a>`;
-          }
-          if (item.type === "paragraph") {
-            return `<p>${toHTML(item.children ?? [])}</p>`;
-          }
-          if (item.type === "heading") {
-            const tag = item.tag ?? "h2";
-            return `<${tag}>${toHTML(item.children ?? [])}</${tag}>`;
-          }
-          if (item.type === "list") {
-            const tag = item.tag ?? "ul";
-            return `<${tag}>${toHTML(item.children ?? [])}</${tag}>`;
-          }
-          if (item.type === "listitem") {
-            return `<li>${toHTML(item.children ?? [])}</li>`;
-          }
-          return "";
-        })
-        .join("");
+jest.mock("@payloadcms/richtext-lexical/react", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
 
-    return toHTML(nodes);
-  }
-}));
+  const renderNodes = (nodes: any[]): React.ReactNode[] =>
+    (nodes ?? [])
+      .map((node: any, index: number) => {
+        if (!node) {
+          return null;
+        }
+
+        if (node.type === "text") {
+          return node.text ?? "";
+        }
+
+        if (node.type === "link") {
+          const href = node.fields?.url ?? "";
+          const children = renderNodes(node.children ?? []);
+          return React.createElement(
+            "a",
+            {
+              key: index,
+              href,
+              rel: node.fields?.newTab ? "noopener noreferrer" : undefined,
+              target: node.fields?.newTab ? "_blank" : undefined
+            },
+            ...children
+          );
+        }
+
+        if (node.type === "paragraph") {
+          return React.createElement("p", { key: index }, ...renderNodes(node.children ?? []));
+        }
+
+        if (node.type === "heading") {
+          const Tag = (node.tag ?? "h2") as keyof JSX.IntrinsicElements;
+          return React.createElement(Tag, { key: index }, ...renderNodes(node.children ?? []));
+        }
+
+        if (node.type === "list") {
+          const Tag = (node.tag ?? "ul") as keyof JSX.IntrinsicElements;
+          return React.createElement(Tag, { key: index }, ...renderNodes(node.children ?? []));
+        }
+
+        if (node.type === "listitem") {
+          return React.createElement("li", { key: index }, ...renderNodes(node.children ?? []));
+        }
+
+        return null;
+      })
+      .filter((node: React.ReactNode | null): node is React.ReactNode => node !== null);
+
+  const MockRichText: React.FC<{ data: any; className?: string }> = ({ data, className }) => {
+    const children = renderNodes(data?.root?.children ?? []);
+
+    if (!children.length) {
+      return null;
+    }
+
+    return React.createElement("div", { className }, ...children);
+  };
+
+  return {
+    RichText: MockRichText
+  };
+});
 
 import { payloadLexicalRichText } from "../__fixtures__/payload-lexical";
 
@@ -76,6 +104,18 @@ describe("PostContent", () => {
     expect(container.firstChild).toBeNull();
 
     rerender(<PostContent value={[]} />);
+    expect(container.firstChild).toBeNull();
+
+    rerender(
+      <PostContent
+        value={{
+          root: {
+            type: "root",
+            children: []
+          }
+        }}
+      />
+    );
     expect(container.firstChild).toBeNull();
   });
 });
