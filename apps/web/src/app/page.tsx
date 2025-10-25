@@ -1,13 +1,20 @@
 import Link from "next/link";
 
 import { PostList } from "@/components/blog/post-list";
-import { FaqAccordion } from "@/components/faq/accordion";
 import { CaseStudyHighlight } from "@/components/case-studies/highlight";
+import { FaqAccordion } from "@/components/faq/accordion";
 import { PricingGrid } from "@/components/pricing/pricing-grid";
-import { TestimonialHighlights } from "@/components/testimonials/highlights";
+import { HeroCallout } from "@/components/rich-text/marketing/hero-callout";
+import { MetricGrid } from "@/components/rich-text/marketing/metric-grid";
+import { ProductCard } from "@/components/rich-text/marketing/product-card";
+import { TestimonialCallout } from "@/components/rich-text/marketing/testimonial-callout";
 import { RichText } from "@/components/rich-text/rich-text";
+import { TestimonialHighlights } from "@/components/testimonials/highlights";
 import { getHomepage } from "@/server/cms/loaders";
 import type { PageDocument } from "@/server/cms/types";
+
+import { parseMarketingSectionContent } from "./marketing-content";
+
 
 const fallbackHero = {
   eyebrow: "Social Media Growth, Engineered for Agencies",
@@ -85,6 +92,88 @@ export default async function HomePage() {
             }
 
             const key = section._key ?? section.heading ?? section.layout ?? "section";
+            const marketingContent = parseMarketingSectionContent(section.content);
+
+            if (marketingContent.length > 0) {
+              return (
+                <div key={key} className="flex flex-col gap-12">
+                  {marketingContent.map((content, index) => {
+                    const contentKey = content.key ?? `${content.kind}-${index}`;
+
+                    if (content.kind === "hero") {
+                      const primaryCta =
+                        content.primaryCtaHref || content.primaryCtaLabel
+                          ? {
+                              label: content.primaryCtaLabel,
+                              href: content.primaryCtaHref
+                            }
+                          : undefined;
+                      const secondaryCta =
+                        content.secondaryCtaHref || content.secondaryCtaLabel
+                          ? {
+                              label: content.secondaryCtaLabel,
+                              href: content.secondaryCtaHref
+                            }
+                          : undefined;
+
+                      return (
+                        <HeroCallout
+                          key={contentKey}
+                          eyebrow={content.eyebrow}
+                          headline={content.headline}
+                          body={content.body}
+                          primaryCta={primaryCta}
+                          secondaryCta={secondaryCta}
+                          align={content.align}
+                        />
+                      );
+                    }
+
+                    if (content.kind === "metrics") {
+                      const metrics = content.metrics.length > 0 ? content.metrics : fallbackMetrics;
+                      return (
+                        <MetricGrid
+                          key={contentKey}
+                          heading={content.heading}
+                          subheading={content.subheading}
+                          metrics={metrics}
+                        />
+                      );
+                    }
+
+                    if (content.kind === "testimonial") {
+                      return (
+                        <TestimonialCallout
+                          key={contentKey}
+                          quote={content.quote}
+                          author={content.author}
+                          role={content.role}
+                          company={content.company}
+                        />
+                      );
+                    }
+
+                    const features = content.features.length > 0 ? content.features : undefined;
+
+                    return (
+                      <ProductCard
+                        key={contentKey}
+                        badge={content.badge}
+                        name={content.name}
+                        description={content.description}
+                        price={content.price}
+                        currency={content.currency}
+                        frequency={content.frequency}
+                        features={features}
+                        ctaLabel={content.ctaLabel}
+                        ctaHref={content.ctaHref}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            }
+
             const layout = section.layout ?? "two-column";
 
             if (layout === "metrics") {
