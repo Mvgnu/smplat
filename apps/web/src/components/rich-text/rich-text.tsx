@@ -6,6 +6,8 @@ import {
 } from "@payloadcms/richtext-lexical/react";
 import type { SerializedEditorState, SerializedLexicalNode } from "lexical";
 
+import { marketingLexicalConverters } from "./marketing-converters";
+
 const defaultPortableTextComponents: PortableTextComponents = {
   types: {
     image: ({ value }) => (
@@ -54,6 +56,46 @@ const isLexicalEditorState = (value: unknown): value is LexicalEditorState => {
 
 const hasLexicalContent = (state: LexicalEditorState) => state.root.children.length > 0;
 
+const mergeConverters = (base: JSXConverters, extension?: JSXConverters): JSXConverters => {
+  if (!extension) {
+    return base;
+  }
+
+  const { blocks: baseBlocks, inlineBlocks: baseInlineBlocks, ...baseRest } = base;
+  const { blocks: extensionBlocks, inlineBlocks: extensionInlineBlocks, ...extensionRest } = extension;
+
+  return {
+    ...baseRest,
+    ...extensionRest,
+    blocks: {
+      ...(baseBlocks ?? {}),
+      ...(extensionBlocks ?? {})
+    },
+    inlineBlocks: {
+      ...(baseInlineBlocks ?? {}),
+      ...(extensionInlineBlocks ?? {})
+    }
+  };
+};
+
+const withMarketingConverters = (
+  converters?: JSXConverters | JSXConvertersFunction
+): JSXConvertersFunction => {
+  return ({ defaultConverters }) => {
+    const baseWithMarketing = mergeConverters(defaultConverters, marketingLexicalConverters);
+
+    if (!converters) {
+      return baseWithMarketing;
+    }
+
+    if (typeof converters === "function") {
+      return converters({ defaultConverters: baseWithMarketing });
+    }
+
+    return mergeConverters(baseWithMarketing, converters);
+  };
+};
+
 export function RichText({
   value,
   components = defaultPortableTextComponents,
@@ -80,7 +122,7 @@ export function RichText({
     return (
       <PayloadLexicalRichText
         className={lexicalClassName}
-        converters={lexicalConverters}
+        converters={withMarketingConverters(lexicalConverters)}
         data={value}
       />
     );
