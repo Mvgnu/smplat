@@ -54,6 +54,7 @@ Full-stack platform for social media service storefronts.
 - `tooling/scripts/smoke_checkout.py` — exercises the checkout flow, payment observability (`/api/v1/payments/observability`), and internal order creation.
 - `tooling/scripts/check_observability.py` — consolidated validation for fulfillment, payments, and catalog search telemetry (including a zero-result rate SLO). Fails with non-zero exit status when thresholds are exceeded, making it ideal for CI/CD gates.
 - `tooling/scripts/export_catalog_insights.py` — exports top catalog queries and zero-result searches (JSON/Markdown) to feed merchandising experiments.
+- `tooling/scripts/validate-payload-preview.mjs` — automates Payload preview and webhook validation; run via `pnpm payload:validate` once environment secrets point at a live Payload + marketing deployment pair.
 - `.github/workflows/observability-checks.yml` — GitHub Actions job that runs the consolidated checker with the staging API base URL and checkout API key stored as repository configuration.
   - Runs the catalog observability pytest suite via Poetry before executing runtime checks.
   - Uploads Markdown/JSON catalog insights artifacts for merchandising after each run.
