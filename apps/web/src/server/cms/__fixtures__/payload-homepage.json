@@ -1,0 +1,121 @@
+{
+  "docs": [
+    {
+      "id": "home-test-id",
+      "slug": "home",
+      "title": "Home",
+      "environment": "test",
+      "hero": {
+        "eyebrow": "Social Media Growth",
+        "headline": "Launch your storefront",
+        "subheadline": "Automate delivery",
+        "cta": {
+          "label": "Book a demo",
+          "href": "#contact"
+        }
+      },
+      "content": [
+        {
+          "id": "section-hero",
+          "blockType": "section",
+          "layout": "metrics",
+          "heading": "Built for agencies",
+          "subheading": "Operational excellence",
+          "content": [{
+            "_type": "body",
+            "children": []
+          }],
+          "metrics": [
+            { "label": "Campaigns launched", "value": "1200+", "description": "Across paid & organic" },
+            { "label": "Average ROI", "value": "3.4x" },
+            { "label": "Retention", "value": "92%", "description": "Annual client retention" }
+          ],
+          "faqItems": [
+            { "question": "How fast can we launch?", "answer": "Most teams ship in 3 weeks", "category": "Getting Started" },
+            { "question": "Do you support retainers?", "answer": "Yes, billing is built-in" }
+          ],
+          "testimonials": {
+            "docs": [
+              {
+                "quote": "SMPLAT keeps our pipeline full.",
+                "author": "Rowan James",
+                "role": "COO",
+                "company": "Growth Syndicate",
+                "avatarUrl": "https://example.com/avatar-rowan.png"
+              }
+            ]
+          },
+          "caseStudy": {
+            "title": "Driving ROI",
+            "client": "Northwind Social",
+            "industry": "Retail",
+            "summary": "Optimised fulfillment and reporting.",
+            "results": [
+              { "label": "ROI uplift", "value": "4.2x" },
+              { "label": "New retainers", "value": "8" }
+            ],
+            "quote": "Our ops team finally scales.",
+            "quoteAuthor": "Jamie Patel"
+          },
+          "pricingTiers": [
+            {
+              "name": "Starter",
+              "description": "Launch playbooks",
+              "price": 149,
+              "currency": "EUR",
+              "features": [
+                { "value": "Hosted storefront" },
+                { "value": "Stripe billing" }
+              ],
+              "ctaLabel": "Start",
+              "ctaHref": "#start",
+              "highlight": false
+            },
+            {
+              "name": "Growth",
+              "description": "Scale automation",
+              "price": 349,
+              "currency": "EUR",
+              "features": [
+                { "value": "Automation" },
+                { "value": "Reporting" }
+              ],
+              "ctaLabel": "Talk to sales",
+              "ctaHref": "#sales",
+              "highlight": true
+            }
+          ],
+          "blogPosts": {
+            "docs": [
+              {
+                "title": "Onboarding playbook",
+                "slug": "onboarding-playbook",
+                "excerpt": "Standardise intake and delivery.",
+                "publishedAt": "2023-11-01T00:00:00.000Z"
+              },
+              {
+                "title": "Automation workflows",
+                "slug": {
+                  "current": "automation-workflows"
+                },
+                "excerpt": "Keep campaigns moving",
+                "publishedAt": "2023-11-03T00:00:00.000Z"
+              }
+            ]
+          }
+        },
+        {
+          "id": "testimonial-block",
+          "blockType": "testimonial",
+          "quote": "SMPLAT freed our strategists to focus on growth.",
+          "author": "Alex Rivera",
+          "role": "Founder",
+          "company": "Signal Boost",
+          "avatarUrl": "https://example.com/avatar-alex.png"
+        }
+      ],
+      "seoTitle": "SMPLAT — Social media storefront",
+      "seoDescription": "Purpose-built storefront for agencies"
+    }
+  ]
+}

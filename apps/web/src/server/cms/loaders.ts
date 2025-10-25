@@ -1,6 +1,6 @@
 import { cache } from "react";
 
-import { getClient, isPayload, payloadFetch } from "./client";
+import { getClient, isPayload, payloadGet } from "./client";
 import { payloadConfig } from "./config";
 import { blogPostBySlugQuery, blogPostsQuery, homepageQuery, pageBySlugQuery } from "./queries";
 import {
@@ -13,6 +13,13 @@ import {
   type PricingTierDocument,
   type TestimonialDocument
 } from "./types";
+
+const withCache = <Fn extends (...args: never[]) => Promise<unknown>>(fn: Fn): Fn => {
+  if (typeof cache === "function") {
+    return cache(fn) as Fn;
+  }
+  return fn;
+};
 
 const parsePage = (data: unknown): PageDocument | null => {
   if (!data) {
@@ -271,11 +278,11 @@ const normalizePayloadPage = (item: unknown) => {
   } satisfies PageDocument;
 };
 
-export const getHomepage = cache(async (preview = false): Promise<PageDocument | null> => {
+export const fetchHomepage = async (preview = false): Promise<PageDocument | null> => {
   try {
     if (isPayload()) {
       const env = payloadConfig.environment;
-      const data = await payloadFetch<{ docs?: unknown[] }>({
+      const data = await payloadGet<{ docs?: unknown[] }>({
         path: "/api/pages",
         query: {
           "where[slug][equals]": "home",
@@ -296,12 +303,14 @@ export const getHomepage = cache(async (preview = false): Promise<PageDocument |
     console.warn("Failed to fetch homepage, using fallback data:", error);
     return null;
   }
-});
+};
 
-export const getPageBySlug = cache(async (slug: string, preview = false): Promise<PageDocument | null> => {
+export const getHomepage = withCache(fetchHomepage);
+
+export const getPageBySlug = withCache(async (slug: string, preview = false): Promise<PageDocument | null> => {
   if (isPayload()) {
     const env = payloadConfig.environment;
-    const data = await payloadFetch<{ docs?: unknown[] }>({
+    const data = await payloadGet<{ docs?: unknown[] }>({
       path: "/api/pages",
       query: {
         "where[slug][equals]": slug,
@@ -320,11 +329,11 @@ export const getPageBySlug = cache(async (slug: string, preview = false): Promis
   }
 });
 
-export const getBlogPosts = cache(async (preview = false): Promise<BlogPostSummary[]> => {
+export const getBlogPosts = withCache(async (preview = false): Promise<BlogPostSummary[]> => {
   try {
     if (isPayload()) {
       const env = payloadConfig.environment;
-      const data = await payloadFetch<{ docs?: unknown[] }>({
+      const data = await payloadGet<{ docs?: unknown[] }>({
         path: "/api/blog-posts",
         query: {
           sort: "-publishedAt",
@@ -354,10 +363,10 @@ export const getBlogPosts = cache(async (preview = false): Promise<BlogPostSumma
   }
 });
 
-export const getBlogPostBySlug = cache(async (slug: string, preview = false) => {
+export const getBlogPostBySlug = withCache(async (slug: string, preview = false) => {
   if (isPayload()) {
     const env = payloadConfig.environment;
-    const data = await payloadFetch<{ docs?: unknown[] }>({
+    const data = await payloadGet<{ docs?: unknown[] }>({
       path: "/api/blog-posts",
       query: {
         "where[slug][equals]": slug,
