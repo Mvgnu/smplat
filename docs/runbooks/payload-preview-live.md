@@ -28,22 +28,29 @@ export WEB_URL="https://marketing.example.com"
 
 ## Draft preview validation
 
-1. Enable Payload draft mode integration by running the Jest integration suite against the live environment:
+1. Run the automated validation harness (combines Jest integration + live endpoint smoke tests):
+   ```bash
+   pnpm payload:validate
+   ```
+   - Executes the Payload loader integration suite and the preview/webhook smoke script.
+   - Requires the environment variables above plus `PAYLOAD_VALIDATION_PREVIEW_PATH` / `PAYLOAD_VALIDATION_BLOG_SLUG` if you need to override defaults (`/blog/sample-post`, `automation-workflows`).
+   - Fails fast if preview secrets, webhook signatures, or redirect/cookie flows diverge from expectations.
+2. Enable Payload draft mode integration by running the Jest integration suite against the live environment (invoked by the command above):
    ```bash
    pnpm --filter @smplat/web test:int -- payload.integration
    ```
    - Confirms the marketing loaders fetch the homepage, a generic page, and a published blog post successfully.
    - Patches a blog post title via the Payload REST API, toggles preview mode, and expects the draft content to surface while the published view remains unchanged.
-2. Review the test output for `draft preview end-to-end` to ensure the assertions succeeded.
-3. If the suite is skipped, verify `PAYLOAD_INTEGRATION_URL` and related env vars are exported.
+3. Review the test output for `draft preview end-to-end` to ensure the assertions succeeded.
+4. If the suite is skipped, verify `PAYLOAD_INTEGRATION_URL` and related env vars are exported.
 
 ## Preview endpoint smoke check
 
-1. Trigger the Next.js preview route manually:
+1. The automation above covers the preview redirect + cookie assertions. To debug manually:
    ```bash
    curl -i "${WEB_URL}/api/preview?secret=${PAYLOAD_PREVIEW_SECRET}&provider=payload&redirect=/blog/sample-post"
    ```
-2. Confirm the response sets the `smplat-preview-provider` cookie and redirects (302) to the requested slug.
+2. Confirm the response sets the `smplat-preview-provider` cookie and redirects (307) to the requested slug.
 3. In the browser, load the redirected URL and ensure the preview banner is visible. Disable preview mode via `/api/preview?clear=1` when finished.
 
 ## Webhook revalidation
@@ -67,4 +74,4 @@ Document successful validation by appending the date, Payload environment URL, a
 
 ## Change log
 
-- _Pending first live validation_
+- 2025-01-15 — Added automated preview/webhook validation harness (`pnpm payload:validate`).

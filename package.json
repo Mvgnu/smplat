@@ -17,6 +17,7 @@
     "sanity:setup:test": "pnpm sanity:ensure:test && pnpm sanity:seed:test",
     "payload:seed:dev": "node tooling/scripts/seed-payload.mjs --env development",
     "payload:seed:test": "node tooling/scripts/seed-payload.mjs --env test",
+    "payload:validate": "pnpm --filter @smplat/web test:int -- payload.integration && node tooling/scripts/validate-payload-preview.mjs",
     "cms:use:payload": "cross-env CMS_PROVIDER=payload PAYLOAD_URL=http://localhost:3050",
     "test:e2e:setup-and-run": "pnpm sanity:setup:test && cross-env SANITY_DATASET=test corepack pnpm --filter @smplat/web run test"
   },
