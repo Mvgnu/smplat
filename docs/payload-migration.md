@@ -81,6 +81,8 @@ This document captures the current state of the Sanity to Payload CMS migration,
    - Update `getHomepage`, `getPageBySlug`, `getBlogPosts`, `getBlogPostBySlug` to:
      - Request the necessary relationship depth (`depth=2` or more as needed).
      - Map Payload document shapes into the existing Zod schemas (adapt schemas if required).
+     - Exercise draft previews in Jest by seeding fixtures with nested relationship graphs (blog posts, metrics, testimonials)
+       and asserting the loader output preserves those shapes when `draftMode` is enabled (`apps/web/src/server/cms/__tests__/payload-loaders.test.ts`).
    - If Lexical Rich Text is returned, create converters to the existing `PageSection` structures (e.g., convert Lexical JSON to React components, or store as plain text/HTML).
 
 3. **Rich Text Rendering**

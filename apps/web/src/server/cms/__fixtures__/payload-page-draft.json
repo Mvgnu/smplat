@@ -16,7 +16,50 @@
           "href": "#review"
         }
       },
-      "content": [],
+      "content": [
+        {
+          "id": "draft-metrics",
+          "blockType": "section",
+          "heading": "Draft Metrics",
+          "subheading": "Only visible in preview",
+          "layout": "metrics",
+          "metrics": [
+            { "label": "Launch window", "value": "2 weeks" },
+            { "label": "Readiness", "value": "80%", "description": "Pending QA" }
+          ]
+        },
+        {
+          "id": "draft-blog",
+          "blockType": "section",
+          "layout": "blog",
+          "blogPosts": {
+            "docs": [
+              {
+                "id": "preview-post-1",
+                "title": "Preview automation",
+                "slug": {
+                  "current": "preview-automation"
+                },
+                "excerpt": "Ensure draft payloads resolve relationships.",
+                "publishedAt": "2024-02-10T00:00:00.000Z"
+              },
+              {
+                "id": "preview-post-2",
+                "title": "Preview analytics",
+                "slug": "preview-analytics",
+                "publishedAt": "2024-02-15T00:00:00.000Z"
+              }
+            ]
+          }
+        },
+        {
+          "id": "draft-testimonial",
+          "blockType": "testimonial",
+          "quote": "Draft previews keep us aligned.",
+          "author": "Morgan",
+          "role": "Product Lead"
+        }
+      ],
       "seoTitle": "Draft Launch Page",
       "seoDescription": "Preview copy for draft page"
     }
