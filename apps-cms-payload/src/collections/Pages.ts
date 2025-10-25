@@ -2,6 +2,7 @@ import type { Block, CollectionConfig } from "payload";
 
 import { canWrite } from "@/access/canWrite";
 import { environmentField } from "@/fields/environment";
+import { createRevalidateHooks } from "@/hooks/revalidate";
 
 const sectionBlock: Block = {
   slug: "section",
@@ -108,6 +109,8 @@ const testimonialHighlightBlock: Block = {
   ]
 };
 
+const pagesRevalidateHooks = createRevalidateHooks("pages");
+
 export const Pages: CollectionConfig = {
   slug: "pages",
   admin: {
@@ -120,6 +123,10 @@ export const Pages: CollectionConfig = {
     create: canWrite,
     update: canWrite,
     delete: canWrite
+  },
+  hooks: {
+    afterChange: [pagesRevalidateHooks.afterChange],
+    afterDelete: [pagesRevalidateHooks.afterDelete]
   },
   fields: [
     {

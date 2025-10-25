@@ -13,6 +13,9 @@
       "@/fields/*": [
         "src/fields/*"
       ],
+      "@/hooks/*": [
+        "src/hooks/*"
+      ],
       "@/payload-types": [
         "payload-types"
       ],

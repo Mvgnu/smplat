@@ -2,6 +2,9 @@ import type { CollectionConfig } from "payload";
 
 import { canWrite } from "@/access/canWrite";
 import { environmentField } from "@/fields/environment";
+import { createRevalidateHooks } from "@/hooks/revalidate";
+
+const caseStudyRevalidateHooks = createRevalidateHooks("case-studies");
 
 export const CaseStudies: CollectionConfig = {
   slug: "case-studies",
@@ -13,6 +16,10 @@ export const CaseStudies: CollectionConfig = {
     create: canWrite,
     update: canWrite,
     delete: canWrite
+  },
+  hooks: {
+    afterChange: [caseStudyRevalidateHooks.afterChange],
+    afterDelete: [caseStudyRevalidateHooks.afterDelete]
   },
   fields: [
     {

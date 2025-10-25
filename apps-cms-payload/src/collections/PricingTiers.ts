@@ -2,6 +2,9 @@ import type { CollectionConfig } from "payload";
 
 import { canWrite } from "@/access/canWrite";
 import { environmentField } from "@/fields/environment";
+import { createRevalidateHooks } from "@/hooks/revalidate";
+
+const pricingRevalidateHooks = createRevalidateHooks("pricing-tiers");
 
 export const PricingTiers: CollectionConfig = {
   slug: "pricing-tiers",
@@ -13,6 +16,10 @@ export const PricingTiers: CollectionConfig = {
     create: canWrite,
     update: canWrite,
     delete: canWrite
+  },
+  hooks: {
+    afterChange: [pricingRevalidateHooks.afterChange],
+    afterDelete: [pricingRevalidateHooks.afterDelete]
   },
   fields: [
     {
