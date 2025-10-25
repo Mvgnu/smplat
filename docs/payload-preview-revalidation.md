@@ -1,5 +1,7 @@
 # Payload Preview & Revalidation Guide
 
+> For hands-on validation steps against a deployed Payload environment, see the accompanying runbook in [`docs/runbooks/payload-preview-live.md`](./runbooks/payload-preview-live.md).
+
 ## Environment variables
 
 Set the following variables anywhere `apps/web` and `apps-cms-payload` run:
