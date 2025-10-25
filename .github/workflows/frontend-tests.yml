@@ -1,0 +1,49 @@
+name: Frontend Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'apps/web/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'apps/web/**'
+
+jobs:
+  test:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+
+    - name: Install Playwright Browsers
+      run: cd apps/web && npx playwright install --with-deps
+
+    - name: Run Playwright tests
+      run: cd apps/web && pnpm test
+
+    - name: Run Jest unit tests
+      run: cd apps/web && pnpm run test:unit
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: playwright-report
+        path: apps/web/playwright-report/
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        directory: apps/web/coverage/
+        fail_ci_if_error: false

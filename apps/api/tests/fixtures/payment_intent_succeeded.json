@@ -1,0 +1,11 @@
+{
+  "id": "evt_retry",
+  "type": "payment_intent.succeeded",
+  "data": {
+    "object": {
+      "id": "pi_retry",
+      "amount_received": 5000,
+      "created": 1700100000
+    }
+  }
+}

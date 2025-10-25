@@ -1,0 +1,130 @@
+name: observability-checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  api-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Poetry
+        run: python -m pip install --upgrade pip poetry
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Run catalog observability tests
+        run: poetry run pytest tests/test_observability.py -k catalog
+
+  observability:
+    needs: api-tests
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      API_BASE_URL: ${{ vars.OBSERVABILITY_BASE_URL }}
+      CHECKOUT_API_KEY: ${{ secrets.CHECKOUT_API_KEY }}
+      MAX_FULFILLMENT_DEAD_LETTERED: ${{ vars.MAX_FULFILLMENT_DEAD_LETTERED || '0' }}
+      MAX_FULFILLMENT_FAILED: ${{ vars.MAX_FULFILLMENT_FAILED || '0' }}
+      MAX_PAYMENT_CHECKOUT_FAILURES: ${{ vars.MAX_PAYMENT_CHECKOUT_FAILURES || '0' }}
+      MAX_PAYMENT_WEBHOOK_FAILURES: ${{ vars.MAX_PAYMENT_WEBHOOK_FAILURES || '0' }}
+      SKIP_CATALOG: ${{ vars.SKIP_CATALOG || 'false' }}
+      CATALOG_MAX_ZERO_RESULTS_RATE: ${{ vars.CATALOG_MAX_ZERO_RESULTS_RATE || '0.2' }}
+      CATALOG_MIN_SAMPLE_SIZE: ${{ vars.CATALOG_MIN_SAMPLE_SIZE || '10' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e .
+
+      - name: Run observability checks
+        env:
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          CHECKOUT_API_KEY: ${{ env.CHECKOUT_API_KEY }}
+          MAX_FULFILLMENT_DEAD_LETTERED: ${{ env.MAX_FULFILLMENT_DEAD_LETTERED }}
+          MAX_FULFILLMENT_FAILED: ${{ env.MAX_FULFILLMENT_FAILED }}
+          MAX_PAYMENT_CHECKOUT_FAILURES: ${{ env.MAX_PAYMENT_CHECKOUT_FAILURES }}
+          MAX_PAYMENT_WEBHOOK_FAILURES: ${{ env.MAX_PAYMENT_WEBHOOK_FAILURES }}
+          SKIP_CATALOG: ${{ env.SKIP_CATALOG }}
+          CATALOG_MAX_ZERO_RESULTS_RATE: ${{ env.CATALOG_MAX_ZERO_RESULTS_RATE }}
+          CATALOG_MIN_SAMPLE_SIZE: ${{ env.CATALOG_MIN_SAMPLE_SIZE }}
+        run: |
+          if [ -z "${API_BASE_URL}" ]; then
+            echo "::error::API_BASE_URL must be provided via repository variable OBSERVABILITY_BASE_URL."
+            exit 1
+          fi
+
+          if [ -z "${CHECKOUT_API_KEY}" ]; then
+            echo "::error::CHECKOUT_API_KEY secret is missing."
+            exit 1
+          fi
+
+          EXTRA_ARGS=""
+          if [ "${SKIP_CATALOG}" = "true" ]; then
+            EXTRA_ARGS="${EXTRA_ARGS} --skip-catalog"
+          fi
+
+          apps/api/.venv/bin/python tooling/scripts/check_observability.py \
+            --base-url "${API_BASE_URL}" \
+            --api-key "${CHECKOUT_API_KEY}" \
+            --max-fulfillment-dead-lettered "${MAX_FULFILLMENT_DEAD_LETTERED}" \
+            --max-fulfillment-failed "${MAX_FULFILLMENT_FAILED}" \
+            --max-payment-checkout-failures "${MAX_PAYMENT_CHECKOUT_FAILURES}" \
+            --max-payment-webhook-failures "${MAX_PAYMENT_WEBHOOK_FAILURES}" \
+            --max-catalog-zero-results-rate "${CATALOG_MAX_ZERO_RESULTS_RATE}" \
+            --catalog-min-sample-size "${CATALOG_MIN_SAMPLE_SIZE}" \
+            ${EXTRA_ARGS}
+
+      - name: Export catalog insights (Markdown)
+        if: env.SKIP_CATALOG != 'true'
+        env:
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          CHECKOUT_API_KEY: ${{ env.CHECKOUT_API_KEY }}
+        run: |
+          apps/api/.venv/bin/python tooling/scripts/export_catalog_insights.py \
+            --base-url "${API_BASE_URL}" \
+            --api-key "${CHECKOUT_API_KEY}" \
+            --format md \
+            --output catalog-insights.md
+
+      - name: Export catalog insights (JSON)
+        if: env.SKIP_CATALOG != 'true'
+        env:
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          CHECKOUT_API_KEY: ${{ env.CHECKOUT_API_KEY }}
+        run: |
+          apps/api/.venv/bin/python tooling/scripts/export_catalog_insights.py \
+            --base-url "${API_BASE_URL}" \
+            --api-key "${CHECKOUT_API_KEY}" \
+            --format json \
+            --output catalog-insights.json
+
+      - name: Upload catalog insights artifact
+        if: env.SKIP_CATALOG != 'true'
+        uses: actions/upload-artifact@v3
+        with:
+          name: catalog-insights
+          path: |
+            catalog-insights.md
+            catalog-insights.json

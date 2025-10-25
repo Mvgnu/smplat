@@ -1,0 +1,158 @@
+2025-10-15T20:33:37.826559Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/.turbo"), AnchoredSystemPathBuf("apps/cms/.turbo")}
+2025-10-15T20:33:37.826573Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }, WorkspacePackage { name: Other("@smplat/cms"), path: AnchoredSystemPathBuf("apps/cms") }}))
+2025-10-15T20:33:41.827516Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf(""), AnchoredSystemPathBuf("_tmp_98502_25746444fa4bda03c242976ec1bc919c")}
+2025-10-15T20:33:41.827543Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:33:47.527802Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("pnpm-lock.yaml.4028484907"), AnchoredSystemPathBuf("pnpm-lock.yaml"), AnchoredSystemPathBuf("apps/cms/package.json.2880883733")}
+2025-10-15T20:33:47.528097Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }, WorkspacePackage { name: Other("@smplat/cms"), path: AnchoredSystemPathBuf("apps/cms") }}))
+2025-10-15T20:33:47.627174Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/cms/package.json"), AnchoredSystemPathBuf("apps/cms/package.json.2880883733")}
+2025-10-15T20:33:47.627187Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/cms"), path: AnchoredSystemPathBuf("apps/cms") }}))
+2025-10-15T20:33:47.627215Z  WARN turborepo_lib::package_changes_watcher: hashes are the same, no need to rerun
+2025-10-15T20:34:24.135502Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/services/products.py")}
+2025-10-15T20:34:24.136231Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:34:42.726180Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/schemas/product.py")}
+2025-10-15T20:34:42.726209Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:35:21.625067Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/endpoints/products.py")}
+2025-10-15T20:35:21.625100Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:35:33.227270Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/tests/test_products.py")}
+2025-10-15T20:35:33.227307Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:35:43.125530Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/tests/test_products.py")}
+2025-10-15T20:35:43.125560Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:36:04.425047Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/(admin)/products/page.tsx")}
+2025-10-15T20:36:04.425104Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:37:16.525153Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/(admin)/products/page.tsx")}
+2025-10-15T20:37:16.525238Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:37:23.223197Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/(admin)/products/page.tsx")}
+2025-10-15T20:37:23.223321Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:37:45.329438Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("docs/02-roadmap.md")}
+2025-10-15T20:37:45.329541Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:37:53.124058Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("docs/14-backend-runtime.md")}
+2025-10-15T20:37:53.124077Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:37:58.925458Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf(""), AnchoredSystemPathBuf("_tmp_11708_531812f44bdf7e5d4cebc9fe476db8b7")}
+2025-10-15T20:37:58.925520Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:38:15.728888Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("")}
+2025-10-15T20:38:15.728908Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({}))
+2025-10-15T20:38:18.422810Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("pnpm-lock.yaml"), AnchoredSystemPathBuf("pnpm-lock.yaml.107549101")}
+2025-10-15T20:38:18.422831Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:38:18.523251Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/package.json"), AnchoredSystemPathBuf("apps/web/package.json.3055028171")}
+2025-10-15T20:38:18.523262Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:38:37.532806Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/cms/queries.ts")}
+2025-10-15T20:38:37.532897Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:38:39.421751Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/page.tsx")}
+2025-10-15T20:38:39.421772Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:38:57.231768Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/page.tsx")}
+2025-10-15T20:38:57.232143Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:38:59.424352Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/page.tsx")}
+2025-10-15T20:38:59.424374Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:39:14.622776Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/page.tsx")}
+2025-10-15T20:39:14.622801Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:39:18.621940Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/cms/.sanity/runtime"), AnchoredSystemPathBuf("apps/cms/.sanity")}
+2025-10-15T20:39:18.622007Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/cms"), path: AnchoredSystemPathBuf("apps/cms") }}))
+2025-10-15T20:39:18.622024Z  WARN turborepo_lib::package_changes_watcher: hashes are the same, no need to rerun
+2025-10-15T20:39:18.922204Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/cms/.sanity/runtime/app.js"), AnchoredSystemPathBuf("apps/cms/.sanity/runtime/index.html")}
+2025-10-15T20:39:18.922216Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/cms"), path: AnchoredSystemPathBuf("apps/cms") }}))
+2025-10-15T20:40:04.925862Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("tsconfig.base.json")}
+2025-10-15T20:40:04.926014Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:40:20.423920Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("_tmp_20137_3098915b31fca3052cba9707a3244e9d"), AnchoredSystemPathBuf("")}
+2025-10-15T20:40:20.424116Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:40:29.938244Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("")}
+2025-10-15T20:40:29.938279Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({}))
+2025-10-15T20:40:30.523658Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("")}
+2025-10-15T20:40:30.523670Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({}))
+2025-10-15T20:40:31.420196Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("pnpm-lock.yaml"), AnchoredSystemPathBuf("pnpm-lock.yaml.2249481531")}
+2025-10-15T20:40:31.420220Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:40:31.529652Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/package.json.3856230626"), AnchoredSystemPathBuf("apps/web/package.json")}
+2025-10-15T20:40:31.529664Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:41:01.621175Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:41:01.621199Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:41:09.621042Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/auth/config.ts")}
+2025-10-15T20:41:09.621135Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:41:13.422703Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/auth/config.ts")}
+2025-10-15T20:41:13.424077Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:41:37.120286Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:41:37.120311Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:41:40.121776Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:41:40.125986Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:41:45.620129Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:41:45.620157Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:41:51.620184Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:41:51.620205Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:42:05.919382Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:42:05.919599Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:42:09.219344Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:42:09.219371Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:42:24.319038Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:42:24.319285Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:42:39.620794Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts")}
+2025-10-15T20:42:39.620967Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:43:07.920842Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/cms/config.ts")}
+2025-10-15T20:43:07.920995Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:43:12.119078Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/cms/loaders.ts")}
+2025-10-15T20:43:12.119099Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:43:16.223953Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/cms/loaders.ts")}
+2025-10-15T20:43:16.223985Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:43:47.618053Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/cms/config.ts"), AnchoredSystemPathBuf("apps/web/src/server/auth/config.ts"), AnchoredSystemPathBuf("apps/web/src/server/cms/loaders.ts"), AnchoredSystemPathBuf("apps/web/src/server/cms/queries.ts"), AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts"), AnchoredSystemPathBuf("tsconfig.base.json"), AnchoredSystemPathBuf("apps/web/src/app/page.tsx")}
+2025-10-15T20:43:47.618072Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }, WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:43:47.640383Z  WARN turborepo_lib::package_changes_watcher: hashes are the same, no need to rerun
+2025-10-15T20:43:47.717290Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/server/cms/loaders.ts"), AnchoredSystemPathBuf("apps/web/src/server/auth/config.ts"), AnchoredSystemPathBuf("apps/web/src/server/cms/config.ts"), AnchoredSystemPathBuf("apps/web/src/server/email/mailer.ts"), AnchoredSystemPathBuf("tsconfig.base.json")}
+2025-10-15T20:43:47.717304Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }, WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:43:47.717349Z  WARN turborepo_lib::package_changes_watcher: hashes are the same, no need to rerun
+2025-10-15T20:52:32.839579Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("docs/15-implementation-roadmap.md"), AnchoredSystemPathBuf("docs/15-implementation-roadmap.md.tmp.45654.1760561552674")}
+2025-10-15T20:52:32.841974Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:52:54.612699Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/pyproject.toml.tmp.45654.1760561574514"), AnchoredSystemPathBuf("apps/api/pyproject.toml")}
+2025-10-15T20:52:54.612787Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:53:00.610726Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/services/payments/__init__.py.tmp.45654.1760561580587"), AnchoredSystemPathBuf("apps/api/src/smplat_api/services/payments"), AnchoredSystemPathBuf("apps/api/src/smplat_api/services/payments/__init__.py")}
+2025-10-15T20:53:00.610753Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:53:25.810687Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/services/payments/stripe_service.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/services/payments/stripe_service.py.tmp.45654.1760561605714")}
+2025-10-15T20:53:25.810716Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:54:00.010107Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/services/payments/payment_service.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/services/payments/payment_service.py.tmp.45654.1760561639964")}
+2025-10-15T20:54:00.010158Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:54:10.388959Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/core/settings.py.tmp.45654.1760561650346"), AnchoredSystemPathBuf("apps/api/src/smplat_api/core/settings.py")}
+2025-10-15T20:54:10.390217Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:54:40.767611Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/endpoints/payments.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/endpoints/payments.py.tmp.45654.1760561680732")}
+2025-10-15T20:54:40.767645Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:54:50.869104Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/order.py.tmp.45654.1760561690809"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/order.py")}
+2025-10-15T20:54:50.869425Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:54:56.469962Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/order.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/order.py.tmp.45654.1760561696410")}
+2025-10-15T20:54:56.470012Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:55:01.966618Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/order.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/order.py.tmp.45654.1760561701890")}
+2025-10-15T20:55:01.966686Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:55:07.967905Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/payment.py.tmp.45654.1760561707936"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/payment.py")}
+2025-10-15T20:55:07.967935Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:55:13.672933Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/payment.py.tmp.45654.1760561713604"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/payment.py")}
+2025-10-15T20:55:13.673768Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:55:23.768156Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/__init__.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/__init__.py.tmp.45654.1760561723693")}
+2025-10-15T20:55:23.768642Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:55:49.968145Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/(storefront)"), AnchoredSystemPathBuf("apps/web/src/app/(storefront)/products/page.tsx.tmp.45654.1760561749880"), AnchoredSystemPathBuf("apps/web/src/app/(storefront)/products/page.tsx"), AnchoredSystemPathBuf("apps/web/src/app/(storefront)/products")}
+2025-10-15T20:55:49.968550Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:56:20.367670Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/(storefront)/products/[slug]/page.tsx"), AnchoredSystemPathBuf("apps/web/src/app/(storefront)/products/[slug]/page.tsx.tmp.45654.1760561780320"), AnchoredSystemPathBuf("apps/web/src/app/(storefront)/products/[slug]")}
+2025-10-15T20:56:20.367742Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:56:37.371093Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/components/checkout/checkout-button.tsx.tmp.45654.1760561797277"), AnchoredSystemPathBuf("apps/web/src/components/checkout"), AnchoredSystemPathBuf("apps/web/src/components/checkout/checkout-button.tsx")}
+2025-10-15T20:56:37.371130Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:57:01.166511Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/web/src/app/(storefront)/checkout/success/page.tsx"), AnchoredSystemPathBuf("apps/web/src/app/(storefront)/checkout/success/page.tsx.tmp.45654.1760561821062"), AnchoredSystemPathBuf("apps/web/src/app/(storefront)/checkout"), AnchoredSystemPathBuf("apps/web/src/app/(storefront)/checkout/success")}
+2025-10-15T20:57:01.167398Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Other("@smplat/web"), path: AnchoredSystemPathBuf("apps/web") }}))
+2025-10-15T20:57:39.767252Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/endpoints/orders.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/endpoints/orders.py.tmp.45654.1760561859734")}
+2025-10-15T20:57:39.767483Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:57:45.167545Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/__init__.py.tmp.45654.1760561865150")}
+2025-10-15T20:57:45.167643Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:57:45.266344Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/__init__.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/api/v1/__init__.py.tmp.45654.1760561865150")}
+2025-10-15T20:57:45.266356Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:58:25.065686Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/fulfillment.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/fulfillment.py.tmp.45654.1760561905040")}
+2025-10-15T20:58:25.065712Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:58:32.967257Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/order.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/order.py.tmp.45654.1760561912900")}
+2025-10-15T20:58:32.967295Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:58:47.769099Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/customer_profile.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/customer_profile.py.tmp.45654.1760561927664")}
+2025-10-15T20:58:47.769126Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:58:53.970255Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/customer_profile.py.tmp.45654.1760561933957")}
+2025-10-15T20:58:53.970295Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:58:54.070146Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/models/customer_profile.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/models/customer_profile.py.tmp.45654.1760561933957")}
+2025-10-15T20:58:54.070168Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:58:59.470482Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/services/fulfillment"), AnchoredSystemPathBuf("apps/api/src/smplat_api/services/fulfillment/__init__.py.tmp.45654.1760561939435")}
+2025-10-15T20:58:59.470512Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:58:59.585529Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/services/fulfillment/__init__.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/services/fulfillment/__init__.py.tmp.45654.1760561939435")}
+2025-10-15T20:58:59.585540Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T20:59:39.968981Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/services/fulfillment/fulfillment_service.py"), AnchoredSystemPathBuf("apps/api/src/smplat_api/services/fulfillment/fulfillment_service.py.tmp.45654.1760561979864")}
+2025-10-15T20:59:39.969018Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T21:00:24.868626Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("apps/api/src/smplat_api/services/fulfillment/instagram_service.py.tmp.45654.1760562024788"), AnchoredSystemPathBuf("apps/api/src/smplat_api/services/fulfillment/instagram_service.py")}
+2025-10-15T21:00:24.868656Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))
+2025-10-15T21:01:01.567484Z  WARN turborepo_lib::package_changes_watcher: changed_files: {AnchoredSystemPathBuf("docs/16-implementation-status.md"), AnchoredSystemPathBuf("docs/16-implementation-status.md.tmp.45654.1760562061504")}
+2025-10-15T21:01:01.567513Z  WARN turborepo_lib::package_changes_watcher: changed_packages: Ok(Some({WorkspacePackage { name: Root, path: AnchoredSystemPathBuf("") }}))

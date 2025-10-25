@@ -1,0 +1,31 @@
+{
+  "name": "smplat",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Social media promotion platform monorepo (Next.js + FastAPI)",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "sanity:ensure:dev": "node tooling/scripts/ensure-sanity-dataset.mjs --dataset development",
+    "sanity:ensure:test": "node tooling/scripts/ensure-sanity-dataset.mjs --dataset test",
+    "sanity:seed": "corepack pnpm --filter @smplat/web exec node ../../tooling/scripts/seed-sanity.mjs",
+    "sanity:seed:dev": "corepack pnpm --filter @smplat/web exec node ../../tooling/scripts/seed-sanity.mjs --dataset development",
+    "sanity:seed:test": "corepack pnpm --filter @smplat/web exec node ../../tooling/scripts/seed-sanity.mjs --dataset test",
+    "sanity:setup:dev": "pnpm sanity:ensure:dev && pnpm sanity:seed:dev",
+    "sanity:setup:test": "pnpm sanity:ensure:test && pnpm sanity:seed:test",
+    "payload:seed:dev": "node tooling/scripts/seed-payload.mjs --env development",
+    "payload:seed:test": "node tooling/scripts/seed-payload.mjs --env test",
+    "cms:use:payload": "cross-env CMS_PROVIDER=payload PAYLOAD_URL=http://localhost:3050",
+    "test:e2e:setup-and-run": "pnpm sanity:setup:test && cross-env SANITY_DATASET=test corepack pnpm --filter @smplat/web run test"
+  },
+  "devDependencies": {
+    "turbo": "^1.12.5"
+  },
+  "dependencies": {
+    "@sanity/client": "^6.29.1",
+    "dotenv": "^16.4.5"
+  },
+  "packageManager": "pnpm@9.12.2+sha512.22721b3a11f81661ae1ec68ce1a7b879425a1ca5b991c975b074ac220b187ce56c708fe5db69f4c962c989452eee76c82877f4ee80f474cebd61ee13461b6228"
+}
