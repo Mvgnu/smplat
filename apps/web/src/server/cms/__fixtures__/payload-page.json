@@ -1,0 +1,123 @@
+{
+  "docs": [
+    {
+      "id": "page-ops",
+      "slug": "operations",
+      "title": "Operations",
+      "environment": "test",
+      "hero": {
+        "eyebrow": "Agency Ops",
+        "headline": "Deliver outcomes with confidence",
+        "subheadline": "Playbooks and automations for every engagement"
+      },
+      "content": [
+        {
+          "id": "metrics-block",
+          "blockType": "section",
+          "heading": "Metrics that matter",
+          "subheading": "Campaign delivery metrics",
+          "layout": "metrics",
+          "metrics": [
+            { "label": "Launch time", "value": "3 weeks" },
+            { "label": "Retention", "value": "95%", "description": "Annual" }
+          ]
+        },
+        {
+          "id": "faq-block",
+          "blockType": "section",
+          "heading": "FAQ",
+          "layout": "faq",
+          "faqItems": [
+            { "question": "How fast do we migrate?", "answer": "Most migrations ship in 10 days" }
+          ]
+        },
+        {
+          "id": "testimonial-block",
+          "blockType": "section",
+          "layout": "testimonials",
+          "testimonials": {
+            "docs": [
+              {
+                "quote": "We moved faster than ever",
+                "author": "Quinn",
+                "role": "COO",
+                "company": "Northwind"
+              }
+            ]
+          }
+        },
+        {
+          "id": "pricing-block",
+          "blockType": "section",
+          "layout": "pricing",
+          "pricingTiers": [
+            {
+              "name": "Starter",
+              "description": "Launch package",
+              "price": 199,
+              "currency": "USD",
+              "features": ["Kickoff", "Playbooks"],
+              "ctaLabel": "Begin",
+              "ctaHref": "#begin",
+              "highlight": false
+            },
+            {
+              "name": "Scale",
+              "price": 499,
+              "currency": "USD",
+              "features": ["Automation"],
+              "highlight": true
+            }
+          ]
+        },
+        {
+          "id": "blog-block",
+          "blockType": "section",
+          "layout": "blog",
+          "blogPosts": {
+            "docs": [
+              {
+                "id": "post-1",
+                "title": "Runbook templates",
+                "slug": "runbook-templates",
+                "excerpt": "Blueprints for campaigns",
+                "publishedAt": "2024-01-03T00:00:00.000Z"
+              },
+              {
+                "id": "post-2",
+                "title": "Automation deep dive",
+                "slug": { "current": "automation-deep-dive" },
+                "publishedAt": "2024-01-10T00:00:00.000Z"
+              }
+            ]
+          }
+        },
+        {
+          "id": "case-study-block",
+          "blockType": "section",
+          "layout": "case-study",
+          "caseStudy": {
+            "title": "Northwind Retail",
+            "summary": "Scaled reporting",
+            "results": [
+              { "label": "ROI", "value": "3.2x" },
+              { "label": "Playbooks", "value": "12" }
+            ],
+            "quote": "Automation unlocked outcomes",
+            "quoteAuthor": "Avery"
+          }
+        },
+        {
+          "id": "standalone-testimonial",
+          "blockType": "testimonial",
+          "quote": "SMPLAT keeps us shipping",
+          "author": "Jordan",
+          "role": "Head of Delivery",
+          "company": "Signal"
+        }
+      ],
+      "seoTitle": "Operations Playbooks",
+      "seoDescription": "Automate the delivery pipeline"
+    }
+  ]
+}

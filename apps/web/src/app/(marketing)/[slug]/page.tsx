@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { getPageBySlug } from "@/server/cms/loaders";
+import { RichText } from "@/components/rich-text/rich-text";
 
 type MarketingPageProps = {
   params: { slug: string };
@@ -13,6 +14,9 @@ export default async function MarketingPage({ params }: MarketingPageProps) {
   if (!page) {
     notFound();
   }
+
+  const sectionContentClass =
+    "mx-auto max-w-3xl space-y-4 text-left [&_*]:text-white/80 [&_strong]:text-white [&_a]:underline";
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-24 text-white">
@@ -45,6 +49,7 @@ export default async function MarketingPage({ params }: MarketingPageProps) {
             <section key={section._key ?? section.heading} className="space-y-3 text-left">
               {section.heading ? <h2 className="text-3xl font-semibold">{section.heading}</h2> : null}
               {section.subheading ? <p className="text-white/70">{section.subheading}</p> : null}
+              {section.content ? <RichText value={section.content} lexicalClassName={sectionContentClass} /> : null}
             </section>
           );
         })}

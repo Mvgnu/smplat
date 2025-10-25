@@ -1,0 +1,27 @@
+{
+  "docs": [
+    {
+      "id": "post-2",
+      "title": "Automation deep dive",
+      "slug": { "current": "automation-deep-dive" },
+      "excerpt": "Automation best practices",
+      "publishedAt": "2024-01-10T00:00:00.000Z",
+      "body": {
+        "root": {
+          "type": "root",
+          "children": [
+            {
+              "type": "paragraph",
+              "children": [
+                {
+                  "type": "text",
+                  "text": "Automation requires governance"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

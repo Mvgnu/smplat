@@ -5,6 +5,7 @@ import { FaqAccordion } from "@/components/faq/accordion";
 import { CaseStudyHighlight } from "@/components/case-studies/highlight";
 import { PricingGrid } from "@/components/pricing/pricing-grid";
 import { TestimonialHighlights } from "@/components/testimonials/highlights";
+import { RichText } from "@/components/rich-text/rich-text";
 import { getHomepage } from "@/server/cms/loaders";
 import type { PageDocument } from "@/server/cms/types";
 
@@ -31,6 +32,8 @@ export default async function HomePage() {
   const page = await getHomepage();
   const hero = page?.hero ?? fallbackHero;
   const sections = page?.content ?? [];
+  const sectionContentClass =
+    "mx-auto max-w-3xl space-y-4 text-left [&_*]:text-white/80 [&_strong]:text-white [&_a]:underline";
 
   return (
     <main className="flex min-h-screen flex-col gap-24 bg-gradient-to-b from-slate-950 via-slate-900 to-black px-6 py-24 text-white">
@@ -92,6 +95,7 @@ export default async function HomePage() {
                   {section.subheading ? (
                     <p className="mx-auto max-w-3xl text-white/70">{section.subheading}</p>
                   ) : null}
+                  {section.content ? <RichText value={section.content} lexicalClassName={sectionContentClass} /> : null}
                   <div className="grid gap-4 sm:grid-cols-3">
                     {metrics.map((metric) => (
                       <div
@@ -118,6 +122,7 @@ export default async function HomePage() {
               return (
                 <div key={key} className="space-y-6">
                   {section.heading ? <h2 className="text-3xl font-semibold text-center">{section.heading}</h2> : null}
+                  {section.content ? <RichText value={section.content} lexicalClassName={sectionContentClass} /> : null}
                   <FaqAccordion items={faqItems} />
                 </div>
               );
@@ -127,6 +132,7 @@ export default async function HomePage() {
               return (
                 <div key={key} className="space-y-6">
                   {section.heading ? <h2 className="text-3xl font-semibold text-center">{section.heading}</h2> : null}
+                  {section.content ? <RichText value={section.content} lexicalClassName={sectionContentClass} /> : null}
                   <TestimonialHighlights items={section.testimonials} />
                 </div>
               );
@@ -136,6 +142,7 @@ export default async function HomePage() {
               return (
                 <div key={key} className="space-y-6">
                   {section.heading ? <h2 className="text-3xl font-semibold text-center">{section.heading}</h2> : null}
+                  {section.content ? <RichText value={section.content} lexicalClassName={sectionContentClass} /> : null}
                   <CaseStudyHighlight caseStudy={section.caseStudy} />
                 </div>
               );
@@ -145,6 +152,7 @@ export default async function HomePage() {
               return (
                 <div key={key} className="space-y-8">
                   {section.heading ? <h2 className="text-3xl font-semibold text-center">{section.heading}</h2> : null}
+                  {section.content ? <RichText value={section.content} lexicalClassName={sectionContentClass} /> : null}
                   <PricingGrid tiers={section.pricingTiers} />
                 </div>
               );
@@ -154,6 +162,7 @@ export default async function HomePage() {
               return (
                 <div key={key} className="space-y-6">
                   {section.heading ? <h2 className="text-3xl font-semibold text-center">{section.heading}</h2> : null}
+                  {section.content ? <RichText value={section.content} lexicalClassName={sectionContentClass} /> : null}
                   <PostList posts={section.blogPosts} />
                 </div>
               );
@@ -165,6 +174,7 @@ export default async function HomePage() {
                 {section.subheading ? (
                   <p className="mx-auto max-w-3xl text-white/70">{section.subheading}</p>
                 ) : null}
+                {section.content ? <RichText value={section.content} lexicalClassName={sectionContentClass} /> : null}
               </div>
             );
           })}

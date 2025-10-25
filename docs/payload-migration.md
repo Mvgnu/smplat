@@ -35,7 +35,7 @@ This document captures the current state of the Sanity to Payload CMS migration,
 
 1. **Data Shape Differences:** Sanity's nested references and Portable Text differ from Payload's JSON Rich Text. Frontend serializers must be updated.
 2. **Content Relationship Depth:** Payload REST calls need `depth` parameters; existing fetchers expect populated relationships.
-3. **Preview & Revalidation:** Sanity webhooks (`/app/api/revalidate/route.ts`) currently verify Sanity signatures. Payload equivalents must be added.
+3. **Preview & Revalidation:** ✅ Next.js preview/revalidate routes now accept provider-specific secrets. Payload webhooks ship provider headers/JSON payloads for `/api/revalidate`; configure `PAYLOAD_PREVIEW_SECRET` and `PAYLOAD_REVALIDATE_SECRET` to activate them.
 4. **Studio Features:** Sanity desk structure, validations, and view customisations need Payload admin equivalents (field UI, default values, etc.).
 5. **Testing Tooling:** Sanity-specific utilities (PortableText rendering, dataset ensure scripts) should be complemented or replaced with Payload tooling.
 6. **Deployment:** Payload requires a PostgreSQL database and optional storage adapter. Deployment configuration (Docker, cloud) must be finalised.
@@ -91,8 +91,8 @@ This document captures the current state of the Sanity to Payload CMS migration,
    - Ensure blog posts render body content identically to the Sanity version.
 
 4. **Mutation & Revalidation Hooks**
-   - Implement Payload webhook or admin hook that POSTs to `apps/web` revalidation route.
-   - Update `/app/api/revalidate/route.ts` to validate Payload signatures or tokens (replace Sanity-specific headers).
+   - ✅ Payload collections now ship `afterChange`/`afterDelete` hooks that POST to `/api/revalidate` using `x-payload-signature` headers.
+   - ✅ `/app/api/revalidate/route.ts` validates Payload and Sanity signatures, maps marketing/blog paths, and enforces environment scoping.
    - Support on-demand revalidation via Payload admin actions (optional but recommended).
 
 5. **Preview Mode**

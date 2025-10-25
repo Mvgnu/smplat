@@ -2,6 +2,9 @@ import type { CollectionConfig } from "payload";
 
 import { canWrite } from "@/access/canWrite";
 import { environmentField } from "@/fields/environment";
+import { createRevalidateHooks } from "@/hooks/revalidate";
+
+const testimonialRevalidateHooks = createRevalidateHooks("testimonials");
 
 export const Testimonials: CollectionConfig = {
   slug: "testimonials",
@@ -13,6 +16,10 @@ export const Testimonials: CollectionConfig = {
     create: canWrite,
     update: canWrite,
     delete: canWrite
+  },
+  hooks: {
+    afterChange: [testimonialRevalidateHooks.afterChange],
+    afterDelete: [testimonialRevalidateHooks.afterDelete]
   },
   fields: [
     {

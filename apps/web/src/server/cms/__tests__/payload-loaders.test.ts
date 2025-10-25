@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals";
 
 import homepageFixture from "../__fixtures__/payload-homepage.json";
+import blogPostDetailFixture from "../__fixtures__/payload-blog-post.json";
+import blogPostsFixture from "../__fixtures__/payload-blog-posts.json";
+import pageFixture from "../__fixtures__/payload-page.json";
 
 type FetchArgs = Parameters<typeof fetch>;
 
@@ -262,6 +265,128 @@ describe("payload loaders", () => {
       seoTitle: "SMPLAT — Social media storefront",
       seoDescription: "Purpose-built storefront for agencies"
     });
+    warnSpy.mockRestore();
+  });
+
+  it("normalises payload marketing pages with nested relationships", async () => {
+    const fetchMock = jest
+      .fn<(...args: FetchArgs) => Promise<Response>>()
+      .mockResolvedValue(createResponse(pageFixture));
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { getPageBySlug } = await import("../loaders");
+
+    const page = await getPageBySlug("operations");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://payload.test/api/pages?where%5Bslug%5D%5Bequals%5D=operations&where%5Benvironment%5D%5Bequals%5D=test&depth=2&limit=1",
+      expect.objectContaining({ method: "GET" })
+    );
+
+    expect(page).toBeTruthy();
+    expect(page).toMatchObject({
+      title: "Operations",
+      hero: expect.objectContaining({ headline: "Deliver outcomes with confidence" }),
+      seoTitle: "Operations Playbooks",
+      seoDescription: "Automate the delivery pipeline"
+    });
+
+    const blogSection = page?.content?.find((block) => block.layout === "blog");
+    expect(blogSection?.blogPosts).toHaveLength(2);
+    expect(blogSection?.blogPosts).toEqual(
+      expect.arrayContaining([
+        {
+          title: "Runbook templates",
+          slug: { current: "runbook-templates" },
+          excerpt: "Blueprints for campaigns",
+          publishedAt: "2024-01-03T00:00:00.000Z"
+        },
+        {
+          title: "Automation deep dive",
+          slug: { current: "automation-deep-dive" },
+          excerpt: undefined,
+          publishedAt: "2024-01-10T00:00:00.000Z"
+        }
+      ])
+    );
+
+    const pricingSection = page?.content?.find((block) => block.layout === "pricing");
+    expect(pricingSection?.pricingTiers).toHaveLength(2);
+
+    const testimonialHighlight = page?.content?.find((block) => block._type === "testimonial");
+    expect(testimonialHighlight).toMatchObject({
+      quote: "SMPLAT keeps us shipping",
+      author: "Jordan"
+    });
+
+    warnSpy.mockRestore();
+  });
+
+  it("fetches payload blog summaries", async () => {
+    const fetchMock = jest
+      .fn<(...args: FetchArgs) => Promise<Response>>()
+      .mockResolvedValue(createResponse(blogPostsFixture));
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { getBlogPosts } = await import("../loaders");
+
+    const posts = await getBlogPosts();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://payload.test/api/blog-posts?sort=-publishedAt&where%5Benvironment%5D%5Bequals%5D=test",
+      expect.objectContaining({ method: "GET" })
+    );
+
+    expect(posts).toHaveLength(3);
+    expect(posts).toEqual(
+      expect.arrayContaining([
+        {
+          title: "Runbook templates",
+          slug: { current: "runbook-templates" },
+          excerpt: "Blueprints for campaigns",
+          publishedAt: "2024-01-03T00:00:00.000Z"
+        },
+        {
+          title: "Automation deep dive",
+          slug: { current: "automation-deep-dive" },
+          excerpt: "Automation best practices",
+          publishedAt: "2024-01-10T00:00:00.000Z"
+        }
+      ])
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it("fetches payload blog detail with lexical body", async () => {
+    const fetchMock = jest
+      .fn<(...args: FetchArgs) => Promise<Response>>()
+      .mockResolvedValue(createResponse(blogPostDetailFixture));
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { getBlogPostBySlug } = await import("../loaders");
+
+    const post = await getBlogPostBySlug("automation-deep-dive");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://payload.test/api/blog-posts?where%5Bslug%5D%5Bequals%5D=automation-deep-dive&where%5Benvironment%5D%5Bequals%5D=test&depth=2&limit=1",
+      expect.objectContaining({ method: "GET" })
+    );
+
+    expect(post).toMatchObject({
+      title: "Automation deep dive",
+      slug: { current: "automation-deep-dive" },
+      body: expect.objectContaining({
+        root: expect.objectContaining({ type: "root" })
+      })
+    });
+
     warnSpy.mockRestore();
   });
 });

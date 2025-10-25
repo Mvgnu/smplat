@@ -1,0 +1,23 @@
+{
+  "docs": [
+    {
+      "id": "post-1",
+      "title": "Runbook templates",
+      "slug": "runbook-templates",
+      "excerpt": "Blueprints for campaigns",
+      "publishedAt": "2024-01-03T00:00:00.000Z"
+    },
+    {
+      "id": "post-2",
+      "title": "Automation deep dive",
+      "slug": { "current": "automation-deep-dive" },
+      "excerpt": "Automation best practices",
+      "publishedAt": "2024-01-10T00:00:00.000Z"
+    },
+    {
+      "id": "post-3",
+      "title": "No slug",
+      "excerpt": "This should be filtered"
+    }
+  ]
+}
