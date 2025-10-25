@@ -1,40 +1,40 @@
 # CMS Strategy & Integration Plan
 
 ## Decision
-- **Primary CMS**: Sanity.io (self-hosted content studio option + managed API).
-- **Rationale**:
-  - Excellent Next.js integration via Sanity SDK and GROQ queries with ISR/SSG support.
-  - Real-time collaborative editing fits agency marketing workflows.
-  - Flexible content modeling supports multilingual landing pages, product storytelling, blog.
-  - Portable Text and image pipeline for rich content while maintaining performance budgets.
-  - Strong developer tooling, CLI, and studio customization to align with brand identity.
-  - Data residency compliant with EU infrastructure tiers; export tools for compliance.
+- **Primary CMS**: Payload CMS (self-hosted via `apps-cms-payload`).
+- **Fallback window**: Sanity Studio (`apps/cms`) remains available for teams that still depend on legacy workflows. Enable it by setting `CMS_PROVIDER=sanity` and populating the Sanity environment variables until the remaining parity tasks in `docs/payload-migration.md` are complete.
+
+## Rationale
+- Payload runs entirely within our infrastructure, aligning with platform self-hosting goals and simplifying compliance reviews.
+- The Payload admin UI (Next.js) matches the component model used in `apps/web`, easing shared component reuse.
+- Built-in TypeScript schema generation and REST/GraphQL APIs accelerate typed data access.
+- Rich text is stored as Lexical JSON which maps directly to the renderers already landing in the marketing app.
+- Sanity stays available only as a temporary fallback for teams who have not yet migrated specific content types or workflows.
 
 ## Usage Scope
-- Marketing/landing content (hero, service sections, testimonials, FAQs, case studies).
+- Marketing and landing content (hero, service sections, testimonials, FAQs, case studies).
 - Blog articles, resources, and SEO metadata.
 - Home-page experiments and campaign-specific landing pages.
-- Potentially product storytelling metadata (non-transactional attributes).
+- Product storytelling metadata and other marketing-only enrichments alongside transactional data.
 
 ## Architecture Integration
-- Sanity dataset: `production` (with `staging` dataset for preview flows).
-- Next.js leverages Sanity client in server components; incremental static regeneration for high-traffic pages, fallback to on-demand revalidation via webhooks.
-- Preview mode wired through Next.js draft content support; authenticated editors preview updates instantly.
-- Content cache layer via Sanity's CDN + Next.js caching headers.
-- Webhooks configured for document publish → trigger Vercel revalidation endpoints.
-- See `docs/13-sanity-webhooks.md` for detailed webhook/preview configuration.
+- `apps-cms-payload` hosts the Payload admin UI at `http://localhost:3050/admin` and APIs at `/api/payload/*` and `/api/graphql`.
+- `apps/web` fetchers default to Payload via `cmsProvider === "payload"`; they only call Sanity utilities when `CMS_PROVIDER=sanity` is explicitly configured.
+- Local development seeds Payload with `pnpm payload:seed:dev`; tests target `payload:seed:test` so fixtures remain deterministic.
+- Incremental static regeneration and previews will be migrated to Payload-first webhooks. Sanity webhooks remain functional during the fallback window but are slated for removal once replacements ship.
 
 ## Security & Compliance
-- Role-based editor permissions mapped to Sanity roles; integrate with SSO (Google Workspace) for internal staff.
-- Scheduled exports & backups stored in S3 for audit readiness.
-- Content version history retained for legal compliance; integrate with change review workflow.
-- GDPR/DSGVO review: ensure privacy policy content managed centrally; cookie consent copy maintained via CMS.
+- Payload collections share an `environment` select field to scope development, test, and production data in a single database.
+- Admin authentication is handled by Payload; seed scripts provision baseline admin users and can rotate credentials via env vars.
+- REST APIs expose marketing content publicly to mirror Sanity's CDN behaviour while mutations require authenticated admin sessions or the seeded service key.
+- Sanity datasets should only store redacted copies of marketing content while the fallback is active; schedule deletion once the migration checklist closes.
 
 ## Implementation Tasks
-1. Provision Sanity project, datasets, and service accounts.
-2. Scaffold Sanity Studio within monorepo (`apps/cms`); configure design tokens, brand theme. ✅ (baseline config & schemas)
-3. Model schemas: `page`, `section`, `testimonial`, `faq`, `blogPost`, `category`, `seo`. (partial ✅ for page/section/testimonial/site settings/faq/caseStudy/blogPost/pricingTier)
-4. Implement Next.js data fetching utilities with typed GROQ queries (Zod validation). ✅ (`apps/web/src/server/cms/*`, updated for metrics/FAQ/case study/pricing/blog)
-5. Stand up marketing routes for blog/pricing. ✅ (`apps/web/src/app/(marketing)/blog/page.tsx` and homepage sections)
-5. Configure preview routes and webhook endpoints (`/api/revalidate`). ✅ (`apps/web/src/app/api/preview`, `/api/revalidate`)
-6. Document editorial workflows, training materials, and governance policy (seed workflow documented in `docs/12-content-seeding.md`).
+1. Harden Payload collections, access control, and seed data to cover every storefront dependency.
+2. Expand Payload-specific loaders, fixtures, and tests (`apps/web/src/server/cms`) beyond the homepage to blogs and pages.
+3. Replace Sanity preview and revalidation logic with Payload-native equivalents in the Next.js API routes.
+4. Audit admin UX parity (blocks, validations, default values) and update Payload schemas accordingly.
+5. Deprecate unused Sanity utilities, rendering helpers, and dependencies once verification completes.
+6. Document migration progress in `docs/payload-migration.md` and schedule the final Sanity shutdown milestone.
+
+Sanity-specific docs (e.g., `docs/12-content-seeding.md`, `docs/13-sanity-webhooks.md`) remain for the fallback window. Add deprecation notes there as parity lands and remove them when the window closes.

@@ -9,7 +9,9 @@ export const sanityPreviewToken = process.env.SANITY_READ_TOKEN;
 
 export type CmsProvider = "sanity" | "payload";
 
-export const cmsProvider: CmsProvider = (process.env.CMS_PROVIDER as CmsProvider) || "sanity";
+const configuredProvider = process.env.CMS_PROVIDER as CmsProvider | undefined;
+
+export const cmsProvider: CmsProvider = configuredProvider === "sanity" ? "sanity" : "payload";
 
 export const payloadConfig = {
   baseUrl: process.env.PAYLOAD_URL || "http://localhost:3050",

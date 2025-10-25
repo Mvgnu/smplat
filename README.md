@@ -5,7 +5,8 @@ Full-stack platform for social media service storefronts.
 ## Apps
 - `apps/web` – Next.js storefront, client and admin portals.
 - `apps/api` – FastAPI backend, integrations, and automation.
-- `apps/cms` – Sanity Studio (to be scaffolded).
+- `apps-cms-payload` – Next.js + Payload admin (default CMS provider).
+- `apps/cms` – Legacy Sanity Studio retained for fallback while Payload parity is finalised.
 
 ## Getting Started
 1. Install pnpm and Poetry.
@@ -23,11 +24,12 @@ Full-stack platform for social media service storefronts.
 4. Start backing services:
    ```bash
    docker compose up postgres -d
-   pnpm seed:sanity   # optional, requires SANITY_WRITE_TOKEN
+   pnpm payload:seed:dev   # seeds Payload collections for local development
    ```
 
 5. Run apps:
    ```bash
+   pnpm --filter @smplat/cms-payload dev   # Payload admin + APIs (http://localhost:3050)
    pnpm dev           # Next.js + other JS workspaces
    poetry run uvicorn smplat_api.app:create_app --factory --reload  # API
    ```
@@ -66,6 +68,6 @@ Full-stack platform for social media service storefronts.
 - Checkout form & Stripe handoff: `/checkout`
 - Post-payment success page clears cart: `/checkout/success`
 - Set `CHECKOUT_API_KEY` in both `apps/api/.env` and `apps/web/.env`; the frontend proxies checkout requests through `/api/checkout` and attaches the key via `X-API-Key`.
-- Create Sanity pages for each product (e.g., slug `product-instagram-growth`) so storefront detail pages render CMS-driven hero, metrics, testimonials, and FAQs.
+- Payload seeds include product landing pages so storefront detail routes render CMS-driven hero, metrics, testimonials, and FAQs. Set `CMS_PROVIDER=sanity` in `apps/web/.env` if you need to temporarily fall back to Sanity and ensure the matching Sanity datasets are seeded.
 
 Refer to `/docs` for architecture, roadmap, and implementation details.

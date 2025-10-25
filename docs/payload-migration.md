@@ -8,7 +8,7 @@ This document captures the current state of the Sanity to Payload CMS migration,
 - **Constraints:** Preserve existing data models where possible, keep the multi-environment workflow (development / test / production), ensure seeding and CI flows continue to work, and minimise disruption to the rest of the monorepo.
 - **Success Criteria:**
   - Payload admin panel runs locally at `http://localhost:3000/admin` (or chosen port) using database credentials supplied in `.env`.
-  - `apps/web` fetchers (`getHomepage`, `getPageBySlug`, `getBlogPosts`, `getBlogPostBySlug`) operate against Payload when `CMS_PROVIDER=payload`.
+  - `apps/web` fetchers (`getHomepage`, `getPageBySlug`, `getBlogPosts`, `getBlogPostBySlug`) now operate against Payload by default (`cmsProvider === "payload"`).
   - Rich text/blog rendering is stable after migration from Sanity Portable Text to Payload Lexical JSON.
   - All seeds, tests, and CI automation have parity with the previous Sanity-based system.
 
@@ -16,7 +16,7 @@ This document captures the current state of the Sanity to Payload CMS migration,
 
 ### Sanity Usage in `apps/web`
 
-- `apps/web/src/server/cms` provides a provider switch (`cmsProvider`) and fetch helpers that default to Sanity.
+- `apps/web/src/server/cms` provides a provider switch (`cmsProvider`) and fetch helpers that now default to Payload while still allowing explicit Sanity fallback.
 - GROQ queries (`queries.ts`) and `PortableText` rendering (`components/blog/post-content.tsx`) assume Sanity response shapes.
 - Seeding and dataset management live under `tooling/scripts/seed-sanity.mjs` and `ensure-sanity-dataset.mjs`.
 - Marketing routes (home, blog, product pages) depend on Sanity documents to render hero copy, sections, metrics, FAQs, testimonials, pricing tiers, and blog content.
@@ -99,7 +99,7 @@ This document captures the current state of the Sanity to Payload CMS migration,
    - Recreate preview functionality (if required) by issuing draft fetches from Payload and respecting draft API tokens.
 
 6. **CMS Provider Switch**
-   - Allow `.env` to toggle `CMS_PROVIDER=payload` by default.
+   - ✅ Default runtime now resolves to Payload unless `CMS_PROVIDER=sanity` is explicitly set.
    - Document fallback to Sanity (if still needed temporarily) and target removal timeline.
 
 ### Phase 3 – Data Migration & Verification

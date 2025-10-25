@@ -6,7 +6,8 @@
 ├─ apps/
 │  ├─ web/        # Next.js storefront + portals
 │  ├─ api/        # FastAPI service
-│  └─ cms/        # Sanity Studio
+│  └─ cms/        # Sanity Studio (fallback only)
+├─ apps-cms-payload/  # Payload admin (primary CMS)
 ├─ packages/
 │  └─ shared/     # Shared utilities (types, constants, UI tokens)
 ├─ infra/         # Terraform/Pulumi manifests
@@ -25,8 +26,10 @@
 - pnpm workspace bootstrapped with lockfile committed (`pnpm-lock.yaml`).
 - Prisma CLI installed and client generated for Auth.js adapter.
 - Poetry virtual environment created with dependencies installed (`poetry.lock`).
-- Sanity Studio scaffolded under `apps/cms` with baseline schemas and dependencies installed.
-- Content seeding script available at `tooling/scripts/seed-sanity.mjs` (run via `pnpm seed:sanity`).
+- Payload CMS app checked in under `apps-cms-payload` with admin import map and schema parity work underway.
+- Payload seeding script available at `tooling/scripts/seed-payload.mjs` (run via `pnpm payload:seed:dev`).
+- Sanity Studio scaffolded under `apps/cms` with baseline schemas and dependencies installed for fallback scenarios.
+- Content seeding script for Sanity lives at `tooling/scripts/seed-sanity.mjs` (run via `pnpm seed:sanity`) when fallback is required.
 - Local Postgres provided via `docker-compose`; start with `docker compose up postgres` before running FastAPI.
 
 ## Initial Commands
@@ -43,7 +46,7 @@ cd apps/api
 poetry init  # ✅ completed
 poetry add fastapi uvicorn sqlalchemy[asyncio] alembic pydantic[email] httpx redis celery  # ✅ completed via pyproject
 
-# Create Sanity Studio
+# Create Sanity Studio (fallback)
 pnpm dlx sanity@latest init --project smplat --dataset production --output-path apps/cms
 ```
 

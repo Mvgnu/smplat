@@ -1,6 +1,8 @@
 # Content Seeding Guide
 
 ## Purpose
+> **Fallback notice:** Payload now powers the storefront by default. Only follow these Sanity seeding steps when `CMS_PROVIDER=sanity` is explicitly configured for the temporary fallback window.
+
 Provide repeatable steps to populate the Sanity dataset with baseline marketing content for local development and review environments.
 
 ## Prerequisites

@@ -8,7 +8,7 @@ _Last updated: 2025-10-17_
 - Stripe webhook ingress is instrumented with delivery/retry logging and hardened error handling; internal key gating remains enforced.
 - Checkout + Stripe webhook flows now publish observability metrics at `/api/v1/payments/observability`, enabling alerting via the checkout API key.
 - Fulfillment TaskProcessor emits metrics/health telemetry and now applies exponential backoff with dead-letter tracking; deployment wiring and alerting remain open.
-- CMS schemas and seeding scripts are prepared; storefront marketing sections pull from Sanity when documents exist and gracefully fall back otherwise.
+- CMS schemas and seeding scripts are prepared; storefront marketing sections now pull from Payload by default and gracefully fall back to Sanity only when explicitly configured.
 - Client-facing dashboard (`/dashboard`) now requires an authenticated session, preloads assigned orders with persisted selection, surfaces fulfillment rollups, Instagram analytics, and catalog telemetry, and exposes notification preferences.
 - Weekly digests aggregate order/fulfillment activity via `tooling/scripts/run_weekly_digest.py`, reusing NotificationService templates with marketing preference enforcement.
 
@@ -39,11 +39,11 @@ _Last updated: 2025-10-17_
 
 ## Platform & Tooling
 - Turborepo structure, shared design tokens, and environment templates are in place across web, API, and CMS workspaces.
-- Stripe, Sanity, and fulfillment environment variables are documented; ensure `CHECKOUT_API_KEY`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` are populated before enabling payments.
+- Stripe, Payload, Sanity (fallback), and fulfillment environment variables are documented; ensure `CHECKOUT_API_KEY`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` are populated before enabling payments.
 - Database migrations target Postgres; local SQLite runs are acceptable for unit tests but staging/production must validate against Postgres before seeding.
-- Sanity seed script now provisions the `product-instagram-growth` marketing page so the storefront configurator instantly merges CMS copy; replicate this pattern for new services.
+- Payload seed script now provisions the `product-instagram-growth` marketing page so the storefront configurator instantly merges CMS copy; replicate this pattern for new services. Keep the Sanity seeding script handy only for the temporary fallback window.
 - Smoke scripts (`tooling/scripts/smoke_fulfillment.py`, `tooling/scripts/smoke_checkout.py`) support an `--in-process` mode to exercise health/checkout flows without binding network ports and were validated locally.
-- Sanity seeding now ships both `product-instagram-growth` and `product-tiktok-growth` landing pages so multiple storefront services pull CMS storytelling by default.
+- Sanity seeding still ships both `product-instagram-growth` and `product-tiktok-growth` landing pages to support the fallback mode; Payload seeding covers these pages for the default flow.
 - In-memory async DB fixtures power 54 integration tests spanning Stripe checkout/webhooks, fulfillment task orchestration (including retry dead-letter flows), Instagram analytics updates, and order listing/filtering (current coverage **82%**).
 - Local FastAPI smoke + pytest execution now runs through a dedicated virtual environment (`apps/api/.venv`) ensuring consistent dependency resolution.
 - Fulfillment observability runbook (`docs/18-fulfillment-observability.md`) documents worker toggles, alert thresholds, and smoke coverage expectations.
