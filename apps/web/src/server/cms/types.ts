@@ -15,6 +15,68 @@ const testimonialSchema = z.object({
   avatarUrl: z.string().optional()
 });
 
+const marketingHeroSchema = z.object({
+  kind: z.literal("hero"),
+  key: z.string().optional(),
+  eyebrow: z.string().optional(),
+  headline: z.string().optional(),
+  body: z.string().optional(),
+  primaryCtaLabel: z.string().optional(),
+  primaryCtaHref: z.string().optional(),
+  secondaryCtaLabel: z.string().optional(),
+  secondaryCtaHref: z.string().optional(),
+  align: z.enum(["start", "center"]).optional()
+});
+
+const marketingMetricSchema = z.object({
+  label: z.string(),
+  value: z.string(),
+  description: z.string().optional()
+});
+
+const marketingMetricsSchema = z.object({
+  kind: z.literal("metrics"),
+  key: z.string().optional(),
+  heading: z.string().optional(),
+  subheading: z.string().optional(),
+  metrics: z.array(marketingMetricSchema)
+});
+
+const marketingTestimonialSchema = z.object({
+  kind: z.literal("testimonial"),
+  key: z.string().optional(),
+  quote: z.string(),
+  author: z.string().optional(),
+  role: z.string().optional(),
+  company: z.string().optional()
+});
+
+const marketingProductFeatureSchema = z.object({
+  id: z.string().optional(),
+  label: z.string()
+});
+
+const marketingProductSchema = z.object({
+  kind: z.literal("product"),
+  key: z.string().optional(),
+  badge: z.string().optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  price: z.number().optional(),
+  currency: z.string().optional(),
+  frequency: z.string().optional(),
+  features: z.array(marketingProductFeatureSchema),
+  ctaLabel: z.string().optional(),
+  ctaHref: z.string().optional()
+});
+
+const marketingContentSchema = z.discriminatedUnion("kind", [
+  marketingHeroSchema,
+  marketingMetricsSchema,
+  marketingTestimonialSchema,
+  marketingProductSchema
+]);
+
 const baseSection = {
   _key: z.string().optional()
 } as const;
@@ -74,6 +136,7 @@ const sectionSchema = z.discriminatedUnion("_type", [
     subheading: z.string().optional(),
     layout: z.string().optional(),
     content: z.any().optional(),
+    marketingContent: z.array(marketingContentSchema).optional(),
     metrics: z.array(metricSchema).optional(),
     faqItems: z.array(faqSchema).optional(),
     testimonials: z.array(testimonialSchema).optional(),
@@ -109,6 +172,7 @@ export const pageSchema = z.object({
 });
 
 export type PageDocument = z.infer<typeof pageSchema>;
+export type MarketingContentDocument = z.infer<typeof marketingContentSchema>;
 export type TestimonialDocument = z.infer<typeof testimonialSchema>;
 export type FaqDocument = z.infer<typeof faqSchema>;
 export type CaseStudyDocument = z.infer<typeof caseStudySchema>;

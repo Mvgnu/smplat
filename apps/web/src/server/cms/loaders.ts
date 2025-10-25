@@ -2,6 +2,7 @@ import { cache } from "react";
 
 import { getClient, isPayload, payloadGet } from "./client";
 import { payloadConfig } from "./config";
+import { normalizeMarketingLexicalContent } from "./lexical";
 import { blogPostBySlugQuery, blogPostsQuery, homepageQuery, pageBySlugQuery } from "./queries";
 import {
   blogPostDetailSchema,
@@ -13,6 +14,8 @@ import {
   type PricingTierDocument,
   type TestimonialDocument
 } from "./types";
+
+type PageSectionDocument = Extract<NonNullable<PageDocument["content"]>[number], { _type: "section" }>;
 
 const withCache = <Fn extends (...args: never[]) => Promise<unknown>>(fn: Fn): Fn => {
   if (typeof cache === "function") {
@@ -93,7 +96,7 @@ const normalizeFaqs = (items: unknown) => {
       };
     })
     .filter(Boolean);
-  return result.length > 0 ? (result as NonNullable<PageDocument["content"]>[number]["faqItems"]) : undefined;
+  return result.length > 0 ? (result as PageSectionDocument["faqItems"]) : undefined;
 };
 
 const normalizeMetrics = (items: unknown) => {
@@ -161,7 +164,7 @@ const normalizeCaseStudy = (value: unknown): CaseStudyDocument | undefined => {
         value: resultValue
       };
     })
-    .filter(Boolean) as CaseStudyDocument["results"];
+    .filter(Boolean) as NonNullable<CaseStudyDocument["results"]>;
   return {
     title: toStringOrUndefined(record.title) ?? "",
     client: toStringOrUndefined(record.client),
@@ -234,6 +237,13 @@ const normalizePayloadPage = (item: unknown) => {
           ? (((blogPostsSource as Record<string, unknown>).docs as unknown[]).map(normalizeBlogSummary).filter(Boolean) as BlogPostSummary[])
           : undefined;
 
+      const blockTypeName = typeof blockType === "string" ? blockType : undefined;
+      const sectionLabel = key ?? blockTypeName ?? "section";
+      const { nodes: marketingContent } = normalizeMarketingLexicalContent(blockRecord.content, {
+        sectionLabel,
+        logger: (message) => console.warn(message)
+      });
+
       return {
         _type: "section" as const,
         _key: key,
@@ -241,6 +251,7 @@ const normalizePayloadPage = (item: unknown) => {
         subheading: toStringOrUndefined(blockRecord.subheading),
         layout: toStringOrUndefined(blockRecord.layout),
         content: blockRecord.content,
+        marketingContent: marketingContent.length > 0 ? marketingContent : undefined,
         metrics: normalizeMetrics(blockRecord.metrics),
         faqItems: normalizeFaqs(blockRecord.faqItems),
         testimonials,
