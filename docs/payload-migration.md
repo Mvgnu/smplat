@@ -23,14 +23,13 @@ This document captures the current state of the Sanity to Payload CMS migration,
 
 ### Payload App (`apps-cms-payload`)
 
-- Generated from the Payload Next template; previously failed to boot due to missing `/app` or `/pages`. A minimal Next entry point has now been added.
+- Hardened the Next.js + Payload integration. The app runs on `http://localhost:3050`, serves the admin UI at `/admin`, and exposes REST (`/api/payload/*`) plus GraphQL (`/api/graphql`).
 - Key folders:
-  - `src/payload.config.ts` defines collections mirroring Sanity types with an additional `environment` select field.
-  - `src/app/(payload)/admin` hosts the admin route, import map, and catch-all page that renders `RootPage` from `@payloadcms/next`.
-  - `src/app/(payload)/api/payload/[...slug]` exposes REST endpoints.
-  - `src/app/(payload)/api/graphql` exposes GraphQL endpoints.
+  - `src/payload.config.ts` defines collections mirroring Sanity types with a shared `environment` select field and Lexical-rich text configuration.
+  - `src/collections/` hosts `pages`, `blog-posts`, `faqs`, `testimonials`, `case-studies`, `pricing-tiers`, `site-settings`, and `users`.
+  - `src/access/canWrite.ts` centralises write-access rules (admin auth or `SEED_KEY` header).
 - `tooling/scripts/seed-payload.mjs` creates Pages, FAQs, Case Studies, Pricing Tiers, Blog Posts, and Site Settings with environment scoping.
-- There is **no bespoke frontend** inside `apps-cms-payload` beyond the minimal landing page.
+- The generated RSC import map (`importMap.js`) keeps Payload admin components working with Next's App Router.
 
 ### Identified Gaps
 
@@ -40,6 +39,12 @@ This document captures the current state of the Sanity to Payload CMS migration,
 4. **Studio Features:** Sanity desk structure, validations, and view customisations need Payload admin equivalents (field UI, default values, etc.).
 5. **Testing Tooling:** Sanity-specific utilities (PortableText rendering, dataset ensure scripts) should be complemented or replaced with Payload tooling.
 6. **Deployment:** Payload requires a PostgreSQL database and optional storage adapter. Deployment configuration (Docker, cloud) must be finalised.
+
+### Recent Updates
+
+- Regenerated the Payload admin import map (`apps-cms-payload/importMap.js`) and added a companion `importMap.d.ts` so typechecking passes while the map stays as a checked-in artifact. The admin route now feeds `RootPage` the expected `config` promise and import map reference.
+- Verified `pnpm --filter @smplat/cms-payload typecheck` and `pnpm --filter @smplat/cms-payload lint` succeed; lint still reports upstream TypeScript peer warnings that should be documented before release.
+- Added Jest coverage for `apps/web/src/components/blog/post-content.tsx` to exercise headings, lists, and links rendered from Payload Lexical JSON. The suite currently mocks Payload's converter—add integration coverage once the CMS REST API is wired into tests.
 
 ## Migration Plan
 

@@ -1,0 +1,48 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": "./",
+    "jsx": "preserve",
+    "paths": {
+      "@/collections/*": [
+        "src/collections/*"
+      ],
+      "@/access/*": [
+        "src/access/*"
+      ],
+      "@/fields/*": [
+        "src/fields/*"
+      ],
+      "@/payload-types": [
+        "payload-types"
+      ],
+      "@/utils/*": [
+        "src/utils/*"
+      ],
+      "@/payload.config": [
+        "src/payload.config"
+      ],
+      "@/app/*": [
+        "src/app/*"
+      ],
+      "@/importMap": [
+        "importMap"
+      ]
+    },
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
