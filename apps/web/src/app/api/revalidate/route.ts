@@ -6,6 +6,8 @@ import {
   resolveRevalidateSecret,
   type CmsProvider
 } from "@/server/cms/config";
+import { cmsLogger } from "@/server/observability/logger";
+import { recordRevalidateMetric } from "@/server/observability/cms-telemetry";
 
 const SANITY_SIGNATURE_HEADER = "x-sanity-signature";
 const PAYLOAD_SIGNATURE_HEADER = "x-payload-signature";
@@ -43,6 +45,10 @@ const ensureLeadingSlash = (path: string) => {
     return `/${path.replace(/^\/+/, "")}`;
   }
   return path;
+};
+
+const isSafePath = (path: string) => {
+  return path.startsWith("/") && !path.includes("..");
 };
 
 const extractString = (value: unknown): string | undefined => {
@@ -84,23 +90,24 @@ const extractEnvironment = (payload: PayloadWebhook): string | undefined => {
   return undefined;
 };
 
-const normalizePaths = (paths: unknown): string[] | undefined => {
+const normalizePaths = (paths: unknown): string[] | null | undefined => {
   if (Array.isArray(paths)) {
     const normalized = paths
       .map((path) => (typeof path === "string" ? ensureLeadingSlash(path) : null))
-      .filter(Boolean) as string[];
-    return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+      .filter((entry): entry is string => Boolean(entry && isSafePath(entry)));
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : null;
   }
   if (typeof paths === "string" && paths.length > 0) {
-    return [ensureLeadingSlash(paths)];
+    const candidate = ensureLeadingSlash(paths);
+    return isSafePath(candidate) ? [candidate] : null;
   }
   return undefined;
 };
 
 const resolvePayloadPaths = (payload: PayloadWebhook): string[] => {
   const pathsFromPayload = normalizePaths(payload.paths);
-  if (pathsFromPayload) {
-    return pathsFromPayload;
+  if (pathsFromPayload !== undefined) {
+    return pathsFromPayload ?? [];
   }
 
   const doc = payload.doc ?? payload.previousDoc ?? undefined;
@@ -148,11 +155,20 @@ export async function POST(request: Request) {
   });
 
   if (!authorizedProvider) {
+    recordRevalidateMetric("error");
+    cmsLogger.warn("revalidation denied: invalid signature", {
+      provider: defaultProvider,
+      providerHeader: providerFromHeader
+    });
     return Response.json({ error: "Invalid signature" }, { status: 401 });
   }
 
   const secret = resolveRevalidateSecret(authorizedProvider);
   if (!secret) {
+    recordRevalidateMetric("error");
+    cmsLogger.error("revalidation failed: secret not configured", {
+      provider: authorizedProvider
+    });
     return Response.json({ error: "Revalidate secret not configured" }, { status: 500 });
   }
 
@@ -160,6 +176,13 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as SanityRevalidatePayload;
     const slug = payload.slug?.current;
     const path = mapSanitySlugToPath(slug);
+    recordRevalidateMetric("success");
+    cmsLogger.info("revalidation triggered", {
+      provider: authorizedProvider,
+      paths: [path],
+      collection: payload._type ?? "unknown",
+      mode: "update"
+    });
     revalidatePath(path);
     return Response.json({ revalidated: true, provider: authorizedProvider, paths: [path] });
   }
@@ -168,6 +191,13 @@ export async function POST(request: Request) {
   const environment = extractEnvironment(payload);
   const expectedEnvironment = payloadConfig.environment;
   if (environment && expectedEnvironment && environment !== expectedEnvironment) {
+    recordRevalidateMetric("skipped");
+    cmsLogger.warn("revalidation skipped: environment mismatch", {
+      provider: authorizedProvider,
+      environment,
+      expectedEnvironment,
+      collection: payload.collection
+    });
     return Response.json(
       {
         revalidated: false,
@@ -180,9 +210,34 @@ export async function POST(request: Request) {
     );
   }
 
-  const paths = resolvePayloadPaths(payload);
+  const paths = resolvePayloadPaths(payload).filter(isSafePath);
   const uniquePaths = Array.from(new Set(paths.map(ensureLeadingSlash)));
-  uniquePaths.forEach((path) => revalidatePath(path));
 
-  return Response.json({ revalidated: true, provider: authorizedProvider, paths: uniquePaths });
+  if (uniquePaths.length === 0) {
+    recordRevalidateMetric("skipped");
+    cmsLogger.warn("revalidation skipped: no valid paths", {
+      provider: authorizedProvider,
+      collection: payload.collection
+    });
+    return Response.json(
+      {
+        revalidated: false,
+        provider: authorizedProvider,
+        reason: "No valid paths"
+      },
+      { status: 202 }
+    );
+  }
+
+  const mode = payload.doc ? "update" : "delete";
+  uniquePaths.forEach((path) => revalidatePath(path));
+  recordRevalidateMetric("success");
+  cmsLogger.info("revalidation triggered", {
+    provider: authorizedProvider,
+    paths: uniquePaths,
+    collection: payload.collection,
+    mode
+  });
+
+  return Response.json({ revalidated: true, provider: authorizedProvider, paths: uniquePaths, mode });
 }

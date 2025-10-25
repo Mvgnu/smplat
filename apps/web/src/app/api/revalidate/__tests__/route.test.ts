@@ -6,6 +6,23 @@ jest.mock("next/cache", () => ({
   revalidatePath: (...args: Parameters<typeof mockRevalidatePath>) => mockRevalidatePath(...args)
 }));
 
+const mockRecordMetric = jest.fn();
+const mockInfo = jest.fn();
+const mockWarn = jest.fn();
+const mockError = jest.fn();
+
+jest.mock("@/server/observability/cms-telemetry", () => ({
+  recordRevalidateMetric: (...args: unknown[]) => mockRecordMetric(...args)
+}));
+
+jest.mock("@/server/observability/logger", () => ({
+  cmsLogger: {
+    info: (...args: unknown[]) => mockInfo(...args),
+    warn: (...args: unknown[]) => mockWarn(...args),
+    error: (...args: unknown[]) => mockError(...args)
+  }
+}));
+
 class TestResponse {
   status: number;
   private readonly headerMap = new Map<string, string>();
@@ -20,6 +37,11 @@ class TestResponse {
   constructor(body: unknown, init?: ResponseInit) {
     this.status = init?.status ?? 200;
     this.body = body;
+    if (init?.headers && typeof init.headers === "object") {
+      for (const [key, value] of Object.entries(init.headers as Record<string, string>)) {
+        this.headers.set(key, value);
+      }
+    }
   }
 
   json = async () => this.body;
@@ -69,6 +91,10 @@ describe("revalidate POST", () => {
   beforeEach(() => {
     jest.resetModules();
     mockRevalidatePath.mockClear();
+    mockRecordMetric.mockClear();
+    mockInfo.mockClear();
+    mockWarn.mockClear();
+    mockError.mockClear();
     process.env = {
       ...originalEnv,
       CMS_PROVIDER: "payload",
@@ -112,7 +138,9 @@ describe("revalidate POST", () => {
 
     expect(response.status).toBe(200);
     expect(json.paths).toEqual(["/pricing"]);
+    expect(json.mode).toBe("update");
     expect(revalidatePath).toHaveBeenCalledWith("/pricing");
+    expect(mockRecordMetric).toHaveBeenCalledWith("success");
   });
 
   it("skips payload revalidation for other environments", async () => {
@@ -137,6 +165,7 @@ describe("revalidate POST", () => {
     expect(json.revalidated).toBe(false);
     expect(json.reason).toBe("Environment mismatch");
     expect(revalidatePath).not.toHaveBeenCalled();
+    expect(mockRecordMetric).toHaveBeenCalledWith("skipped");
   });
 
   it("revalidates Sanity payloads using legacy signature", async () => {
@@ -159,6 +188,7 @@ describe("revalidate POST", () => {
     expect(response.status).toBe(200);
     expect(json.paths).toEqual(["/automation-workflows"]);
     expect(revalidatePath).toHaveBeenCalledWith("/automation-workflows");
+    expect(mockRecordMetric).toHaveBeenCalledWith("success");
   });
 
   it("returns unauthorized when signatures do not match", async () => {
@@ -178,5 +208,81 @@ describe("revalidate POST", () => {
 
     expect(response.status).toBe(401);
     expect(json.error).toBe("Invalid signature");
+    expect(mockRecordMetric).toHaveBeenCalledWith("error");
+  });
+
+  it("respects provider header overrides", async () => {
+    const { POST, revalidatePath } = await importRoute();
+
+    const request = createRequest("http://localhost/api/revalidate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-cms-provider": "payload",
+        "x-payload-signature": "payload-secret"
+      },
+      body: {
+        collection: "pages",
+        paths: ["/about", "about"],
+        doc: { slug: "about", environment: "test" }
+      }
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as { paths: string[] };
+
+    expect(response.status).toBe(200);
+    expect(json.paths).toEqual(["/about"]);
+    expect(revalidatePath).toHaveBeenCalledWith("/about");
+  });
+
+  it("handles delete payloads using previousDoc", async () => {
+    const { POST, revalidatePath } = await importRoute();
+
+    const request = createRequest("http://localhost/api/revalidate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-payload-signature": "payload-secret"
+      },
+      body: {
+        collection: "blog-posts",
+        previousDoc: { slug: "obsolete-post", environment: "test" }
+      }
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as { paths: string[]; mode: string };
+
+    expect(response.status).toBe(200);
+    expect(json.paths).toEqual(["/blog", "/blog/obsolete-post"]);
+    expect(json.mode).toBe("delete");
+    expect(revalidatePath).toHaveBeenCalledWith("/blog");
+    expect(revalidatePath).toHaveBeenCalledWith("/blog/obsolete-post");
+  });
+
+  it("skips invalid paths and returns 202", async () => {
+    const { POST, revalidatePath } = await importRoute();
+
+    const request = createRequest("http://localhost/api/revalidate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-payload-signature": "payload-secret"
+      },
+      body: {
+        collection: "pages",
+        paths: ["../../escape"],
+        doc: { slug: "escape", environment: "test" }
+      }
+    });
+
+    const response = await POST(request);
+    const json = (await response.json()) as { revalidated: boolean; reason?: string };
+
+    expect(response.status).toBe(202);
+    expect(json.revalidated).toBe(false);
+    expect(json.reason).toBe("No valid paths");
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

@@ -13,17 +13,20 @@ Set the following variables anywhere `apps/web` and `apps-cms-payload` run:
 
 ## Preview flow
 
-1. Configure a Preview button in Payload admin that links to:
+1. Configure a Preview button in Payload admin (`Collection Settings → Admin Panel → Preview Button`) with the URL:
    ```text
-   ${WEB_URL}/api/preview?secret=${PAYLOAD_PREVIEW_SECRET}&provider=payload&redirect=/slug-here
+   ${WEB_URL}/api/preview?secret=${PAYLOAD_PREVIEW_SECRET}&provider=payload&redirect=<slug>
    ```
-2. Visiting the link enables Next.js draft mode and redirects to the requested slug. All Payload fetchers already honour the `draft` flag when preview is enabled.
-3. Sanity preview remains available while `SANITY_PREVIEW_SECRET` is set; the route validates both secrets for the migration window.
+   - `<slug>` must be a relative path (e.g. `/blog/post-slug`). The handler will reject external URLs or protocol-relative redirects.
+   - The preview endpoint now sets a `smplat-preview-provider` cookie (HttpOnly, SameSite=Lax) so analytics can attribute preview traffic to Payload.
+2. When preview is enabled the marketing loaders automatically append `draft=true` and send `x-payload-preview` headers so unpublished documents resolve correctly.
+3. Sanity preview remains available while `SANITY_PREVIEW_SECRET` is set; the route validates both secrets for the migration window and records metrics/logs per provider.
 
 ## Revalidation flow
 
 - Every marketing collection (`pages`, `blog-posts`, `faqs`, `testimonials`, `case-studies`, `pricing-tiers`, `site-settings`) now ships `afterChange`/`afterDelete` hooks that POST to the frontend’s `/api/revalidate` endpoint.
-- Hooks include the collection slug, the current/previous document, and the resolved environment so the Next.js handler can skip mismatched environments.
+- Hooks include the collection slug, the current/previous document, derived IDs, and the resolved environment so the Next.js handler can skip mismatched environments.
+- Requests now send `x-cms-provider: payload` and a generated `requestId` to correlate failures between Payload logs and the Next.js handler. Non-2xx responses capture response bodies for troubleshooting.
 - The frontend route maps incoming documents to paths:
   - `pages`: `/` for the `home` slug, otherwise `/${slug}`.
   - `blog-posts`: `/blog` and the individual `/blog/${slug}` page.
@@ -34,5 +37,8 @@ Set the following variables anywhere `apps/web` and `apps-cms-payload` run:
 
 1. Export `PAYLOAD_REVALIDATE_SECRET=local-secret` and `WEB_URL=http://localhost:3000` in the Payload app.
 2. Run the Payload dev server and the marketing site (`pnpm --filter apps/web dev`).
-3. Publish a document in Payload.
-4. Inspect the Next.js terminal logs—`/api/revalidate` should log a `200` with the returned paths. Use `pnpm --filter apps/web test revalidate` to execute the Jest route tests in isolation.
+3. Publish a document in Payload. Confirm the Payload server logs include the `requestId` and the Next.js logs report a matching `revalidation triggered` message.
+4. Trigger a deletion and verify `/api/revalidate` responds with `mode: delete` and the expected `/blog/...` paths.
+5. Run automated coverage:
+   - `pnpm --filter @smplat/web test:unit -- revalidate` to execute the route tests in isolation.
+   - `pnpm --filter @smplat/web test:int` (optional) to exercise a live Payload instance (requires `PAYLOAD_INTEGRATION_URL`).

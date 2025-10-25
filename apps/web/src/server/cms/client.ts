@@ -1,6 +1,14 @@
+import { draftMode } from "next/headers";
+
 import { createClient } from "@sanity/client";
 
-import { cmsProvider, payloadConfig, sanityConfig, sanityPreviewToken } from "./config";
+import {
+  cmsProvider,
+  payloadConfig,
+  payloadPreviewSecret,
+  sanityConfig,
+  sanityPreviewToken
+} from "./config";
 
 export const sanityClient = createClient({
   ...sanityConfig,
@@ -38,14 +46,27 @@ export type PayloadRequestOptions<TBody = unknown> = FetchOptions & {
   onRetry?: (attempt: number, error: unknown) => void;
 };
 
-const defaultHeaders = () => {
+const defaultHeaders = (options?: { includePreviewSecret?: boolean }) => {
   const headers: Record<string, string> = {
     Accept: "application/json"
   };
   if (payloadConfig.token) {
     headers.Authorization = `Bearer ${payloadConfig.token}`;
   }
+  if (options?.includePreviewSecret && payloadPreviewSecret) {
+    headers["x-payload-preview"] = payloadPreviewSecret;
+  }
   return headers;
+};
+
+// meta: preview-draft-support:enabled
+const isDraftEnabled = () => {
+  try {
+    return draftMode().isEnabled;
+  } catch (error) {
+    console.warn("[payload] failed to read draft mode state", error);
+    return false;
+  }
 };
 
 const serializeQueryValue = (value: QueryValue) => {
@@ -100,9 +121,9 @@ const logRetry = (attempt: number, error: unknown) => {
 const hasContentType = (headers: Record<string, string>) =>
   Object.keys(headers).some((key) => key.toLowerCase() === "content-type");
 
-const createRequestInit = (options: PayloadRequestOptions): RequestInit => {
+const createRequestInit = (options: PayloadRequestOptions, includePreviewSecret: boolean): RequestInit => {
   const headers = {
-    ...defaultHeaders(),
+    ...defaultHeaders({ includePreviewSecret }),
     ...(options.headers ?? {})
   } satisfies Record<string, string>;
 
@@ -131,7 +152,12 @@ const createRequestInit = (options: PayloadRequestOptions): RequestInit => {
 export const payloadFetch = async <TResponse, TBody = unknown>(
   options: PayloadRequestOptions<TBody>
 ): Promise<TResponse> => {
-  const url = buildUrl({ path: options.path, query: options.query });
+  const draft = isDraftEnabled();
+  const query = { ...options.query };
+  if (draft) {
+    query.draft = true;
+  }
+  const url = buildUrl({ path: options.path, query });
   const retries = Math.max(1, options.retries ?? 1);
   const retryDelayMs = options.retryDelayMs ?? 200;
   const onRetry = options.onRetry ?? logRetry;
@@ -142,7 +168,7 @@ export const payloadFetch = async <TResponse, TBody = unknown>(
   while (attempt < retries) {
     attempt += 1;
     try {
-      const init = createRequestInit(options);
+      const init = createRequestInit(options, draft);
       const response = await fetch(url, init);
       if (!response.ok) {
         throw new PayloadRequestError(url, response.status, response.statusText);

@@ -91,12 +91,13 @@ This document captures the current state of the Sanity to Payload CMS migration,
    - Ensure blog posts render body content identically to the Sanity version.
 
 4. **Mutation & Revalidation Hooks**
-   - ✅ Payload collections now ship `afterChange`/`afterDelete` hooks that POST to `/api/revalidate` using `x-payload-signature` headers.
-   - ✅ `/app/api/revalidate/route.ts` validates Payload and Sanity signatures, maps marketing/blog paths, and enforces environment scoping.
+   - ✅ Payload collections now ship `afterChange`/`afterDelete` hooks that POST to `/api/revalidate` using `x-payload-signature` and `x-cms-provider` headers plus generated `requestId`s for traceability.
+   - ✅ `/app/api/revalidate/route.ts` validates Payload and Sanity signatures, maps marketing/blog paths, enforces environment scoping, and emits structured logs/metrics.
    - Support on-demand revalidation via Payload admin actions (optional but recommended).
 
 5. **Preview Mode**
-   - Recreate preview functionality (if required) by issuing draft fetches from Payload and respecting draft API tokens.
+   - ✅ Draft mode now appends `draft=true` and `x-payload-preview` headers so unpublished entries render via preview URLs.
+   - Update Payload admin preview buttons to point at `/api/preview` with the Payload secret and relative redirect paths.
 
 6. **CMS Provider Switch**
    - ✅ Default runtime now resolves to Payload unless `CMS_PROVIDER=sanity` is explicitly set.
@@ -142,7 +143,7 @@ This document captures the current state of the Sanity to Payload CMS migration,
 - [ ] Payload collections aligned with Sanity data requirements.
 - [ ] `importMap.js` checked in and regenerated after schema changes.
 - [ ] `apps/web` loaders and components compatible with Payload responses.
-- [ ] Webhook/revalidation integration in place.
+- [ ] Webhook/revalidation integration in place with structured logging/metrics.
 - [ ] Migration script executed (with documented steps and rollback plan).
 - [ ] CI pipeline updated to include Payload lint/build/test/seeding.
 - [ ] Deployment guide for Payload (local dev + production).
@@ -181,6 +182,17 @@ pnpm --filter apps-cms-payload test:int
 2. Begin adapting `apps/web` fetchers to accept Payload payloads (start with `getHomepage` and `getBlogPosts`).
 3. Plan the content migration script with a dry-run against development datasets.
 4. Draft revalidation webhook flow using Payload hooks and update frontend route accordingly.
+
+## Sanity Sunset Timeline
+
+| Milestone | Target Date | Criteria |
+| --- | --- | --- |
+| Preview parity | +1 sprint | Payload preview confirmed with unpublished content and documented admin button setup. |
+| Revalidation go-live | +2 sprints | Payload webhooks active in production, monitoring dashboards populated with preview/revalidation metrics. |
+| Sanity fallback off | +3 sprints | `CMS_PROVIDER` defaults removed from deployment manifests; Sanity secrets rotated out of `.env` files. |
+| Sanity removal | +4 sprints | GROQ queries and PortableText renderer deleted; Sanity packages removed from `package.json`. |
+
+Rollback criteria: if Payload preview/revalidation emit more than three consecutive `revalidation denied` errors or draft content fails to load for priority pages, pause the sunset and reinstate `CMS_PROVIDER=sanity` until issues are resolved.
 
 ---
 
