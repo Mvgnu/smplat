@@ -1,0 +1,24 @@
+{
+  "docs": [
+    {
+      "_id": "draft-page-id",
+      "id": "draft-page-id",
+      "slug": "draft-page",
+      "title": "Draft Launch Page",
+      "environment": "test",
+      "_status": "draft",
+      "hero": {
+        "eyebrow": "Preview",
+        "headline": "Draft Ready",
+        "subheadline": "Pending publication",
+        "cta": {
+          "label": "Review",
+          "href": "#review"
+        }
+      },
+      "content": [],
+      "seoTitle": "Draft Launch Page",
+      "seoDescription": "Preview copy for draft page"
+    }
+  ]
+}

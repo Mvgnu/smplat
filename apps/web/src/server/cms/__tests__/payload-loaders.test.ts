@@ -4,6 +4,7 @@ import homepageFixture from "../__fixtures__/payload-homepage.json";
 import blogPostDetailFixture from "../__fixtures__/payload-blog-post.json";
 import blogPostsFixture from "../__fixtures__/payload-blog-posts.json";
 import pageFixture from "../__fixtures__/payload-page.json";
+import pageDraftFixture from "../__fixtures__/payload-page-draft.json";
 
 type FetchArgs = Parameters<typeof fetch>;
 
@@ -34,6 +35,7 @@ describe("payload client", () => {
     process.env.CMS_ENV = "test";
     process.env.PAYLOAD_URL = "https://payload.test";
     process.env.PAYLOAD_API_TOKEN = "test-token";
+    process.env.PAYLOAD_PREVIEW_SECRET = "preview-secret";
   });
 
   afterEach(() => {
@@ -45,6 +47,7 @@ describe("payload client", () => {
     }
     jest.useRealTimers();
     jest.clearAllMocks();
+    draftState.isEnabled = false;
   });
 
   it("attaches auth headers, query params, and parses json", async () => {
@@ -127,6 +130,36 @@ describe("payload client", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     warnSpy.mockRestore();
   });
+  it("appends draft params and preview headers when draft mode is enabled", async () => {
+    draftState.isEnabled = true;
+    const fetchMock = jest.fn(async (url: FetchArgs[0], init: FetchArgs[1]) => {
+      expect(url.toString()).toContain("draft=true");
+      return createResponse({ result: "ok" });
+    }) as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
+
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { payloadFetch } = await import("../client");
+
+    const result = await payloadFetch<{ result: string }>({
+      path: "/api/pages",
+      query: { "where[slug][equals]": "home" }
+    });
+
+    expect(result).toEqual({ result: "ok" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init?.headers as Record<string, string> & { get?: (key: string) => string | null };
+    expect(headers).toBeDefined();
+    const previewHeader = typeof headers?.get === "function"
+      ? headers.get("x-payload-preview")
+      : headers?.["x-payload-preview"];
+    expect(headers).toMatchObject({
+      Accept: "application/json",
+      Authorization: "Bearer test-token"
+    });
+    expect(previewHeader).toBe("preview-secret");
+  });
 });
 
 describe("payload loaders", () => {
@@ -147,6 +180,7 @@ describe("payload loaders", () => {
       (global as typeof global & { fetch?: typeof fetch }).fetch = undefined;
     }
     jest.clearAllMocks();
+    draftState.isEnabled = false;
   });
 
   it("normalises payload homepage responses", async () => {
@@ -389,4 +423,29 @@ describe("payload loaders", () => {
 
     warnSpy.mockRestore();
   });
+
+  it("fetches draft payload pages when draft mode is enabled", async () => {
+    draftState.isEnabled = true;
+    const fetchMock = jest
+      .fn<(...args: FetchArgs) => Promise<Response>>()
+      .mockResolvedValue(createResponse(pageDraftFixture));
+
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { getPageBySlug } = await import("../loaders");
+
+    const page = await getPageBySlug("draft-page", true);
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("draft=true"), expect.any(Object));
+
+    expect(page).toMatchObject({
+      _id: "draft-page-id",
+      title: "Draft Launch Page"
+    });
+  });
 });
+const draftState = { isEnabled: false };
+
+jest.mock("next/headers", () => ({
+  draftMode: () => draftState
+}));

@@ -16,6 +16,7 @@
     "test:unit": "jest",
     "test:unit:watch": "jest --watch",
     "test:unit:coverage": "jest --coverage",
+    "test:int": "jest src/server/cms/__tests__/payload.integration.test.ts",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"
   },
