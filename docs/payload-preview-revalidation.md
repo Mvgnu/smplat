@@ -8,6 +8,9 @@ Set the following variables anywhere `apps/web` and `apps-cms-payload` run:
 - `PAYLOAD_REVALIDATE_SECRET`: header value sent as `x-payload-signature` when Payload webhooks POST to `https://<web>/api/revalidate`.
 - `WEB_URL`: origin of the marketing site used by Payload when emitting webhook requests (defaults to `http://localhost:3000`).
 - Optional `PAYLOAD_REVALIDATE_ENDPOINT`: override when the frontend is reachable under a custom path.
+- Optional integration overrides used by the Jest suite when exercising a live Payload instance:
+  - `PAYLOAD_INTEGRATION_PREVIEW_SECRET` to override the preview secret sent via `x-payload-preview`.
+  - `PAYLOAD_INTEGRATION_DRAFT_SLUG` to target a specific blog post slug with draft coverage (defaults to `automation-workflows`).
 
 `apps/web/.env.example` and the repository-level `.env.example` include the new keys.
 
@@ -42,3 +45,4 @@ Set the following variables anywhere `apps/web` and `apps-cms-payload` run:
 5. Run automated coverage:
    - `pnpm --filter @smplat/web test:unit -- revalidate` to execute the route tests in isolation.
    - `pnpm --filter @smplat/web test:int` (optional) to exercise a live Payload instance (requires `PAYLOAD_INTEGRATION_URL`).
+     This suite now verifies that draft previews resolve through Payload by patching a draft blog post, asserting the published payload remains unchanged, and confirming the preview response surfaces the draft content end to end.
