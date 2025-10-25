@@ -1,5 +1,7 @@
 # Sanity Webhook & Preview Setup
 
+> **Fallback notice:** Payload preview and revalidation flows are becoming the primary path. Use the steps below only while the Sanity fallback is enabled via `CMS_PROVIDER=sanity`.
+
 ## Secrets & Environment Variables
 - `SANITY_PREVIEW_SECRET`: shared secret for enabling Next.js draft mode via `/api/preview?secret=...`.
 - `SANITY_REVALIDATE_SECRET`: value expected in Sanity webhook header `x-sanity-signature` for `/api/revalidate`.

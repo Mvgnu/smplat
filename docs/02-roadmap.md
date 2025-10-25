@@ -9,10 +9,10 @@
 - Stand up baseline database schema (users, customer profiles, notifications ✅; remaining commerce tables pending).
 
 ## Phase 1 – Storefront & Catalog (Weeks 3-6)
-- Marketing site with hero, services overview, testimonials, FAQs, blog scaffolding. (Home hero + metrics/FAQ/pricing/case study now sourced from Sanity; blog index live.)
+- Marketing site with hero, services overview, testimonials, FAQs, blog scaffolding. (Home hero + metrics/FAQ/pricing/case study now sourced from Payload by default; Sanity remains available for fallback only.)
 - Product catalog API and service layer established for CRUD via FastAPI, with admin UI for creation/update/delete in Next.js.
 - Product catalog pages with configurable options, pricing tiers, localization-ready content.
-- CMS integration (e.g., Sanity/Contentful) for marketing content and testimonials.
+- CMS integration (Payload as the primary provider, with temporary Sanity fallback) for marketing content and testimonials.
 - Implement checkout flow with Stripe Checkout (one-time + subscription SKUs).
 - GDPR-compliant cookie consent, privacy policy, legal pages.
 - Analytics instrumentation (GA4, privacy-compliant tracking, conversion events).
