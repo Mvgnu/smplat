@@ -437,10 +437,49 @@ describe("payload loaders", () => {
     const page = await getPageBySlug("draft-page", true);
 
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("draft=true"), expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("depth=2"), expect.any(Object));
 
     expect(page).toMatchObject({
       _id: "draft-page-id",
-      title: "Draft Launch Page"
+      title: "Draft Launch Page",
+      hero: {
+        eyebrow: "Preview",
+        headline: "Draft Ready",
+        subheadline: "Pending publication",
+        cta: { label: "Review", href: "#review" }
+      }
+    });
+
+    const metricsSection = page?.content?.find((block) => block._type === "section" && block.layout === "metrics");
+    expect(metricsSection?.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Launch window", value: "2 weeks" }),
+        expect.objectContaining({ label: "Readiness", value: "80%", description: "Pending QA" })
+      ])
+    );
+
+    const blogSection = page?.content?.find((block) => block._type === "section" && block.layout === "blog");
+    expect(blogSection?.blogPosts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Preview automation",
+          slug: { current: "preview-automation" },
+          excerpt: "Ensure draft payloads resolve relationships.",
+          publishedAt: "2024-02-10T00:00:00.000Z"
+        }),
+        expect.objectContaining({
+          title: "Preview analytics",
+          slug: { current: "preview-analytics" },
+          publishedAt: "2024-02-15T00:00:00.000Z"
+        })
+      ])
+    );
+
+    const testimonialBlock = page?.content?.find((block) => block._type === "testimonial");
+    expect(testimonialBlock).toMatchObject({
+      quote: "Draft previews keep us aligned.",
+      author: "Morgan",
+      role: "Product Lead"
     });
   });
 });
