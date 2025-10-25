@@ -2,6 +2,12 @@
 
 import { describe, expect, it, beforeAll, afterAll, jest } from "@jest/globals";
 
+const draftState = { isEnabled: false } satisfies { isEnabled: boolean };
+
+jest.mock("next/headers", () => ({
+  draftMode: () => draftState
+}));
+
 const integrationUrl = process.env.PAYLOAD_INTEGRATION_URL;
 
 const runIntegration = Boolean(integrationUrl);
@@ -24,12 +30,15 @@ if (!runIntegration) {
         CMS_PROVIDER: "payload",
         PAYLOAD_URL: integrationUrl,
         PAYLOAD_API_TOKEN: process.env.PAYLOAD_INTEGRATION_TOKEN ?? originalEnv.PAYLOAD_API_TOKEN,
-        CMS_ENV: process.env.PAYLOAD_INTEGRATION_ENV ?? originalEnv.CMS_ENV ?? "test"
+        CMS_ENV: process.env.PAYLOAD_INTEGRATION_ENV ?? originalEnv.CMS_ENV ?? "test",
+        PAYLOAD_PREVIEW_SECRET:
+          process.env.PAYLOAD_INTEGRATION_PREVIEW_SECRET ?? originalEnv.PAYLOAD_PREVIEW_SECRET
       };
     });
 
     afterAll(() => {
       process.env = originalEnv;
+      draftState.isEnabled = false;
     });
 
     testOrSkip("fetches homepage, page, and blog post end-to-end", async () => {
@@ -44,6 +53,59 @@ if (!runIntegration) {
 
       const blogPost = await getBlogPostBySlug("sample-post");
       expect(blogPost).toBeTruthy();
+    });
+
+    testOrSkip("resolves payload draft blog posts when preview is enabled", async () => {
+      const { payloadGet, payloadPatch } = await import("../client");
+      const { getBlogPostBySlug } = await import("../loaders");
+
+      const environment = process.env.CMS_ENV ?? "test";
+      const slug = process.env.PAYLOAD_INTEGRATION_DRAFT_SLUG ?? "automation-workflows";
+
+      const response = await payloadGet<{ docs?: Array<Record<string, unknown>> }>({
+        path: "/api/blog-posts",
+        query: {
+          "where[slug][equals]": slug,
+          "where[environment][equals]": environment,
+          limit: 1
+        }
+      });
+
+      const doc = Array.isArray(response.docs) ? response.docs[0] : undefined;
+      expect(doc).toBeTruthy();
+
+      const docId = typeof doc?.id === "string" ? doc.id : typeof doc?._id === "string" ? doc._id : undefined;
+      expect(docId).toBeTruthy();
+
+      const originalTitle = typeof doc?.title === "string" ? doc.title : undefined;
+      expect(originalTitle).toBeTruthy();
+
+      const draftTitle = `${originalTitle} (preview ${Date.now()})`;
+
+      draftState.isEnabled = true;
+      await payloadPatch({
+        path: `/api/blog-posts/${docId}`,
+        body: { title: draftTitle },
+        query: { draft: "true" }
+      });
+
+      try {
+        draftState.isEnabled = false;
+        const published = await getBlogPostBySlug(slug);
+        expect(published?.title).toBe(originalTitle);
+
+        draftState.isEnabled = true;
+        const preview = await getBlogPostBySlug(slug, true);
+        expect(preview?.title).toBe(draftTitle);
+      } finally {
+        draftState.isEnabled = true;
+        await payloadPatch({
+          path: `/api/blog-posts/${docId}`,
+          body: { title: originalTitle },
+          query: { draft: "true" }
+        });
+        draftState.isEnabled = false;
+      }
     });
   });
 }
