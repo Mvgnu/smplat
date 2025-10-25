@@ -3,7 +3,7 @@ import { z } from "zod";
 const ctaSchema = z
   .object({
     label: z.string().optional(),
-    href: z.string().url().optional()
+    href: z.string().optional()
   })
   .optional();
 
@@ -12,7 +12,7 @@ const testimonialSchema = z.object({
   author: z.string().optional(),
   role: z.string().optional(),
   company: z.string().optional(),
-  avatarUrl: z.string().url().optional()
+  avatarUrl: z.string().optional()
 });
 
 const baseSection = {
@@ -55,7 +55,7 @@ const pricingTierSchema = z.object({
   currency: z.string().optional(),
   features: z.array(z.string()).optional(),
   ctaLabel: z.string().optional(),
-  ctaHref: z.string().url().optional(),
+  ctaHref: z.string().optional(),
   highlight: z.boolean().optional()
 });
 
@@ -116,5 +116,5 @@ export type PricingTierDocument = z.infer<typeof pricingTierSchema>;
 export type BlogPostSummary = z.infer<typeof blogPostSchema>;
 export const blogPostListSchema = z.array(blogPostSchema);
 export const blogPostDetailSchema = blogPostSchema.extend({
-  body: z.array(z.any()).optional()
+  body: z.any().optional()
 });

@@ -1,4 +1,5 @@
 import { PortableText, type PortableTextComponents } from "next-sanity";
+import { convertLexicalToHTML } from "@payloadcms/richtext-lexical/html";
 
 const components: PortableTextComponents = {
   types: {
@@ -19,12 +20,38 @@ const components: PortableTextComponents = {
 };
 
 type PostContentProps = {
-  value?: any[];
+  value?: unknown;
 };
 
 export function PostContent({ value }: PostContentProps) {
-  if (!value?.length) {
+  if (!value) {
     return null;
   }
-  return <PortableText value={value} components={components} />;
+
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return null;
+    }
+    return <PortableText value={value} components={components} />;
+  }
+
+  if (typeof value === "object") {
+    try {
+      const html = convertLexicalToHTML({ data: value, disableContainer: true });
+      if (!html) {
+        return null;
+      }
+      return (
+        <div
+          className="space-y-4 [&_*]:text-white [&_a]:underline [&_h2]:text-3xl [&_h3]:text-2xl [&_p]:text-white/80"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      );
+    } catch (error) {
+      console.warn("Failed to render Payload rich text", error);
+      return null;
+    }
+  }
+
+  return null;
 }
