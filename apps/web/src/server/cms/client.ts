@@ -1,5 +1,6 @@
 import { createClient } from "@sanity/client";
-import { cmsProvider, sanityConfig, sanityPreviewToken, payloadConfig } from "./config";
+
+import { cmsProvider, payloadConfig, sanityConfig, sanityPreviewToken } from "./config";
 
 export const sanityClient = createClient({
   ...sanityConfig,
@@ -14,28 +15,173 @@ export const previewClient = createClient({
 
 export const getClient = (preview = false) => (preview ? previewClient : sanityClient);
 
-type FetchOptions = { path: string; query?: Record<string, string | number | boolean | undefined> };
+export const isPayload = () => cmsProvider === "payload";
+
+type Primitive = string | number | boolean;
+
+type QueryValue = Primitive | null | undefined | Primitive[];
+
+type FetchOptions = {
+  path: string;
+  query?: Record<string, QueryValue>;
+};
+
+export type PayloadRequestMethod = "GET" | "POST" | "PATCH";
+
+export type PayloadRequestOptions<TBody = unknown> = FetchOptions & {
+  method?: PayloadRequestMethod;
+  body?: TBody;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  retries?: number;
+  retryDelayMs?: number;
+  onRetry?: (attempt: number, error: unknown) => void;
+};
+
+const defaultHeaders = () => {
+  const headers: Record<string, string> = {
+    Accept: "application/json"
+  };
+  if (payloadConfig.token) {
+    headers.Authorization = `Bearer ${payloadConfig.token}`;
+  }
+  return headers;
+};
+
+const serializeQueryValue = (value: QueryValue) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item));
+  }
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return String(value);
+};
 
 const buildUrl = ({ path, query }: FetchOptions) => {
   const url = new URL(path, payloadConfig.baseUrl);
   if (query) {
-    for (const [k, v] of Object.entries(query)) {
-      if (v !== undefined) url.searchParams.set(k, String(v));
+    for (const [key, rawValue] of Object.entries(query)) {
+      const serialized = serializeQueryValue(rawValue);
+      if (serialized === undefined) continue;
+      if (Array.isArray(serialized)) {
+        url.searchParams.delete(key);
+        for (const entry of serialized) {
+          url.searchParams.append(key, entry);
+        }
+      } else {
+        url.searchParams.set(key, serialized);
+      }
     }
   }
   return url.toString();
 };
 
-export const payloadFetch = async <T>({ path, query }: FetchOptions): Promise<T> => {
-  const url = buildUrl({ path, query });
-  const res = await fetch(url, {
-    headers: payloadConfig.token ? { Authorization: `Bearer ${payloadConfig.token}` } : undefined
-  });
-  if (!res.ok) {
-    throw new Error(`Payload request failed ${res.status} ${res.statusText}: ${url}`);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export class PayloadRequestError extends Error {
+  status: number;
+  statusText: string;
+  url: string;
+
+  constructor(url: string, status: number, statusText: string, message?: string) {
+    super(message ?? `Payload request failed ${status} ${statusText}`);
+    this.name = "PayloadRequestError";
+    this.status = status;
+    this.statusText = statusText;
+    this.url = url;
   }
-  const json = await res.json();
-  return json as T;
+}
+
+const logRetry = (attempt: number, error: unknown) => {
+  console.warn(`[payload] retrying request (attempt ${attempt})`, error);
 };
 
-export const isPayload = () => cmsProvider === "payload";
+const hasContentType = (headers: Record<string, string>) =>
+  Object.keys(headers).some((key) => key.toLowerCase() === "content-type");
+
+const createRequestInit = (options: PayloadRequestOptions): RequestInit => {
+  const headers = {
+    ...defaultHeaders(),
+    ...(options.headers ?? {})
+  } satisfies Record<string, string>;
+
+  const init: RequestInit = {
+    method: options.method ?? "GET",
+    headers,
+    signal: options.signal
+  };
+
+  if (options.body !== undefined) {
+    if (options.body instanceof FormData || options.body instanceof Blob) {
+      init.body = options.body as BodyInit;
+    } else if (typeof options.body === "string") {
+      init.body = options.body;
+    } else {
+      init.body = JSON.stringify(options.body);
+      if (!hasContentType(headers)) {
+        headers["Content-Type"] = "application/json";
+      }
+    }
+  }
+
+  return init;
+};
+
+export const payloadFetch = async <TResponse, TBody = unknown>(
+  options: PayloadRequestOptions<TBody>
+): Promise<TResponse> => {
+  const url = buildUrl({ path: options.path, query: options.query });
+  const retries = Math.max(1, options.retries ?? 1);
+  const retryDelayMs = options.retryDelayMs ?? 200;
+  const onRetry = options.onRetry ?? logRetry;
+
+  let attempt = 0;
+  let lastError: unknown;
+
+  while (attempt < retries) {
+    attempt += 1;
+    try {
+      const init = createRequestInit(options);
+      const response = await fetch(url, init);
+      if (!response.ok) {
+        throw new PayloadRequestError(url, response.status, response.statusText);
+      }
+      const json = (await response.json()) as TResponse;
+      return json;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries) {
+        break;
+      }
+      onRetry(attempt, error);
+      await sleep(retryDelayMs);
+    }
+  }
+
+  if (lastError instanceof PayloadRequestError) {
+    throw lastError;
+  }
+
+  throw new Error(`Payload request failed after ${retries} attempts: ${url}`, {
+    cause: lastError
+  });
+};
+
+export const payloadGet = async <TResponse>(
+  options: Omit<PayloadRequestOptions<never>, "method" | "body">
+): Promise<TResponse> => {
+  return payloadFetch<TResponse>({ ...options, method: "GET" });
+};
+
+export const payloadPost = async <TResponse, TBody = unknown>(
+  options: Omit<PayloadRequestOptions<TBody>, "method">
+): Promise<TResponse> => {
+  return payloadFetch<TResponse, TBody>({ ...options, method: "POST" });
+};
+
+export const payloadPatch = async <TResponse, TBody = unknown>(
+  options: Omit<PayloadRequestOptions<TBody>, "method">
+): Promise<TResponse> => {
+  return payloadFetch<TResponse, TBody>({ ...options, method: "PATCH" });
+};
