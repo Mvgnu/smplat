@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@jest/globals";
 
-import { parseMarketingSectionContent } from "../marketing-content";
+import { parseMarketingSectionContent } from "@/marketing/content";
 
 const createState = (children: unknown[]) => ({
   root: {

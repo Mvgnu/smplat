@@ -1,5 +1,9 @@
-import type { MetricItem } from "@/components/rich-text/marketing/metric-grid";
-import type { ProductFeature } from "@/components/rich-text/marketing/product-card";
+export const MARKETING_BLOCK_TYPES = new Set([
+  "marketing-hero",
+  "marketing-metrics",
+  "marketing-testimonial",
+  "marketing-product-card"
+]);
 
 export type HeroContent = {
   kind: "hero";
@@ -20,6 +24,12 @@ export type MetricsContent = {
   heading?: string;
   subheading?: string;
   metrics: MetricItem[];
+};
+
+export type MetricItem = {
+  label?: string;
+  value?: string;
+  description?: string;
 };
 
 export type TestimonialContent = {
@@ -45,6 +55,11 @@ export type ProductContent = {
   ctaHref?: string;
 };
 
+export type ProductFeature = {
+  id?: string;
+  label?: string;
+};
+
 export type MarketingContent =
   | HeroContent
   | MetricsContent
@@ -57,26 +72,19 @@ type LexicalNode = {
   fields?: unknown;
 };
 
-type LexicalEditorState = {
+export type LexicalEditorState = {
   root?: {
     type?: unknown;
     children?: unknown;
   };
 };
 
-const marketingBlockTypes = new Set([
-  "marketing-hero",
-  "marketing-metrics",
-  "marketing-testimonial",
-  "marketing-product-card"
-]);
-
-const toStringOrUndefined = (value: unknown) =>
+export const toStringOrUndefined = (value: unknown) =>
   typeof value === "string" && value.trim().length > 0 ? value : undefined;
 
-const toNumberOrUndefined = (value: unknown) => (typeof value === "number" ? value : undefined);
+export const toNumberOrUndefined = (value: unknown) => (typeof value === "number" ? value : undefined);
 
-const toKeyOrUndefined = (fields: Record<string, unknown>) =>
+export const toKeyOrUndefined = (fields: Record<string, unknown>) =>
   toStringOrUndefined(fields.id) ?? toStringOrUndefined(fields.blockName);
 
 const toMetricItems = (value: unknown): MetricItem[] => {
@@ -182,7 +190,7 @@ const createProductContent = (fields: Record<string, unknown>): ProductContent =
   ctaHref: toStringOrUndefined(fields.ctaHref)
 });
 
-const isLexicalEditorState = (value: unknown): value is LexicalEditorState => {
+export const isLexicalEditorState = (value: unknown): value is LexicalEditorState => {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -215,7 +223,7 @@ const collectMarketingNodes = (state: LexicalEditorState): Array<{
     if (lexicalNode.type === "block" && lexicalNode.fields && typeof lexicalNode.fields === "object") {
       const fields = lexicalNode.fields as Record<string, unknown>;
       const blockType = toStringOrUndefined(fields.blockType);
-      if (blockType && marketingBlockTypes.has(blockType)) {
+      if (blockType && MARKETING_BLOCK_TYPES.has(blockType)) {
         results.push({ blockType, fields });
       }
     }
@@ -233,25 +241,30 @@ const collectMarketingNodes = (state: LexicalEditorState): Array<{
   return results;
 };
 
+export const createMarketingContentFromBlock = (
+  blockType: string,
+  fields: Record<string, unknown>
+): MarketingContent | null => {
+  switch (blockType) {
+    case "marketing-hero":
+      return createHeroContent(fields);
+    case "marketing-metrics":
+      return createMetricsContent(fields);
+    case "marketing-testimonial":
+      return createTestimonialContent(fields);
+    case "marketing-product-card":
+      return createProductContent(fields);
+    default:
+      return null;
+  }
+};
+
 export const parseMarketingSectionContent = (value: unknown): MarketingContent[] => {
   if (!isLexicalEditorState(value)) {
     return [];
   }
 
   return collectMarketingNodes(value)
-    .map(({ blockType, fields }) => {
-      switch (blockType) {
-        case "marketing-hero":
-          return createHeroContent(fields);
-        case "marketing-metrics":
-          return createMetricsContent(fields);
-        case "marketing-testimonial":
-          return createTestimonialContent(fields);
-        case "marketing-product-card":
-          return createProductContent(fields);
-        default:
-          return null;
-      }
-    })
+    .map(({ blockType, fields }) => createMarketingContentFromBlock(blockType, fields))
     .filter(Boolean) as MarketingContent[];
 };

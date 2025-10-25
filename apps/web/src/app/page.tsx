@@ -13,7 +13,7 @@ import { TestimonialHighlights } from "@/components/testimonials/highlights";
 import { getHomepage } from "@/server/cms/loaders";
 import type { PageDocument } from "@/server/cms/types";
 
-import { parseMarketingSectionContent } from "./marketing-content";
+import { parseMarketingSectionContent } from "@/marketing/content";
 
 
 const fallbackHero = {
@@ -92,7 +92,10 @@ export default async function HomePage() {
             }
 
             const key = section._key ?? section.heading ?? section.layout ?? "section";
-            const marketingContent = parseMarketingSectionContent(section.content);
+            const marketingContent =
+              section.marketingContent && section.marketingContent.length > 0
+                ? section.marketingContent
+                : parseMarketingSectionContent(section.content);
 
             if (marketingContent.length > 0) {
               return (
