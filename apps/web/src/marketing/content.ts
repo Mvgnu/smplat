@@ -1,8 +1,15 @@
+// meta: marketing-normalization: lexical-blocks
+
 export const MARKETING_BLOCK_TYPES = new Set([
   "marketing-hero",
   "marketing-metrics",
   "marketing-testimonial",
-  "marketing-product-card"
+  "marketing-product-card",
+  "marketing-timeline",
+  "marketing-feature-grid",
+  "marketing-media-gallery",
+  "marketing-cta-cluster",
+  "marketing-comparison-table"
 ]);
 
 export type HeroContent = {
@@ -60,11 +67,103 @@ export type ProductFeature = {
   label?: string;
 };
 
+export type TimelineItem = {
+  id?: string;
+  title?: string;
+  description?: string;
+  timestamp?: string;
+};
+
+export type TimelineContent = {
+  kind: "timeline";
+  key?: string;
+  heading?: string;
+  subheading?: string;
+  items: TimelineItem[];
+};
+
+export type FeatureItem = {
+  id?: string;
+  title?: string;
+  description?: string;
+  icon?: string;
+};
+
+export type FeatureGridContent = {
+  kind: "feature-grid";
+  key?: string;
+  heading?: string;
+  subheading?: string;
+  features: FeatureItem[];
+  columns?: number;
+};
+
+export type MediaItem = {
+  id?: string;
+  kind?: "image" | "video";
+  src?: string;
+  alt?: string;
+  caption?: string;
+  poster?: string;
+};
+
+export type MediaGalleryContent = {
+  kind: "media-gallery";
+  key?: string;
+  heading?: string;
+  subheading?: string;
+  media: MediaItem[];
+  columns?: number;
+};
+
+export type CtaItem = {
+  id?: string;
+  label?: string;
+  href?: string;
+  description?: string;
+};
+
+export type CtaClusterContent = {
+  kind: "cta-cluster";
+  key?: string;
+  heading?: string;
+  subheading?: string;
+  align?: "start" | "center";
+  ctas: CtaItem[];
+};
+
+export type ComparisonColumn = {
+  id?: string;
+  label?: string;
+  highlight?: boolean;
+  footnote?: string;
+};
+
+export type ComparisonRow = {
+  id?: string;
+  label?: string;
+  values: Array<string | boolean | null>;
+};
+
+export type ComparisonTableContent = {
+  kind: "comparison-table";
+  key?: string;
+  heading?: string;
+  subheading?: string;
+  columns: ComparisonColumn[];
+  rows: ComparisonRow[];
+};
+
 export type MarketingContent =
   | HeroContent
   | MetricsContent
   | TestimonialContent
-  | ProductContent;
+  | ProductContent
+  | TimelineContent
+  | FeatureGridContent
+  | MediaGalleryContent
+  | CtaClusterContent
+  | ComparisonTableContent;
 
 type LexicalNode = {
   type?: unknown;
@@ -139,6 +238,196 @@ const toProductFeatures = (value: unknown): ProductFeature[] => {
     .filter(Boolean) as ProductFeature[];
 };
 
+const toTimelineItems = (value: unknown): TimelineItem[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const title = toStringOrUndefined(record.title) ?? toStringOrUndefined(record.label);
+      const description = toStringOrUndefined(record.description);
+      const timestamp = toStringOrUndefined(record.timestamp) ?? toStringOrUndefined(record.date);
+
+      if (!title && !description) {
+        return null;
+      }
+
+      return {
+        id: toStringOrUndefined(record.id),
+        title,
+        description,
+        timestamp
+      } satisfies TimelineItem;
+    })
+    .filter(Boolean) as TimelineItem[];
+};
+
+const toFeatureItems = (value: unknown): FeatureItem[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const title = toStringOrUndefined(record.title) ?? toStringOrUndefined(record.label);
+      if (!title) {
+        return null;
+      }
+
+      return {
+        id: toStringOrUndefined(record.id),
+        title,
+        description: toStringOrUndefined(record.description),
+        icon: toStringOrUndefined(record.icon)
+      } satisfies FeatureItem;
+    })
+    .filter(Boolean) as FeatureItem[];
+};
+
+const toMediaItems = (value: unknown): MediaItem[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const src = toStringOrUndefined(record.src) ?? toStringOrUndefined(record.url);
+      if (!src) {
+        return null;
+      }
+
+      const kind = toStringOrUndefined(record.kind) ?? toStringOrUndefined(record.type);
+      const normalizedKind = kind === "video" ? "video" : "image";
+
+      return {
+        id: toStringOrUndefined(record.id),
+        kind: normalizedKind,
+        src,
+        alt: toStringOrUndefined(record.alt) ?? toStringOrUndefined(record.title),
+        caption: toStringOrUndefined(record.caption),
+        poster: toStringOrUndefined(record.poster)
+      } satisfies MediaItem;
+    })
+    .filter(Boolean) as MediaItem[];
+};
+
+const toCtaItems = (value: unknown): CtaItem[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const label = toStringOrUndefined(record.label);
+      const href = toStringOrUndefined(record.href) ?? toStringOrUndefined(record.url);
+      if (!label || !href) {
+        return null;
+      }
+
+      return {
+        id: toStringOrUndefined(record.id),
+        label,
+        href,
+        description: toStringOrUndefined(record.description)
+      } satisfies CtaItem;
+    })
+    .filter(Boolean) as CtaItem[];
+};
+
+const toComparisonColumns = (value: unknown): ComparisonColumn[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const label = toStringOrUndefined(record.label) ?? toStringOrUndefined(record.title);
+      if (!label) {
+        return null;
+      }
+
+      return {
+        id: toStringOrUndefined(record.id),
+        label,
+        highlight: record.highlight === true,
+        footnote: toStringOrUndefined(record.footnote)
+      } satisfies ComparisonColumn;
+    })
+    .filter(Boolean) as ComparisonColumn[];
+};
+
+const toComparisonRows = (value: unknown): ComparisonRow[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const label = toStringOrUndefined(record.label) ?? toStringOrUndefined(record.title);
+      if (!label) {
+        return null;
+      }
+
+      const valuesSource = Array.isArray(record.values) ? record.values : [];
+      const values = valuesSource.map((entry) => {
+        if (typeof entry === "boolean") {
+          return entry;
+        }
+        if (typeof entry === "string") {
+          return entry;
+        }
+        if (entry && typeof entry === "object") {
+          const cell = entry as Record<string, unknown>;
+          if (typeof cell.value === "boolean") {
+            return cell.value;
+          }
+          if (typeof cell.value === "string") {
+            return cell.value;
+          }
+        }
+        return null;
+      });
+
+      return {
+        id: toStringOrUndefined(record.id),
+        label,
+        values
+      } satisfies ComparisonRow;
+    })
+    .filter(Boolean) as ComparisonRow[];
+};
+
 const createHeroContent = (fields: Record<string, unknown>): HeroContent => ({
   kind: "hero",
   key: toKeyOrUndefined(fields),
@@ -189,6 +478,99 @@ const createProductContent = (fields: Record<string, unknown>): ProductContent =
   ctaLabel: toStringOrUndefined(fields.ctaLabel),
   ctaHref: toStringOrUndefined(fields.ctaHref)
 });
+
+const createTimelineContent = (fields: Record<string, unknown>): TimelineContent | null => {
+  const items = toTimelineItems(fields.items ?? fields.steps);
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: "timeline",
+    key: toKeyOrUndefined(fields),
+    heading: toStringOrUndefined(fields.heading),
+    subheading: toStringOrUndefined(fields.subheading),
+    items
+  } satisfies TimelineContent;
+};
+
+const createFeatureGridContent = (fields: Record<string, unknown>): FeatureGridContent | null => {
+  const features = toFeatureItems(fields.features);
+
+  if (features.length === 0) {
+    return null;
+  }
+
+  const columns = typeof fields.columns === "number" && fields.columns > 0 ? fields.columns : undefined;
+
+  return {
+    kind: "feature-grid",
+    key: toKeyOrUndefined(fields),
+    heading: toStringOrUndefined(fields.heading),
+    subheading: toStringOrUndefined(fields.subheading),
+    features,
+    columns
+  } satisfies FeatureGridContent;
+};
+
+const createMediaGalleryContent = (fields: Record<string, unknown>): MediaGalleryContent | null => {
+  const media = toMediaItems(fields.media ?? fields.items);
+
+  if (media.length === 0) {
+    return null;
+  }
+
+  const columns = typeof fields.columns === "number" && fields.columns > 0 ? fields.columns : undefined;
+
+  return {
+    kind: "media-gallery",
+    key: toKeyOrUndefined(fields),
+    heading: toStringOrUndefined(fields.heading),
+    subheading: toStringOrUndefined(fields.subheading),
+    media,
+    columns
+  } satisfies MediaGalleryContent;
+};
+
+const createCtaClusterContent = (fields: Record<string, unknown>): CtaClusterContent | null => {
+  const ctas = toCtaItems(fields.ctas ?? fields.items);
+
+  if (ctas.length === 0) {
+    return null;
+  }
+
+  const align = fields.align === "start" ? "start" : "center";
+
+  return {
+    kind: "cta-cluster",
+    key: toKeyOrUndefined(fields),
+    heading: toStringOrUndefined(fields.heading),
+    subheading: toStringOrUndefined(fields.subheading),
+    align,
+    ctas
+  } satisfies CtaClusterContent;
+};
+
+const createComparisonTableContent = (
+  fields: Record<string, unknown>
+): ComparisonTableContent | null => {
+  const columns = toComparisonColumns(fields.columns);
+  const rows = toComparisonRows(fields.rows);
+
+  if (columns.length === 0 || rows.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: "comparison-table",
+    key: toKeyOrUndefined(fields),
+    heading: toStringOrUndefined(fields.heading),
+    subheading: toStringOrUndefined(fields.subheading),
+    columns,
+    rows
+  } satisfies ComparisonTableContent;
+};
 
 export const isLexicalEditorState = (value: unknown): value is LexicalEditorState => {
   if (!value || typeof value !== "object") {
@@ -254,6 +636,16 @@ export const createMarketingContentFromBlock = (
       return createTestimonialContent(fields);
     case "marketing-product-card":
       return createProductContent(fields);
+    case "marketing-timeline":
+      return createTimelineContent(fields);
+    case "marketing-feature-grid":
+      return createFeatureGridContent(fields);
+    case "marketing-media-gallery":
+      return createMediaGalleryContent(fields);
+    case "marketing-cta-cluster":
+      return createCtaClusterContent(fields);
+    case "marketing-comparison-table":
+      return createComparisonTableContent(fields);
     default:
       return null;
   }
