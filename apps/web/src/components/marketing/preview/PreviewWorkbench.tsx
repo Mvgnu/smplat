@@ -3,9 +3,17 @@
 // meta: component: PreviewWorkbench
 // meta: feature: marketing-preview-cockpit
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import type { FormEvent } from "react";
 
-import type { MarketingPreviewSnapshot } from "@/server/cms/preview";
+import type {
+  MarketingPreviewSnapshot,
+  MarketingPreviewTimelineEntry
+} from "@/server/cms/preview";
+import type {
+  MarketingPreviewTriageNote,
+  MarketingPreviewTriageNoteSeverity
+} from "@/server/cms/preview/notes";
 
 const formatDateTime = (timestamp: string) => {
   const date = new Date(timestamp);
@@ -18,29 +26,30 @@ const formatDateTime = (timestamp: string) => {
   });
 };
 
-const groupSnapshots = (
-  published: MarketingPreviewSnapshot[],
-  draft: MarketingPreviewSnapshot[]
-) => {
-  const groups = new Map<string, { route: string; published?: MarketingPreviewSnapshot; draft?: MarketingPreviewSnapshot }>();
+type RouteGroup = {
+  route: string;
+  published?: MarketingPreviewSnapshot;
+  draft?: MarketingPreviewSnapshot;
+};
 
-  for (const snapshot of published) {
-    groups.set(snapshot.route, {
-      route: snapshot.route,
-      published: snapshot
-    });
+const buildRouteGroups = (entry?: MarketingPreviewTimelineEntry): RouteGroup[] => {
+  if (!entry) {
+    return [];
   }
 
-  for (const snapshot of draft) {
+  const groups = new Map<string, RouteGroup>();
+
+  for (const snapshot of entry.snapshots.published) {
+    groups.set(snapshot.route, { route: snapshot.route, published: snapshot });
+  }
+
+  for (const snapshot of entry.snapshots.draft) {
     const existing = groups.get(snapshot.route);
     if (existing) {
       existing.draft = snapshot;
-      continue;
+    } else {
+      groups.set(snapshot.route, { route: snapshot.route, draft: snapshot });
     }
-    groups.set(snapshot.route, {
-      route: snapshot.route,
-      draft: snapshot
-    });
   }
 
   return Array.from(groups.values()).sort((a, b) => a.route.localeCompare(b.route));
@@ -109,37 +118,194 @@ const computeDiff = (publishedMarkup?: string, draftMarkup?: string): DiffLine[]
 
 type ViewMode = "diff" | "published" | "draft";
 
-type PreviewWorkbenchProps = {
-  published: MarketingPreviewSnapshot[];
-  draft: MarketingPreviewSnapshot[];
-  generatedAt: string;
+const severityStyles: Record<MarketingPreviewTriageNoteSeverity, string> = {
+  info: "bg-sky-500/20 text-sky-100",
+  warning: "bg-amber-500/20 text-amber-100",
+  blocker: "bg-rose-500/20 text-rose-100"
 };
 
-export function PreviewWorkbench({ published, draft, generatedAt }: PreviewWorkbenchProps) {
-  const grouped = useMemo(() => groupSnapshots(published, draft), [published, draft]);
-  const [selectedRoute, setSelectedRoute] = useState(grouped[0]?.route ?? "");
-  const [viewMode, setViewMode] = useState<ViewMode>("diff");
+const severityLabels: Record<MarketingPreviewTriageNoteSeverity, string> = {
+  info: "Info",
+  warning: "Warning",
+  blocker: "Blocker"
+};
 
-  const active = useMemo(() => grouped.find((group) => group.route === selectedRoute), [grouped, selectedRoute]);
+const noteKey = (generatedAt: string, route: string) => `${generatedAt}::${route}`;
+
+type PreviewWorkbenchProps = {
+  current: MarketingPreviewTimelineEntry;
+  history: MarketingPreviewTimelineEntry[];
+  notes?: MarketingPreviewTriageNote[];
+};
+
+export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbenchProps) {
+  const timelineEntries = useMemo(() => [current, ...history], [current, history]);
+  const [selectedEntryId, setSelectedEntryId] = useState(timelineEntries[0]?.id ?? "");
+  const [viewMode, setViewMode] = useState<ViewMode>("diff");
+  const [localNotes, setLocalNotes] = useState<MarketingPreviewTriageNote[]>(notes);
+  const [noteBody, setNoteBody] = useState("");
+  const [noteAuthor, setNoteAuthor] = useState("");
+  const [noteSeverity, setNoteSeverity] = useState<MarketingPreviewTriageNoteSeverity>("info");
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, startTransition] = useTransition();
+
+  useEffect(() => {
+    setLocalNotes(notes);
+  }, [notes]);
+
+  useEffect(() => {
+    if (!timelineEntries.length) {
+      setSelectedEntryId("");
+      return;
+    }
+    if (!timelineEntries.some((entry) => entry.id === selectedEntryId)) {
+      setSelectedEntryId(timelineEntries[0]?.id ?? "");
+    }
+  }, [selectedEntryId, timelineEntries]);
+
+  const activeEntry = useMemo(() => {
+    return (
+      timelineEntries.find((entry) => entry.id === selectedEntryId) ?? timelineEntries[0] ?? null
+    );
+  }, [selectedEntryId, timelineEntries]);
+
+  const routeGroups = useMemo(() => buildRouteGroups(activeEntry ?? undefined), [activeEntry]);
+  const [selectedRoute, setSelectedRoute] = useState(routeGroups[0]?.route ?? "");
+
+  useEffect(() => {
+    if (!routeGroups.length) {
+      setSelectedRoute("");
+      return;
+    }
+    setSelectedRoute((currentRoute) => {
+      if (routeGroups.some((group) => group.route === currentRoute)) {
+        return currentRoute;
+      }
+      return routeGroups[0]?.route ?? "";
+    });
+  }, [routeGroups]);
+
+  useEffect(() => {
+    setViewMode("diff");
+  }, [selectedEntryId]);
+
+  const activeGroup = useMemo(() => {
+    if (!routeGroups.length) {
+      return undefined;
+    }
+    return routeGroups.find((group) => group.route === selectedRoute) ?? routeGroups[0];
+  }, [routeGroups, selectedRoute]);
+
   const diffLines = useMemo(
-    () => computeDiff(active?.published?.markup, active?.draft?.markup),
-    [active?.published?.markup, active?.draft?.markup]
+    () => computeDiff(activeGroup?.published?.markup, activeGroup?.draft?.markup),
+    [activeGroup?.published?.markup, activeGroup?.draft?.markup]
   );
 
-  const snapshotForView = viewMode === "draft" ? active?.draft : active?.published;
   const hasDifferences = diffLines.some((line) => line.kind !== "same");
+  const snapshotForView = viewMode === "draft" ? activeGroup?.draft : activeGroup?.published;
+
+  const noteCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const note of localNotes) {
+      const key = noteKey(note.generatedAt, note.route);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [localNotes]);
+
+  const routeNotes = useMemo(() => {
+    if (!activeEntry || !activeGroup) {
+      return [];
+    }
+    return localNotes.filter(
+      (note) => note.generatedAt === activeEntry.generatedAt && note.route === activeGroup.route
+    );
+  }, [activeEntry, activeGroup, localNotes]);
+
+  const changedRouteCount = activeEntry?.routes.filter((route) => route.diffDetected).length ?? 0;
+  const totalRoutes = activeEntry?.routes.length ?? routeGroups.length;
+
+  const handleSubmitNote = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!activeEntry || !activeGroup || !activeGroup.route) {
+      return;
+    }
+
+    setError(null);
+    const payload = {
+      route: activeGroup.route,
+      generatedAt: activeEntry.generatedAt,
+      body: noteBody,
+      author: noteAuthor.trim() ? noteAuthor.trim() : undefined,
+      severity: noteSeverity
+    };
+
+    startTransition(async () => {
+      try {
+        const response = await fetch("/api/marketing-preview/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const data = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error ?? "Failed to save note");
+        }
+
+        const data = (await response.json()) as { note: MarketingPreviewTriageNote };
+        setLocalNotes((previous) => [data.note, ...previous]);
+        setNoteBody("");
+        setError(null);
+      } catch (error_) {
+        setError(error_ instanceof Error ? error_.message : "Failed to save note");
+      }
+    });
+  };
 
   return (
-    <section className="grid gap-8 lg:grid-cols-[260px_1fr]">
+    <section className="grid gap-8 xl:grid-cols-[320px_1fr]">
       <aside className="space-y-6">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur">
-          <p className="text-xs uppercase tracking-[0.3em] text-white/50">Snapshots</p>
-          <p className="mt-2 text-sm text-white/70">Generated {formatDateTime(generatedAt)}</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-white/50">Timeline</p>
+          <p className="mt-1 text-sm text-white/70">
+            {timelineEntries.length} capture{timelineEntries.length === 1 ? "" : "s"} · {changedRouteCount}/
+            {totalRoutes} active diffs
+          </p>
+          <div className="mt-4 flex flex-col gap-2">
+            {timelineEntries.map((entry, index) => {
+              const isActive = entry.id === activeEntry?.id;
+              const diffCount = entry.routes.filter((route) => route.diffDetected).length;
+              const key = entry.id ?? entry.generatedAt;
+              const label = index === 0 ? "Current capture" : formatDateTime(entry.generatedAt);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSelectedEntryId(entry.id)}
+                  className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                    isActive
+                      ? "border-white/40 bg-white/20 text-white shadow-lg"
+                      : "border-white/10 bg-white/5 text-white/70 hover:border-white/20 hover:bg-white/10 hover:text-white"
+                  }`}
+                >
+                  <p className="text-sm font-semibold">{label}</p>
+                  <p className="mt-1 text-xs text-white/60">
+                    {diffCount} diff{diffCount === 1 ? "" : "s"} · {entry.routes.length} routes
+                  </p>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <nav className="flex flex-col gap-3">
-          {grouped.map((group) => {
-            const isActive = group.route === selectedRoute;
+          {routeGroups.map((group) => {
+            const isActive = group.route === activeGroup?.route;
+            const key = noteKey(activeEntry?.generatedAt ?? "", group.route);
+            const noteCount = noteCounts.get(key) ?? 0;
+            const summary = activeEntry?.routes.find((route) => route.route === group.route);
+            const statusLabel = summary?.diffDetected ? "Diff detected" : "In sync";
             return (
               <button
                 key={group.route}
@@ -153,8 +319,26 @@ export function PreviewWorkbench({ published, draft, generatedAt }: PreviewWorkb
                     : "border-white/10 bg-white/5 text-white/70 hover:border-white/20 hover:bg-white/10 hover:text-white"
                 }`}
               >
-                <p className="text-sm font-semibold">{group.route}</p>
-                <p className="mt-1 text-xs text-white/60">{summarizeBlocks(group.published ?? group.draft)}</p>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold">{group.route}</p>
+                    <p className="mt-1 text-xs text-white/60">{summarizeBlocks(group.published ?? group.draft)}</p>
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <span
+                      className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${
+                        summary?.diffDetected ? "bg-amber-500/20 text-amber-100" : "bg-emerald-500/20 text-emerald-100"
+                      }`}
+                    >
+                      {statusLabel}
+                    </span>
+                    {noteCount > 0 ? (
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-white/60">
+                        {noteCount} note{noteCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
               </button>
             );
           })}
@@ -162,28 +346,29 @@ export function PreviewWorkbench({ published, draft, generatedAt }: PreviewWorkb
       </aside>
 
       <div className="space-y-6">
-        {active ? (
+        {activeEntry && activeGroup ? (
           <>
             <header className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-white/50">Route</p>
-                  <h2 className="mt-2 text-2xl font-semibold text-white">{active.route}</h2>
-                  <p className="mt-2 text-sm text-white/70">
-                    Draft hero: {active.draft?.hero?.headline ?? "–"} • Published hero: {active.published?.hero?.headline ?? "–"}
+                  <h2 className="mt-2 text-2xl font-semibold text-white">{activeGroup.route}</h2>
+                  <p className="mt-2 text-xs uppercase tracking-[0.3em] text-white/40">
+                    Snapshot {formatDateTime(activeEntry.generatedAt)}
                   </p>
-                  <p className="mt-1 text-sm text-white/60">
-                    Draft metrics: {summarizeMetrics(active.draft)}
+                  <p className="mt-3 text-sm text-white/70">
+                    Draft hero: {activeGroup.draft?.hero?.headline ?? "–"} • Published hero: {activeGroup.published?.hero?.headline ?? "–"}
                   </p>
-                  <p className="mt-1 text-sm text-white/60">
-                    Published metrics: {summarizeMetrics(active.published)}
-                  </p>
+                  <p className="mt-1 text-sm text-white/60">Draft metrics: {summarizeMetrics(activeGroup.draft)}</p>
+                  <p className="mt-1 text-sm text-white/60">Published metrics: {summarizeMetrics(activeGroup.published)}</p>
                 </div>
 
                 <div className="flex flex-col items-start gap-2 md:items-end">
-                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                    hasDifferences ? "bg-amber-500/20 text-amber-200" : "bg-emerald-500/20 text-emerald-200"
-                  }`}>
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      hasDifferences ? "bg-amber-500/20 text-amber-200" : "bg-emerald-500/20 text-emerald-200"
+                    }`}
+                  >
                     {hasDifferences ? "Block diff detected" : "Draft matches published"}
                   </span>
 
@@ -213,7 +398,7 @@ export function PreviewWorkbench({ published, draft, generatedAt }: PreviewWorkb
                   <div className="space-y-2">
                     {diffLines.map((line) => (
                       <div
-                        key={line.lineNumber}
+                        key={`${line.kind}-${line.lineNumber}-${line.published ?? ""}-${line.draft ?? ""}`}
                         className={`grid grid-cols-[auto_1fr_1fr] gap-4 rounded-lg px-3 py-2 ${
                           line.kind === "same"
                             ? "bg-white/5"
@@ -257,6 +442,94 @@ export function PreviewWorkbench({ published, draft, generatedAt }: PreviewWorkb
                 </article>
               </section>
             )}
+
+            <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-white/80">
+              <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Regression notes</h3>
+                  <p className="text-sm text-white/60">
+                    Capture triage context for <span className="font-semibold">{activeGroup.route}</span> on
+                    {" "}
+                    {formatDateTime(activeEntry.generatedAt)}.
+                  </p>
+                </div>
+                <span className="text-xs uppercase tracking-[0.3em] text-white/50">
+                  {routeNotes.length} note{routeNotes.length === 1 ? "" : "s"}
+                </span>
+              </header>
+
+              <div className="mt-4 space-y-4">
+                {routeNotes.length ? (
+                  <ul className="space-y-3">
+                    {routeNotes.map((note) => (
+                      <li
+                        key={note.id}
+                        className="rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-white/80"
+                      >
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                          <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${
+                            severityStyles[note.severity]
+                          }`}>
+                            {severityLabels[note.severity]}
+                            {note.author ? <span className="text-white/70">· {note.author}</span> : null}
+                          </span>
+                          <span className="text-xs uppercase tracking-[0.2em] text-white/50">
+                            {formatDateTime(note.createdAt)}
+                          </span>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-white/80">{note.body}</p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-white/60">No notes captured yet for this snapshot.</p>
+                )}
+
+                <form className="space-y-3" onSubmit={handleSubmitNote}>
+                  {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+                  <textarea
+                    className="min-h-[96px] w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:border-white/40 focus:outline-none"
+                    placeholder="Document diff triage, fallback adjustments, or QA actions"
+                    value={noteBody}
+                    onChange={(event) => setNoteBody(event.target.value)}
+                    required
+                  />
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                      <label className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-white/60">
+                        Severity
+                        <select
+                          className="rounded-full border border-white/10 bg-black/40 px-3 py-1 text-xs uppercase tracking-[0.2em] text-white focus:border-white/40 focus:outline-none"
+                          value={noteSeverity}
+                          onChange={(event) =>
+                            setNoteSeverity(event.target.value as MarketingPreviewTriageNoteSeverity)
+                          }
+                        >
+                          {Object.entries(severityLabels).map(([value, label]) => (
+                            <option key={value} value={value} className="text-black">
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <input
+                        className="rounded-full border border-white/10 bg-black/40 px-4 py-1 text-xs text-white placeholder:text-white/40 focus:border-white/40 focus:outline-none"
+                        placeholder="Author (optional)"
+                        value={noteAuthor}
+                        onChange={(event) => setNoteAuthor(event.target.value)}
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="rounded-full border border-white/40 bg-white/80 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-black transition hover:bg-white"
+                      disabled={isSaving || !noteBody.trim()}
+                    >
+                      {isSaving ? "Saving…" : "Add note"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </section>
           </>
         ) : (
           <div className="rounded-3xl border border-white/10 bg-white/5 p-12 text-center text-white/70">

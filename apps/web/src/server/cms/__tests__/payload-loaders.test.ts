@@ -18,7 +18,10 @@ jest.mock("@/components/marketing/sections", () => {
   };
 });
 
-const { collectMarketingPreviewSnapshots } = require("../preview") as typeof import("../preview");
+const {
+  collectMarketingPreviewSnapshots,
+  collectMarketingPreviewSnapshotTimeline
+} = require("../preview") as typeof import("../preview");
 
 type FetchArgs = Parameters<typeof fetch>;
 
@@ -700,6 +703,25 @@ describe.each([
     const blockKindSet = new Set(snapshots.flatMap((snapshot) => snapshot.blockKinds));
     expect(blockKindSet).toEqual(new Set(expectedBlockKinds));
   });
+});
+
+it("collects timeline payloads with route summaries", async () => {
+  const timeline = await collectMarketingPreviewSnapshotTimeline({
+    historyLimit: 2,
+    fallbackLexicalState: lexicalMarketingFixture as unknown,
+    loaders: {
+      getHomepage: async () => homepageVariants.published,
+      getPageBySlug: async (slug: string) => {
+        const entry = marketingPageMap[slug as keyof typeof marketingPageMap];
+        return entry?.published ?? null;
+      },
+      getBlogPosts: async () => blogPosts
+    }
+  });
+
+  expect(timeline.current.routes.length).toBeGreaterThan(0);
+  expect(timeline.current.snapshots.published.length).toBeGreaterThan(0);
+  expect(timeline.history.length).toBeGreaterThanOrEqual(0);
 });
 
 const draftState = { isEnabled: false };
