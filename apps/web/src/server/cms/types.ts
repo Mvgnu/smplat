@@ -1,3 +1,5 @@
+// meta: cms-schema: marketing-content
+
 import { z } from "zod";
 
 const ctaSchema = z
@@ -70,11 +72,103 @@ const marketingProductSchema = z.object({
   ctaHref: z.string().optional()
 });
 
+const marketingTimelineItemSchema = z.object({
+  id: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  timestamp: z.string().optional()
+});
+
+const marketingTimelineSchema = z.object({
+  kind: z.literal("timeline"),
+  key: z.string().optional(),
+  heading: z.string().optional(),
+  subheading: z.string().optional(),
+  items: z.array(marketingTimelineItemSchema).min(1)
+});
+
+const marketingFeatureItemSchema = z.object({
+  id: z.string().optional(),
+  title: z.string(),
+  description: z.string().optional(),
+  icon: z.string().optional()
+});
+
+const marketingFeatureGridSchema = z.object({
+  kind: z.literal("feature-grid"),
+  key: z.string().optional(),
+  heading: z.string().optional(),
+  subheading: z.string().optional(),
+  features: z.array(marketingFeatureItemSchema).min(1),
+  columns: z.number().int().positive().optional()
+});
+
+const marketingMediaItemSchema = z.object({
+  id: z.string().optional(),
+  kind: z.enum(["image", "video"]).optional(),
+  src: z.string(),
+  alt: z.string().optional(),
+  caption: z.string().optional(),
+  poster: z.string().optional()
+});
+
+const marketingMediaGallerySchema = z.object({
+  kind: z.literal("media-gallery"),
+  key: z.string().optional(),
+  heading: z.string().optional(),
+  subheading: z.string().optional(),
+  media: z.array(marketingMediaItemSchema).min(1),
+  columns: z.number().int().positive().optional()
+});
+
+const marketingCtaItemSchema = z.object({
+  id: z.string().optional(),
+  label: z.string(),
+  href: z.string(),
+  description: z.string().optional()
+});
+
+const marketingCtaClusterSchema = z.object({
+  kind: z.literal("cta-cluster"),
+  key: z.string().optional(),
+  heading: z.string().optional(),
+  subheading: z.string().optional(),
+  align: z.enum(["start", "center"]).optional(),
+  ctas: z.array(marketingCtaItemSchema).min(1)
+});
+
+const marketingComparisonColumnSchema = z.object({
+  id: z.string().optional(),
+  label: z.string(),
+  highlight: z.boolean().optional(),
+  footnote: z.string().optional()
+});
+
+const marketingComparisonRowSchema = z.object({
+  id: z.string().optional(),
+  label: z.string(),
+  values: z.array(z.union([z.string(), z.boolean(), z.null()])).default([])
+});
+
+const marketingComparisonTableSchema = z.object({
+  kind: z.literal("comparison-table"),
+  key: z.string().optional(),
+  heading: z.string().optional(),
+  subheading: z.string().optional(),
+  columns: z.array(marketingComparisonColumnSchema).min(1),
+  rows: z.array(marketingComparisonRowSchema).min(1)
+});
+
 const marketingContentSchema = z.discriminatedUnion("kind", [
   marketingHeroSchema,
   marketingMetricsSchema,
   marketingTestimonialSchema,
-  marketingProductSchema
+  marketingProductSchema,
+  marketingTimelineSchema,
+  marketingFeatureGridSchema,
+  marketingMediaGallerySchema,
+  marketingCtaClusterSchema,
+  marketingComparisonTableSchema
 ]);
 
 const baseSection = {

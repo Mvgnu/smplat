@@ -28,6 +28,45 @@ describe("MarketingSections", () => {
             price: 499,
             currency: "USD",
             frequency: "mo"
+          },
+          {
+            kind: "timeline",
+            heading: "Roadmap",
+            subheading: "How we deliver",
+            items: [
+              { title: "Kickoff", description: "Strategy and alignment", timestamp: "Week 1" }
+            ]
+          },
+          {
+            kind: "feature-grid",
+            heading: "Highlights",
+            features: [
+              { title: "Orchestration", description: "Coordinate campaigns seamlessly" },
+              { title: "Insights", description: "Know what works" }
+            ],
+            columns: 3
+          },
+          {
+            kind: "media-gallery",
+            heading: "Moments",
+            media: [{ kind: "image", src: "https://cdn.example.com/image.jpg", caption: "Studio" }]
+          },
+          {
+            kind: "cta-cluster",
+            heading: "Take action",
+            ctas: [{ label: "Book a demo", href: "/demo", description: "See the platform" }]
+          },
+          {
+            kind: "comparison-table",
+            heading: "Plans",
+            columns: [
+              { label: "Starter" },
+              { label: "Growth", highlight: true }
+            ],
+            rows: [
+              { label: "Seats", values: ["5", "Unlimited"] },
+              { label: "Support", values: ["Email", "24/7"] }
+            ]
           }
         ],
         content: undefined,
@@ -55,6 +94,11 @@ describe("MarketingSections", () => {
     expect(screen.getByText("Fallback")).toBeInTheDocument();
     expect(screen.getByText("“This platform scales with us”")).toBeInTheDocument();
     expect(screen.getByText("Retainer plan")).toBeInTheDocument();
+    expect(screen.getByText("Kickoff")).toBeInTheDocument();
+    expect(screen.getByText("Orchestration")).toBeInTheDocument();
+    expect(screen.getByText("Moments")).toBeInTheDocument();
+    expect(screen.getByText("Book a demo")).toBeInTheDocument();
+    expect(screen.getByText("Plans")).toBeInTheDocument();
   });
 
   it("renders legacy layouts when marketing content is absent", () => {

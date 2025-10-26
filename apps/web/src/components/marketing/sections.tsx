@@ -4,10 +4,15 @@ import { PostList } from "@/components/blog/post-list";
 import { CaseStudyHighlight } from "@/components/case-studies/highlight";
 import { FaqAccordion } from "@/components/faq/accordion";
 import { PricingGrid } from "@/components/pricing/pricing-grid";
+import { CtaCluster } from "@/components/rich-text/marketing/cta-cluster";
+import { FeatureGrid } from "@/components/rich-text/marketing/feature-grid";
 import { HeroCallout } from "@/components/rich-text/marketing/hero-callout";
+import { MediaGallery } from "@/components/rich-text/marketing/media-gallery";
 import { MetricGrid } from "@/components/rich-text/marketing/metric-grid";
 import { ProductCard } from "@/components/rich-text/marketing/product-card";
 import { TestimonialCallout } from "@/components/rich-text/marketing/testimonial-callout";
+import { ComparisonTable } from "@/components/rich-text/marketing/comparison-table";
+import { TimelineShowcase } from "@/components/rich-text/marketing/timeline";
 import { RichText } from "@/components/rich-text/rich-text";
 import { TestimonialHighlights } from "@/components/testimonials/highlights";
 import { parseMarketingSectionContent } from "@/marketing/content";
@@ -59,6 +64,16 @@ type ProductContent = Extract<MarketingContent, { kind: "product" }>;
 type HeroContent = Extract<MarketingContent, { kind: "hero" }>;
 
 type TestimonialContent = Extract<MarketingContent, { kind: "testimonial" }>;
+
+type TimelineContent = Extract<MarketingContent, { kind: "timeline" }>;
+
+type FeatureGridContent = Extract<MarketingContent, { kind: "feature-grid" }>;
+
+type MediaGalleryContent = Extract<MarketingContent, { kind: "media-gallery" }>;
+
+type CtaClusterContent = Extract<MarketingContent, { kind: "cta-cluster" }>;
+
+type ComparisonTableContent = Extract<MarketingContent, { kind: "comparison-table" }>;
 
 const renderHeroBlock = (content: HeroContent) => {
   const primaryCta =
@@ -131,6 +146,65 @@ const renderProductBlock = (content: ProductContent) => {
   );
 };
 
+const renderTimelineBlock = (content: TimelineContent) => {
+  return (
+    <TimelineShowcase
+      key={content.key ?? content.heading ?? "timeline"}
+      heading={content.heading}
+      subheading={content.subheading}
+      items={content.items}
+    />
+  );
+};
+
+const renderFeatureGridBlock = (content: FeatureGridContent) => {
+  return (
+    <FeatureGrid
+      key={content.key ?? content.heading ?? "feature-grid"}
+      heading={content.heading}
+      subheading={content.subheading}
+      features={content.features}
+      columns={content.columns}
+    />
+  );
+};
+
+const renderMediaGalleryBlock = (content: MediaGalleryContent) => {
+  return (
+    <MediaGallery
+      key={content.key ?? content.heading ?? "media-gallery"}
+      heading={content.heading}
+      subheading={content.subheading}
+      media={content.media}
+      columns={content.columns}
+    />
+  );
+};
+
+const renderCtaClusterBlock = (content: CtaClusterContent) => {
+  return (
+    <CtaCluster
+      key={content.key ?? content.heading ?? "cta-cluster"}
+      heading={content.heading}
+      subheading={content.subheading}
+      align={content.align}
+      ctas={content.ctas}
+    />
+  );
+};
+
+const renderComparisonTableBlock = (content: ComparisonTableContent) => {
+  return (
+    <ComparisonTable
+      key={content.key ?? content.heading ?? "comparison-table"}
+      heading={content.heading}
+      subheading={content.subheading}
+      columns={content.columns}
+      rows={content.rows}
+    />
+  );
+};
+
 const renderMarketingBlocks = (
   section: SectionBlock,
   marketingContent: MarketingContent[],
@@ -139,20 +213,30 @@ const renderMarketingBlocks = (
   return marketingContent.map((content, index) => {
     const key = content.key ?? `${content.kind}-${index}`;
 
-    if (content.kind === "hero") {
-      return renderHeroBlock({ ...content, key });
+    switch (content.kind) {
+      case "hero":
+        return renderHeroBlock({ ...content, key });
+      case "metrics": {
+        const fallback = resolveMetricsFallback(section, metricFallback);
+        return renderMetricsBlock({ ...content, key }, fallback);
+      }
+      case "testimonial":
+        return renderTestimonialBlock({ ...content, key });
+      case "product":
+        return renderProductBlock({ ...content, key });
+      case "timeline":
+        return renderTimelineBlock({ ...content, key });
+      case "feature-grid":
+        return renderFeatureGridBlock({ ...content, key });
+      case "media-gallery":
+        return renderMediaGalleryBlock({ ...content, key });
+      case "cta-cluster":
+        return renderCtaClusterBlock({ ...content, key });
+      case "comparison-table":
+        return renderComparisonTableBlock({ ...content, key });
+      default:
+        return null;
     }
-
-    if (content.kind === "metrics") {
-      const fallback = resolveMetricsFallback(section, metricFallback);
-      return renderMetricsBlock({ ...content, key }, fallback);
-    }
-
-    if (content.kind === "testimonial") {
-      return renderTestimonialBlock({ ...content, key });
-    }
-
-    return renderProductBlock({ ...content, key });
   });
 };
 
