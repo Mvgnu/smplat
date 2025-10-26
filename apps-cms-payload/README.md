@@ -59,4 +59,8 @@ The collections mirror the content expected by `apps/web`:
 - `blog-posts` – long-form insights rendered on `/blog`
 - `faqs`, `testimonials`, `case-studies`, `pricing-tiers`, `site-settings`
 
-Rich text fields leverage the Lexical editor so seed scripts and the frontend use the same structures. The marketing kit registers hero, metrics, testimonial, and product card blocks so editors can compose full sections inside a single rich-text stream.
+Rich text fields leverage the Lexical editor so seed scripts and the frontend use the same structures. The marketing kit registers hero, metrics, testimonial, product card, timeline, feature grid, media gallery, CTA cluster, and comparison table blocks so editors can compose full sections inside a single rich-text stream.
+
+## Seeding
+
+`tooling/scripts/seed-payload.mjs` hydrates deterministic marketing fixtures across environments. The script imports `apps/web/src/server/cms/__fixtures__/payload-lexical-marketing.json` to ensure every environment receives the same Lexical block graph, while blog posts, pricing tiers, and related collections use fixed identifiers and timestamps. Run `pnpm --filter tooling seed-payload` (or the equivalent workspace task) after configuring `PAYLOAD_URL`, `PAYLOAD_API_TOKEN`, and `SEED_KEY` to populate development, test, or production datasets.

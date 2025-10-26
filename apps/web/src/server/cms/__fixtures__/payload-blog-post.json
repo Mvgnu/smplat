@@ -1,11 +1,11 @@
 {
   "docs": [
     {
-      "id": "post-2",
-      "title": "Automation deep dive",
-      "slug": { "current": "automation-deep-dive" },
-      "excerpt": "Automation best practices",
-      "publishedAt": "2024-01-10T00:00:00.000Z",
+      "id": "post-automation-workflows",
+      "title": "Automating campaign fulfillment with SMPLAT workflows",
+      "slug": { "current": "automation-workflows" },
+      "excerpt": "Design task queues and notifications to keep growth campaigns moving without manual ping-pong.",
+      "publishedAt": "2024-01-12T00:00:00.000Z",
       "body": {
         "root": {
           "type": "root",

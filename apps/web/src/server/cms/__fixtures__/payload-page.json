@@ -12,6 +12,266 @@
       },
       "content": [
         {
+          "id": "lexical-marketing",
+          "blockType": "section",
+          "heading": "Operator story",
+          "content": {
+            "root": {
+              "type": "root",
+              "format": "",
+              "indent": 0,
+              "version": 1,
+              "direction": "ltr",
+              "children": [
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-hero",
+                    "blockType": "marketing-hero",
+                    "eyebrow": "Agency Growth",
+                    "headline": "Launch orchestrated campaigns without the chaos",
+                    "body": "Blueprint services, automate fulfillment, and give every client a transparent view of results.",
+                    "align": "center",
+                    "primaryCtaLabel": "Book strategy call",
+                    "primaryCtaHref": "/contact",
+                    "secondaryCtaLabel": "View playbooks",
+                    "secondaryCtaHref": "/resources"
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-metrics",
+                    "blockType": "marketing-metrics",
+                    "heading": "Trusted delivery signals",
+                    "subheading": "Outcomes your operators can point to",
+                    "metrics": [
+                      { "id": "metric-speed", "label": "Launch speed", "value": "12 days", "description": "Average first campaign go-live" },
+                      { "id": "metric-retention", "label": "Retention", "value": "94%", "description": "Rolling 12 month renewal" },
+                      { "id": "metric-satisfaction", "label": "NPS", "value": "+47" }
+                    ]
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-testimonial",
+                    "blockType": "marketing-testimonial",
+                    "quote": "We can spin up storefronts in days and prove value in the first month.",
+                    "author": "Blake Rowan",
+                    "role": "Head of Client Delivery",
+                    "company": "Signal North"
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-product-card",
+                    "blockType": "marketing-product-card",
+                    "badge": "Most popular",
+                    "name": "Retainer+",
+                    "description": "Ongoing campaign execution with proactive insights.",
+                    "price": 4200,
+                    "currency": "USD",
+                    "frequency": "mo",
+                    "features": [
+                      { "id": "feature-dashboard", "label": "Client performance dashboard" },
+                      { "id": "feature-automation", "label": "Automation workflow library" },
+                      { "id": "feature-success", "label": "Dedicated success pods" }
+                    ],
+                    "ctaLabel": "See pricing",
+                    "ctaHref": "/pricing"
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-timeline",
+                    "blockType": "marketing-timeline",
+                    "heading": "How we launch",
+                    "subheading": "A guided onboarding sequence",
+                    "items": [
+                      {
+                        "id": "timeline-discovery",
+                        "title": "Discovery",
+                        "description": "Align offers, fulfillment, and analytics goals",
+                        "timestamp": "Week 1"
+                      },
+                      {
+                        "id": "timeline-orchestration",
+                        "title": "Orchestration",
+                        "description": "Connect tooling and automate approvals",
+                        "timestamp": "Week 2"
+                      },
+                      {
+                        "id": "timeline-activation",
+                        "title": "Activation",
+                        "description": "Launch live storefront with tracking",
+                        "timestamp": "Week 3"
+                      }
+                    ]
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-feature-grid",
+                    "blockType": "marketing-feature-grid",
+                    "heading": "Operator-built feature set",
+                    "subheading": "Battle-tested workflows for agency teams",
+                    "columns": 3,
+                    "features": [
+                      {
+                        "id": "feature-briefs",
+                        "title": "Campaign briefs",
+                        "description": "Collect requirements and approvals in one pass."
+                      },
+                      {
+                        "id": "feature-insights",
+                        "title": "Insights",
+                        "description": "Blend channel analytics into a single view."
+                      },
+                      {
+                        "id": "feature-billing",
+                        "title": "Billing",
+                        "description": "Automate invoicing with real-time fulfillment status."
+                      }
+                    ]
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-media-gallery",
+                    "blockType": "marketing-media-gallery",
+                    "heading": "In the studio",
+                    "subheading": "Snapshots from recent launches",
+                    "columns": 2,
+                    "media": [
+                      {
+                        "id": "media-dashboard",
+                        "kind": "image",
+                        "src": "https://cdn.smplat.test/dashboard.png",
+                        "alt": "Analytics dashboard",
+                        "caption": "Unified performance reporting"
+                      },
+                      {
+                        "id": "media-workshop",
+                        "kind": "image",
+                        "src": "https://cdn.smplat.test/workshop.png",
+                        "alt": "Workshop session",
+                        "caption": "Sprint planning with clients"
+                      }
+                    ]
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-cta-cluster",
+                    "blockType": "marketing-cta-cluster",
+                    "heading": "Pick your next step",
+                    "subheading": "Every engagement starts with a guided working session",
+                    "align": "center",
+                    "ctas": [
+                      { "id": "cta-demo", "label": "Schedule demo", "href": "/demo", "description": "Meet your delivery pod" },
+                      { "id": "cta-scope", "label": "Download scope", "href": "/scope", "description": "Get the detailed breakdown" }
+                    ]
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-comparison-table",
+                    "blockType": "marketing-comparison-table",
+                    "heading": "Compare engagement tracks",
+                    "subheading": "Choose the operating model that fits",
+                    "columns": [
+                      { "id": "column-core", "label": "Core" },
+                      { "id": "column-growth", "label": "Growth", "highlight": true, "footnote": "Most popular" },
+                      { "id": "column-scale", "label": "Scale" }
+                    ],
+                    "rows": [
+                      {
+                        "id": "row-scope",
+                        "label": "Scope",
+                        "values": [
+                          { "value": "Playbooks" },
+                          { "value": "Playbooks + automation" },
+                          { "value": "Custom orchestration" }
+                        ]
+                      },
+                      {
+                        "id": "row-support",
+                        "label": "Support",
+                        "values": [
+                          { "value": "Email" },
+                          { "value": "Slack + weekly" },
+                          { "value": "Slack + on-demand" }
+                        ]
+                      },
+                      {
+                        "id": "row-reporting",
+                        "label": "Reporting",
+                        "values": [
+                          { "value": "Monthly" },
+                          { "value": "Bi-weekly" },
+                          { "value": "Weekly" }
+                        ]
+                      }
+                    ]
+                  },
+                  "children": []
+                }
+              ]
+            }
+          }
+        },
+        {
           "id": "metrics-block",
           "blockType": "section",
           "heading": "Metrics that matter",
@@ -77,17 +337,18 @@
           "blogPosts": {
             "docs": [
               {
-                "id": "post-1",
-                "title": "Runbook templates",
-                "slug": "runbook-templates",
-                "excerpt": "Blueprints for campaigns",
-                "publishedAt": "2024-01-03T00:00:00.000Z"
+                "id": "post-onboarding-playbook",
+                "title": "Your onboarding playbook for social media retainers",
+                "slug": "onboarding-playbook",
+                "excerpt": "Streamline onboarding with standardized forms, readiness checks, and fulfillment handoffs.",
+                "publishedAt": "2024-01-05T00:00:00.000Z"
               },
               {
-                "id": "post-2",
-                "title": "Automation deep dive",
-                "slug": { "current": "automation-deep-dive" },
-                "publishedAt": "2024-01-10T00:00:00.000Z"
+                "id": "post-automation-workflows",
+                "title": "Automating campaign fulfillment with SMPLAT workflows",
+                "slug": { "current": "automation-workflows" },
+                "excerpt": "Design task queues and notifications to keep growth campaigns moving without manual ping-pong.",
+                "publishedAt": "2024-01-12T00:00:00.000Z"
               }
             ]
           }
