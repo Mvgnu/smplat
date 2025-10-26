@@ -18,6 +18,77 @@
       },
       "content": [
         {
+          "id": "draft-lexical",
+          "blockType": "section",
+          "heading": "Preview story",
+          "content": {
+            "root": {
+              "type": "root",
+              "format": "",
+              "indent": 0,
+              "version": 1,
+              "direction": "ltr",
+              "children": [
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-hero",
+                    "blockType": "marketing-hero",
+                    "eyebrow": "Preview",
+                    "headline": "Draft experience",
+                    "body": "Validate marketing sequences before publishing to production.",
+                    "align": "start",
+                    "primaryCtaLabel": "Request feedback",
+                    "primaryCtaHref": "/preview-feedback"
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-metrics",
+                    "blockType": "marketing-metrics",
+                    "heading": "Preview guardrails",
+                    "subheading": "Checklist before launch",
+                    "metrics": [
+                      { "id": "metric-qa", "label": "QA complete", "value": "Yes" },
+                      { "id": "metric-review", "label": "Stakeholder review", "value": "Scheduled" }
+                    ]
+                  },
+                  "children": []
+                },
+                {
+                  "type": "block",
+                  "format": "",
+                  "indent": 0,
+                  "version": 1,
+                  "direction": "ltr",
+                  "fields": {
+                    "id": "marketing-cta-cluster",
+                    "blockType": "marketing-cta-cluster",
+                    "heading": "Next actions",
+                    "subheading": "Coordinate with reviewers",
+                    "align": "center",
+                    "ctas": [
+                      { "id": "cta-share", "label": "Share preview", "href": "/preview/share" },
+                      { "id": "cta-brief", "label": "Download brief", "href": "/preview/brief" }
+                    ]
+                  },
+                  "children": []
+                }
+              ]
+            }
+          }
+        },
+        {
           "id": "draft-metrics",
           "blockType": "section",
           "heading": "Draft Metrics",
@@ -35,18 +106,19 @@
           "blogPosts": {
             "docs": [
               {
-                "id": "preview-post-1",
-                "title": "Preview automation",
+                "id": "preview-post-onboarding",
+                "title": "Preview onboarding checks",
                 "slug": {
-                  "current": "preview-automation"
+                  "current": "preview-onboarding"
                 },
                 "excerpt": "Ensure draft payloads resolve relationships.",
                 "publishedAt": "2024-02-10T00:00:00.000Z"
               },
               {
-                "id": "preview-post-2",
+                "id": "preview-post-analytics",
                 "title": "Preview analytics",
                 "slug": "preview-analytics",
+                "excerpt": "Validate data sync before going live.",
                 "publishedAt": "2024-02-15T00:00:00.000Z"
               }
             ]

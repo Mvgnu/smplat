@@ -46,6 +46,7 @@ This document captures the current state of the Sanity to Payload CMS migration,
 - Verified `pnpm --filter @smplat/cms-payload typecheck` and `pnpm --filter @smplat/cms-payload lint` succeed; lint still reports upstream TypeScript peer warnings that should be documented before release.
 - Added Jest coverage for `apps/web/src/components/blog/post-content.tsx` to exercise headings, lists, and links rendered from Payload Lexical JSON. The suite now consumes the React renderer (mocked in unit tests for determinism) so the marketing app exercises the same component tree Payload ships.
 - Blog, pricing, and campaigns routes in `apps/web` now resolve through the shared `MarketingSections` Lexical renderer, ensuring every marketing surface consumes the normalized Payload block taxonomy instead of bespoke JSX implementations.
+- Payload seed script now imports the shared Lexical marketing fixture (`apps/web/src/server/cms/__fixtures__/payload-lexical-marketing.json`) so every environment renders identical marketing previews with stable timestamps and identifiers.
 
 ## Migration Plan
 

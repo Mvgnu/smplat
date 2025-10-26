@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import dotenv from 'dotenv';
+import lexicalMarketingState from '../../apps/web/src/server/cms/__fixtures__/payload-lexical-marketing.json' assert { type: 'json' };
 
 // Load env from root and app envs
 for (const path of ['.env', 'apps/web/.env', 'apps-cms-payload/.env']) {
@@ -106,8 +107,8 @@ const seed = {
     { name: 'Enterprise', description: 'Custom integrations, dedicated success, and compliance tooling.', price: 0, currency: 'EUR', features: [{ value: 'Custom SLA' }, { value: 'Lexoffice integration' }, { value: 'Dedicated success manager' }], ctaLabel: 'Request quote', ctaHref: '#contact', highlight: false },
   ],
   blogPosts: [
-    { title: 'Your onboarding playbook for social media retainers', slug: 'onboarding-playbook', excerpt: 'Streamline onboarding with standardized forms, readiness checks, and fulfillment handoffs.', publishedAt: new Date().toISOString() },
-    { title: 'Automating campaign fulfillment with SMPLAT workflows', slug: 'automation-workflows', excerpt: 'Design task queues and notifications to keep growth campaigns moving without manual ping-pong.', publishedAt: new Date().toISOString() },
+    { title: 'Your onboarding playbook for social media retainers', slug: 'onboarding-playbook', excerpt: 'Streamline onboarding with standardized forms, readiness checks, and fulfillment handoffs.', publishedAt: '2024-01-05T00:00:00.000Z' },
+    { title: 'Automating campaign fulfillment with SMPLAT workflows', slug: 'automation-workflows', excerpt: 'Design task queues and notifications to keep growth campaigns moving without manual ping-pong.', publishedAt: '2024-01-12T00:00:00.000Z' },
   ],
   pages: [
     {
@@ -120,6 +121,7 @@ const seed = {
         cta: { label: 'Book Discovery Call', href: '#contact' },
       },
       content: [
+        { blockType: 'section', id: 'lexical-marketing', heading: 'Operator story', content: lexicalMarketingState },
         { blockType: 'section', layout: 'two-column', heading: 'Purpose-built for social media agencies', subheading: 'Bundle services, automate fulfillment, and deliver transparent performance dashboards without building custom software from scratch.' },
         { blockType: 'section', layout: 'metrics', heading: 'Proven across campaigns', metrics: [ { label: 'Campaigns launched', value: '1,200+', description: 'High-performing paid and organic pushes.' }, { label: 'Average ROI uplift', value: '3.4x', description: 'Measured across retained clients.' }, { label: 'Client retention', value: '92%', description: 'Annual renewal rate post-launch.' } ] },
         { blockType: 'section', layout: 'case-study', heading: 'Case study: Spotlight Social' },

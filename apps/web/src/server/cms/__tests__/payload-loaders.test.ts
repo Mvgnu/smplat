@@ -327,21 +327,39 @@ describe("payload loaders", () => {
       seoDescription: "Automate the delivery pipeline"
     });
 
+    const lexicalSection = page?.content?.find((block) => block._key === "lexical-marketing");
+    expect(lexicalSection?.marketingContent).toBeDefined();
+    expect(lexicalSection?.marketingContent?.map((node) => node.kind)).toEqual(
+      expect.arrayContaining([
+        "hero",
+        "metrics",
+        "testimonial",
+        "product",
+        "timeline",
+        "feature-grid",
+        "media-gallery",
+        "cta-cluster",
+        "comparison-table"
+      ])
+    );
+    const heroBlock = lexicalSection?.marketingContent?.find((node) => node.kind === "hero");
+    expect(heroBlock).toMatchObject({ headline: "Launch orchestrated campaigns without the chaos" });
+
     const blogSection = page?.content?.find((block) => block.layout === "blog");
     expect(blogSection?.blogPosts).toHaveLength(2);
     expect(blogSection?.blogPosts).toEqual(
       expect.arrayContaining([
         {
-          title: "Runbook templates",
-          slug: { current: "runbook-templates" },
-          excerpt: "Blueprints for campaigns",
-          publishedAt: "2024-01-03T00:00:00.000Z"
+          title: "Your onboarding playbook for social media retainers",
+          slug: { current: "onboarding-playbook" },
+          excerpt: "Streamline onboarding with standardized forms, readiness checks, and fulfillment handoffs.",
+          publishedAt: "2024-01-05T00:00:00.000Z"
         },
         {
-          title: "Automation deep dive",
-          slug: { current: "automation-deep-dive" },
-          excerpt: undefined,
-          publishedAt: "2024-01-10T00:00:00.000Z"
+          title: "Automating campaign fulfillment with SMPLAT workflows",
+          slug: { current: "automation-workflows" },
+          excerpt: "Design task queues and notifications to keep growth campaigns moving without manual ping-pong.",
+          publishedAt: "2024-01-12T00:00:00.000Z"
         }
       ])
     );
@@ -379,16 +397,16 @@ describe("payload loaders", () => {
     expect(posts).toEqual(
       expect.arrayContaining([
         {
-          title: "Runbook templates",
-          slug: { current: "runbook-templates" },
-          excerpt: "Blueprints for campaigns",
-          publishedAt: "2024-01-03T00:00:00.000Z"
+          title: "Your onboarding playbook for social media retainers",
+          slug: { current: "onboarding-playbook" },
+          excerpt: "Streamline onboarding with standardized forms, readiness checks, and fulfillment handoffs.",
+          publishedAt: "2024-01-05T00:00:00.000Z"
         },
         {
-          title: "Automation deep dive",
-          slug: { current: "automation-deep-dive" },
-          excerpt: "Automation best practices",
-          publishedAt: "2024-01-10T00:00:00.000Z"
+          title: "Automating campaign fulfillment with SMPLAT workflows",
+          slug: { current: "automation-workflows" },
+          excerpt: "Design task queues and notifications to keep growth campaigns moving without manual ping-pong.",
+          publishedAt: "2024-01-12T00:00:00.000Z"
         }
       ])
     );
@@ -406,16 +424,16 @@ describe("payload loaders", () => {
 
     const { getBlogPostBySlug } = await import("../loaders");
 
-    const post = await getBlogPostBySlug("automation-deep-dive");
+    const post = await getBlogPostBySlug("automation-workflows");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://payload.test/api/blog-posts?where%5Bslug%5D%5Bequals%5D=automation-deep-dive&where%5Benvironment%5D%5Bequals%5D=test&depth=2&limit=1",
+      "https://payload.test/api/blog-posts?where%5Bslug%5D%5Bequals%5D=automation-workflows&where%5Benvironment%5D%5Bequals%5D=test&depth=2&limit=1",
       expect.objectContaining({ method: "GET" })
     );
 
     expect(post).toMatchObject({
-      title: "Automation deep dive",
-      slug: { current: "automation-deep-dive" },
+      title: "Automating campaign fulfillment with SMPLAT workflows",
+      slug: { current: "automation-workflows" },
       body: expect.objectContaining({
         root: expect.objectContaining({ type: "root" })
       })
@@ -462,14 +480,15 @@ describe("payload loaders", () => {
     expect(blogSection?.blogPosts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          title: "Preview automation",
-          slug: { current: "preview-automation" },
+          title: "Preview onboarding checks",
+          slug: { current: "preview-onboarding" },
           excerpt: "Ensure draft payloads resolve relationships.",
           publishedAt: "2024-02-10T00:00:00.000Z"
         }),
         expect.objectContaining({
           title: "Preview analytics",
           slug: { current: "preview-analytics" },
+          excerpt: "Validate data sync before going live.",
           publishedAt: "2024-02-15T00:00:00.000Z"
         })
       ])
