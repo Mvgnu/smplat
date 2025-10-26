@@ -3,8 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, jest } from "@jest/globals
 import homepageFixture from "../__fixtures__/payload-homepage.json";
 import blogPostDetailFixture from "../__fixtures__/payload-blog-post.json";
 import blogPostsFixture from "../__fixtures__/payload-blog-posts.json";
+import lexicalMarketingFixture from "../__fixtures__/payload-lexical-marketing.json";
 import pageFixture from "../__fixtures__/payload-page.json";
 import pageDraftFixture from "../__fixtures__/payload-page-draft.json";
+import { normalizeMarketingLexicalContent } from "../lexical";
+import type { BlogPostSummary, MarketingContentDocument, PageDocument } from "../types";
+
+jest.mock("@/components/marketing/sections", () => {
+  const React = require("react");
+  return {
+    MarketingSections: ({ sections }: { sections?: unknown }) =>
+      React.createElement("div", { "data-testid": "marketing-sections", sections }),
+    defaultMarketingMetricsFallback: []
+  };
+});
+
+const { collectMarketingPreviewSnapshots } = require("../preview") as typeof import("../preview");
 
 type FetchArgs = Parameters<typeof fetch>;
 
@@ -26,6 +40,163 @@ const createResponse = (body: unknown, init: MockResponseInit = {}) => {
 
 const originalEnv = { ...process.env };
 const originalFetch = global.fetch;
+
+const lexicalState = lexicalMarketingFixture as unknown;
+
+type SectionBlock = Extract<NonNullable<PageDocument["content"]>[number], { _type: "section" }>;
+
+const createLexicalSection = (): SectionBlock => {
+  const { nodes } = normalizeMarketingLexicalContent(lexicalState, {
+    sectionLabel: "preview-fixture",
+    logger: () => {}
+  });
+
+  return {
+    _type: "section",
+    _key: "lexical-preview",
+    heading: "Preview fixture",
+    subheading: "Deterministic marketing content",
+    layout: undefined,
+    content: lexicalState,
+    marketingContent: nodes as MarketingContentDocument[],
+    metrics: undefined,
+    faqItems: undefined,
+    testimonials: undefined,
+    caseStudy: undefined,
+    pricingTiers: undefined,
+    blogPosts: undefined
+  } satisfies SectionBlock;
+};
+
+const createBlogSection = (): SectionBlock => ({
+  _type: "section",
+  _key: "blog-preview",
+  heading: "Insights",
+  subheading: "Latest operator stories",
+  layout: "blog",
+  content: undefined,
+  marketingContent: undefined,
+  metrics: undefined,
+  faqItems: undefined,
+  testimonials: undefined,
+  caseStudy: undefined,
+  pricingTiers: undefined,
+  blogPosts: undefined
+});
+
+const baseSections = [createLexicalSection()];
+const sectionsWithBlog = [...baseSections, createBlogSection()];
+const expectedBlockKinds = (baseSections[0].marketingContent ?? [])
+  .map((block) => block?.kind)
+  .filter((kind): kind is string => typeof kind === "string");
+
+type PageFactoryOptions = {
+  variant: string;
+  eyebrow?: string;
+  subheadline?: string;
+  includeBlog?: boolean;
+};
+
+const createPageDocument = (
+  slug: string,
+  title: string,
+  headline: string,
+  options: PageFactoryOptions
+): PageDocument => ({
+  _id: `${slug}-${options.variant}`,
+  title,
+  hero: {
+    eyebrow: options.eyebrow,
+    headline,
+    subheadline: options.subheadline
+  },
+  content: options.includeBlog ? sectionsWithBlog : baseSections,
+  seoTitle: `${title} – Preview`,
+  seoDescription: `Preview snapshot for ${title}.`
+});
+
+const homepageVariants = {
+  published: createPageDocument("home", "Home", "Launch storefronts faster", {
+    variant: "home-published",
+    eyebrow: "Published hero",
+    subheadline: "Live data preview",
+    includeBlog: true
+  }),
+  draft: createPageDocument("home", "Home", "Preview storefront launch", {
+    variant: "home-draft",
+    eyebrow: "Draft hero",
+    subheadline: "Draft data preview",
+    includeBlog: true
+  })
+};
+
+const marketingPageMap = {
+  pricing: {
+    published: createPageDocument("pricing", "Pricing", "Transparent pricing", {
+      variant: "pricing-published",
+      eyebrow: "Pricing",
+      subheadline: "Published plan comparison"
+    }),
+    draft: createPageDocument("pricing", "Pricing", "Draft pricing preview", {
+      variant: "pricing-draft",
+      eyebrow: "Pricing draft",
+      subheadline: "Draft plan comparison"
+    })
+  },
+  campaigns: {
+    published: createPageDocument("campaigns", "Campaigns", "Campaign operations", {
+      variant: "campaigns-published",
+      eyebrow: "Campaigns",
+      subheadline: "Published campaign journey"
+    }),
+    draft: createPageDocument("campaigns", "Campaigns", "Draft campaign journey", {
+      variant: "campaigns-draft",
+      eyebrow: "Campaigns draft",
+      subheadline: "Draft campaign journey"
+    })
+  },
+  operations: {
+    published: createPageDocument("operations", "Operations", "Operations blueprint", {
+      variant: "operations-published",
+      eyebrow: "Operations",
+      subheadline: "Published operational story"
+    }),
+    draft: createPageDocument("operations", "Operations", "Draft operations blueprint", {
+      variant: "operations-draft",
+      eyebrow: "Operations draft",
+      subheadline: "Draft operational story"
+    })
+  },
+  blog: {
+    published: createPageDocument("blog", "Blog", "Stories from the field", {
+      variant: "blog-published",
+      eyebrow: "Blog",
+      subheadline: "Published blog hero",
+      includeBlog: true
+    }),
+    draft: createPageDocument("blog", "Blog", "Draft stories from the field", {
+      variant: "blog-draft",
+      eyebrow: "Blog draft",
+      subheadline: "Draft blog hero",
+      includeBlog: true
+    })
+  }
+} satisfies Record<string, { published: PageDocument; draft: PageDocument }>;
+
+const blogPosts: BlogPostSummary[] = [
+  {
+    title: "Deterministic metrics testing",
+    slug: { current: "deterministic-metrics" },
+    excerpt: "Validates marketing preview coverage.",
+    publishedAt: "2024-03-01T12:00:00.000Z"
+  },
+  {
+    title: "Interactive storytelling primitives",
+    slug: { current: "storytelling-primitives" },
+    excerpt: "Guides, calculators, and journeys for operators.",
+    publishedAt: "2024-04-15T12:00:00.000Z"
+  }
+];
 
 describe("payload client", () => {
   beforeEach(() => {
@@ -502,6 +673,35 @@ describe("payload loaders", () => {
     });
   });
 });
+
+describe.each([
+  { label: "published", preview: false },
+  { label: "draft", preview: true }
+])("marketing preview snapshots (%s)", ({ preview }) => {
+  it("serializes hero, metrics, and marketing blocks deterministically", async () => {
+    const snapshots = await collectMarketingPreviewSnapshots({
+      preview,
+      fallbackLexicalState: lexicalMarketingFixture as unknown,
+      loaders: {
+        getHomepage: async () => (preview ? homepageVariants.draft : homepageVariants.published),
+        getPageBySlug: async (slug: string) => {
+          const entry = marketingPageMap[slug as keyof typeof marketingPageMap];
+          if (!entry) {
+            return null;
+          }
+          return preview ? entry.draft : entry.published;
+        },
+        getBlogPosts: async () => blogPosts
+      }
+    });
+
+    expect(snapshots).toMatchSnapshot();
+    expect(snapshots.some((snapshot) => (snapshot.metrics?.values.length ?? 0) > 0)).toBe(true);
+    const blockKindSet = new Set(snapshots.flatMap((snapshot) => snapshot.blockKinds));
+    expect(blockKindSet).toEqual(new Set(expectedBlockKinds));
+  });
+});
+
 const draftState = { isEnabled: false };
 
 jest.mock("next/headers", () => ({

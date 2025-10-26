@@ -1,0 +1,275 @@
+{
+  "generatedAt": "2024-05-01T00:00:00.000Z",
+  "snapshots": [
+    {
+      "route": "/",
+      "preview": false,
+      "hero": {
+        "eyebrow": "Published hero",
+        "headline": "Launch storefronts faster",
+        "subheadline": "Live data preview"
+      },
+      "title": "Home",
+      "sectionCount": 2,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/",
+      "preview": true,
+      "hero": {
+        "eyebrow": "Draft hero",
+        "headline": "Preview storefront launch",
+        "subheadline": "Draft data preview"
+      },
+      "title": "Home",
+      "sectionCount": 2,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/pricing",
+      "preview": false,
+      "hero": {
+        "eyebrow": "Pricing",
+        "headline": "Transparent pricing",
+        "subheadline": "Published plan comparison"
+      },
+      "title": "Pricing",
+      "sectionCount": 1,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/pricing",
+      "preview": true,
+      "hero": {
+        "eyebrow": "Pricing draft",
+        "headline": "Draft pricing preview",
+        "subheadline": "Draft plan comparison"
+      },
+      "title": "Pricing",
+      "sectionCount": 1,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/campaigns",
+      "preview": false,
+      "hero": {
+        "eyebrow": "Campaigns",
+        "headline": "Campaign operations",
+        "subheadline": "Published campaign journey"
+      },
+      "title": "Campaigns",
+      "sectionCount": 1,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/campaigns",
+      "preview": true,
+      "hero": {
+        "eyebrow": "Campaigns draft",
+        "headline": "Draft campaign journey",
+        "subheadline": "Draft campaign journey"
+      },
+      "title": "Campaigns",
+      "sectionCount": 1,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/operations",
+      "preview": false,
+      "hero": {
+        "eyebrow": "Operations",
+        "headline": "Operations blueprint",
+        "subheadline": "Published operational story"
+      },
+      "title": "Operations",
+      "sectionCount": 1,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/operations",
+      "preview": true,
+      "hero": {
+        "eyebrow": "Operations draft",
+        "headline": "Draft operations blueprint",
+        "subheadline": "Draft operational story"
+      },
+      "title": "Operations",
+      "sectionCount": 1,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/blog",
+      "preview": false,
+      "hero": {
+        "eyebrow": "Blog",
+        "headline": "Stories from the field",
+        "subheadline": "Published blog hero"
+      },
+      "title": "Blog",
+      "sectionCount": 2,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    },
+    {
+      "route": "/blog",
+      "preview": true,
+      "hero": {
+        "eyebrow": "Blog draft",
+        "headline": "Draft stories from the field",
+        "subheadline": "Draft blog hero"
+      },
+      "title": "Blog",
+      "sectionCount": 2,
+      "blockKinds": [
+        "marketing-comparison-table",
+        "marketing-cta-cluster",
+        "marketing-feature-grid",
+        "marketing-hero",
+        "marketing-media-gallery",
+        "marketing-metrics",
+        "marketing-product-card",
+        "marketing-testimonial",
+        "marketing-timeline"
+      ],
+      "metrics": {
+        "label": "Trusted delivery signals",
+        "values": []
+      },
+      "markup": ""
+    }
+  ]
+}
