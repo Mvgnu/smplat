@@ -30,6 +30,10 @@ const DEFAULT_OUTPUT_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../__fixtures__/marketing-preview-snapshots.json"
 );
+const DEFAULT_HISTORY_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../__fixtures__/marketing-preview-history.json"
+);
 
 type MarketingPreviewRoute =
   | { route: string; kind: "homepage" }
@@ -73,6 +77,34 @@ type MarketingPreviewSnapshot = {
   blockKinds: string[];
   metrics?: SnapshotMetrics;
   markup: string;
+};
+
+type MarketingPreviewSnapshotManifest = {
+  generatedAt: string;
+  snapshots: MarketingPreviewSnapshot[];
+  label?: string;
+};
+
+type MarketingPreviewTimelineRouteSummary = {
+  route: string;
+  hasDraft: boolean;
+  hasPublished: boolean;
+  diffDetected: boolean;
+  sectionCount: number;
+  blockKinds: string[];
+};
+
+type MarketingPreviewTimelineEntry = {
+  id: string;
+  generatedAt: string;
+  label?: string;
+  routes: MarketingPreviewTimelineRouteSummary[];
+  snapshots: Record<"published" | "draft", MarketingPreviewSnapshot[]>;
+};
+
+type MarketingPreviewTimeline = {
+  current: MarketingPreviewTimelineEntry;
+  history: MarketingPreviewTimelineEntry[];
 };
 
 const defaultLoaders: MarketingPreviewLoaders = {
@@ -228,6 +260,127 @@ const renderMarkup = (
   return markup;
 };
 
+const splitSnapshotsByPreview = (
+  snapshots: MarketingPreviewSnapshot[]
+): Record<"published" | "draft", MarketingPreviewSnapshot[]> => {
+  const state: Record<"published" | "draft", MarketingPreviewSnapshot[]> = {
+    published: [],
+    draft: []
+  };
+
+  for (const snapshot of snapshots) {
+    if (snapshot.preview) {
+      state.draft.push(snapshot);
+    } else {
+      state.published.push(snapshot);
+    }
+  }
+
+  state.published.sort((a, b) => a.route.localeCompare(b.route));
+  state.draft.sort((a, b) => a.route.localeCompare(b.route));
+
+  return state;
+};
+
+const computeRouteSummary = (
+  snapshots: Record<"published" | "draft", MarketingPreviewSnapshot[]>
+): MarketingPreviewTimelineRouteSummary[] => {
+  const routes = new Map<string, MarketingPreviewTimelineRouteSummary>();
+
+  const upsert = (
+    source: "published" | "draft",
+    snapshot: MarketingPreviewSnapshot
+  ) => {
+    const existing = routes.get(snapshot.route);
+    const summary: MarketingPreviewTimelineRouteSummary = existing ?? {
+      route: snapshot.route,
+      hasDraft: false,
+      hasPublished: false,
+      diffDetected: false,
+      sectionCount: snapshot.sectionCount,
+      blockKinds: snapshot.blockKinds
+    };
+
+    if (source === "draft") {
+      summary.hasDraft = true;
+    } else {
+      summary.hasPublished = true;
+    }
+
+    if (snapshot.blockKinds.length && !summary.blockKinds.length) {
+      summary.blockKinds = snapshot.blockKinds;
+    }
+
+    routes.set(snapshot.route, summary);
+  };
+
+  for (const snapshot of snapshots.published) {
+    upsert("published", snapshot);
+  }
+
+  for (const snapshot of snapshots.draft) {
+    upsert("draft", snapshot);
+  }
+
+  for (const summary of routes.values()) {
+    const draftMarkup = snapshots.draft.find((entry) => entry.route === summary.route)?.markup ?? "";
+    const publishedMarkup =
+      snapshots.published.find((entry) => entry.route === summary.route)?.markup ?? "";
+    summary.diffDetected = draftMarkup !== publishedMarkup;
+  }
+
+  return Array.from(routes.values()).sort((a, b) => a.route.localeCompare(b.route));
+};
+
+const toTimelineEntry = (manifest: MarketingPreviewSnapshotManifest): MarketingPreviewTimelineEntry => {
+  const snapshots = splitSnapshotsByPreview(manifest.snapshots);
+  return {
+    id: manifest.label ?? manifest.generatedAt,
+    generatedAt: manifest.generatedAt,
+    label: manifest.label,
+    routes: computeRouteSummary(snapshots),
+    snapshots
+  };
+};
+
+const readSnapshotHistory = async (historyLimit = 8): Promise<MarketingPreviewSnapshotManifest[]> => {
+  try {
+    const payload = await fs.readFile(DEFAULT_HISTORY_PATH, "utf8");
+    const json = JSON.parse(payload) as { history?: MarketingPreviewSnapshotManifest[] };
+    if (!json.history) {
+      return [];
+    }
+    return json.history
+      .filter((entry): entry is MarketingPreviewSnapshotManifest => Boolean(entry?.generatedAt && entry?.snapshots))
+      .sort((a, b) => (a.generatedAt < b.generatedAt ? 1 : -1))
+      .slice(0, Math.max(0, historyLimit));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+};
+
+const writeSnapshotHistory = async (
+  manifest: MarketingPreviewSnapshotManifest,
+  historyLimit = 24
+) => {
+  const history = await readSnapshotHistory(historyLimit * 2);
+  const normalizedHistory = [
+    manifest,
+    ...history.filter((entry) => entry.generatedAt !== manifest.generatedAt)
+  ];
+  const trimmed = normalizedHistory.slice(0, Math.max(1, historyLimit));
+  await fs.mkdir(path.dirname(DEFAULT_HISTORY_PATH), { recursive: true });
+  await fs.writeFile(
+    DEFAULT_HISTORY_PATH,
+    `${JSON.stringify({ history: trimmed }, null, 2)}\n`,
+    "utf8"
+  );
+};
+
 export const collectMarketingPreviewSnapshots = async (
   options: CollectPreviewOptions = {}
 ): Promise<MarketingPreviewSnapshot[]> => {
@@ -307,6 +460,31 @@ export const collectMarketingPreviewSnapshots = async (
   return snapshots;
 };
 
+type CollectTimelineOptions = CollectPreviewOptions & {
+  historyLimit?: number;
+};
+
+export const collectMarketingPreviewSnapshotTimeline = async (
+  options: CollectTimelineOptions = {}
+): Promise<MarketingPreviewTimeline> => {
+  const [published, draft] = await Promise.all([
+    collectMarketingPreviewSnapshots({ ...options, preview: false }),
+    collectMarketingPreviewSnapshots({ ...options, preview: true })
+  ]);
+
+  const currentManifest: MarketingPreviewSnapshotManifest = {
+    generatedAt: new Date().toISOString(),
+    snapshots: [...published, ...draft]
+  };
+
+  const history = await readSnapshotHistory(options.historyLimit);
+
+  return {
+    current: toTimelineEntry(currentManifest),
+    history: history.map(toTimelineEntry)
+  };
+};
+
 type WriteSnapshotsOptions = {
   outFile?: string;
   previewStates?: boolean[];
@@ -334,7 +512,15 @@ export const writeMarketingPreviewSnapshots = async (options: WriteSnapshotsOpti
   await fs.mkdir(path.dirname(outFile), { recursive: true });
   await fs.writeFile(outFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 
+  await writeSnapshotHistory(payload, 24);
+
   return payload;
 };
 
-export type { MarketingPreviewSnapshot };
+export type {
+  MarketingPreviewSnapshot,
+  MarketingPreviewSnapshotManifest,
+  MarketingPreviewTimeline,
+  MarketingPreviewTimelineEntry,
+  MarketingPreviewTimelineRouteSummary
+};
