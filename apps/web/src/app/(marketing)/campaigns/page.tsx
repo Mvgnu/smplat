@@ -1,59 +1,31 @@
 import { notFound } from "next/navigation";
 
 import { MarketingSections, defaultMarketingMetricsFallback } from "@/components/marketing/sections";
-import { getBlogPosts, getPageBySlug } from "@/server/cms/loaders";
-import type { BlogPostSummary, PageDocument } from "@/server/cms/types";
+import { getPageBySlug } from "@/server/cms/loaders";
 
-const BLOG_SLUG = "blog";
+const CAMPAIGNS_SLUG = "campaigns";
 const SECTION_CONTENT_CLASSNAME =
   "mx-auto max-w-3xl space-y-4 text-left [&_*]:text-white/80 [&_strong]:text-white [&_a]:underline";
 
-const mergeBlogPostsIntoSections = (
-  sections: PageDocument["content"],
-  posts: BlogPostSummary[]
-): PageDocument["content"] => {
-  if (!sections?.length || !posts.length) {
-    return sections;
-  }
-
-  return sections.map((section) => {
-    if (section._type !== "section") {
-      return section;
-    }
-
-    const hasBlogLayout = section.layout === "blog";
-    const hasExistingPosts = Array.isArray(section.blogPosts) && section.blogPosts.length > 0;
-
-    if (!hasBlogLayout || hasExistingPosts) {
-      return section;
-    }
-
-    return {
-      ...section,
-      blogPosts: posts
-    };
-  });
-};
-
-const resolveHero = (page: PageDocument) => {
-  if (page.hero) {
+const resolveHero = (page: Awaited<ReturnType<typeof getPageBySlug>>) => {
+  if (page?.hero) {
     return page.hero;
   }
 
   return {
-    headline: page.title
+    headline: page?.title
   };
 };
 
-export default async function BlogPage() {
-  const [page, posts] = await Promise.all([getPageBySlug(BLOG_SLUG), getBlogPosts()]);
+export default async function CampaignsPage() {
+  const page = await getPageBySlug(CAMPAIGNS_SLUG);
 
   if (!page) {
     notFound();
   }
 
   const hero = resolveHero(page);
-  const sections = mergeBlogPostsIntoSections(page.content, posts);
+
   return (
     <main className="mx-auto max-w-5xl px-6 py-24 text-white">
       <article className="space-y-12">
@@ -66,7 +38,7 @@ export default async function BlogPage() {
         </header>
 
         <MarketingSections
-          sections={sections}
+          sections={page.content}
           sectionContentClassName={SECTION_CONTENT_CLASSNAME}
           metricFallback={defaultMarketingMetricsFallback}
         />
