@@ -64,3 +64,17 @@ Rich text fields leverage the Lexical editor so seed scripts and the frontend us
 ## Seeding
 
 `tooling/scripts/seed-payload.mjs` hydrates deterministic marketing fixtures across environments. The script imports `apps/web/src/server/cms/__fixtures__/payload-lexical-marketing.json` to ensure every environment receives the same Lexical block graph, while blog posts, pricing tiers, and related collections use fixed identifiers and timestamps. Run `pnpm --filter tooling seed-payload` (or the equivalent workspace task) after configuring `PAYLOAD_URL`, `PAYLOAD_API_TOKEN`, and `SEED_KEY` to populate development, test, or production datasets.
+
+## Preview validation
+
+Use `tooling/scripts/validate-payload-preview.mjs` to snapshot the marketing routes against the deterministic fixtures before deploying Payload changes:
+
+```bash
+# Generate published + draft snapshots for all marketing routes
+node tooling/scripts/validate-payload-preview.mjs
+
+# Restrict validation to published pages or specific routes
+node tooling/scripts/validate-payload-preview.mjs --mode=published --routes="/,/pricing"
+```
+
+The script renders `MarketingSections` with the latest Payload data and updates `apps/web/src/server/cms/__fixtures__/marketing-preview-snapshots.json`. Commit snapshot diffs with any marketing schema changes so the frontend regression tests can track block fidelity.

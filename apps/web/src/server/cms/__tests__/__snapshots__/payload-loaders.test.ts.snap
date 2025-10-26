@@ -1,0 +1,411 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`marketing preview snapshots ({ label: 'draft', preview: true }) serializes hero, metrics, and marketing blocks deterministically 1`] = `
+[
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Draft hero",
+      "headline": "Preview storefront launch",
+      "subheadline": "Draft data preview",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object],[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": true,
+    "route": "/",
+    "sectionCount": 2,
+    "title": "Home",
+  },
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Pricing draft",
+      "headline": "Draft pricing preview",
+      "subheadline": "Draft plan comparison",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": true,
+    "route": "/pricing",
+    "sectionCount": 1,
+    "title": "Pricing",
+  },
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Campaigns draft",
+      "headline": "Draft campaign journey",
+      "subheadline": "Draft campaign journey",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": true,
+    "route": "/campaigns",
+    "sectionCount": 1,
+    "title": "Campaigns",
+  },
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Blog draft",
+      "headline": "Draft stories from the field",
+      "subheadline": "Draft blog hero",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object],[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": true,
+    "route": "/blog",
+    "sectionCount": 2,
+    "title": "Blog",
+  },
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Operations draft",
+      "headline": "Draft operations blueprint",
+      "subheadline": "Draft operational story",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": true,
+    "route": "/operations",
+    "sectionCount": 1,
+    "title": "Operations",
+  },
+]
+`;
+
+exports[`marketing preview snapshots ({ label: 'published', preview: false }) serializes hero, metrics, and marketing blocks deterministically 1`] = `
+[
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Published hero",
+      "headline": "Launch storefronts faster",
+      "subheadline": "Live data preview",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object],[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": false,
+    "route": "/",
+    "sectionCount": 2,
+    "title": "Home",
+  },
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Pricing",
+      "headline": "Transparent pricing",
+      "subheadline": "Published plan comparison",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": false,
+    "route": "/pricing",
+    "sectionCount": 1,
+    "title": "Pricing",
+  },
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Campaigns",
+      "headline": "Campaign operations",
+      "subheadline": "Published campaign journey",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": false,
+    "route": "/campaigns",
+    "sectionCount": 1,
+    "title": "Campaigns",
+  },
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Blog",
+      "headline": "Stories from the field",
+      "subheadline": "Published blog hero",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object],[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": false,
+    "route": "/blog",
+    "sectionCount": 2,
+    "title": "Blog",
+  },
+  {
+    "blockKinds": [
+      "comparison-table",
+      "cta-cluster",
+      "feature-grid",
+      "hero",
+      "media-gallery",
+      "metrics",
+      "product",
+      "testimonial",
+      "timeline",
+    ],
+    "hero": {
+      "eyebrow": "Operations",
+      "headline": "Operations blueprint",
+      "subheadline": "Published operational story",
+    },
+    "markup": "<div data-testid="marketing-sections" sections="[object Object]"></div>",
+    "metrics": {
+      "label": "Trusted delivery signals",
+      "values": [
+        {
+          "label": "Launch speed",
+          "value": "12 days",
+        },
+        {
+          "label": "Retention",
+          "value": "94%",
+        },
+        {
+          "label": "NPS",
+          "value": "+47",
+        },
+      ],
+    },
+    "preview": false,
+    "route": "/operations",
+    "sectionCount": 1,
+    "title": "Operations",
+  },
+]
+`;
