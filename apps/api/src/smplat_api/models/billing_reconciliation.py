@@ -35,6 +35,14 @@ class ProcessorStatementTransactionType(str, Enum):
     FEE_ADJUSTMENT = "fee_adjustment"
     REFUND_REVERSAL = "refund_reversal"
     PAYOUT_DELAY = "payout_delay"
+    PAYOUT_REVERSAL = "payout_reversal"
+    MULTI_INVOICE_PAYOUT = "multi_invoice_payout"
+    DYNAMIC_FEE = "dynamic_fee"
+    BALANCE_ADJUSTMENT = "balance_adjustment"
+    CROSS_LEDGER_TRANSFER = "cross_ledger_transfer"
+    FX_GAIN = "fx_gain"
+    FX_LOSS = "fx_loss"
+    DISPUTE_WITHHOLD = "dispute_withhold"
 
 
 class BillingDiscrepancyType(str, Enum):
@@ -48,6 +56,13 @@ class BillingDiscrepancyType(str, Enum):
     FEE_ADJUSTMENT = "fee_adjustment"
     REFUND_REVERSAL = "refund_reversal"
     PAYOUT_DELAY = "payout_delay"
+    PAYOUT_CLAWBACK = "payout_clawback"
+    MULTI_INVOICE_SETTLEMENT = "multi_invoice_settlement"
+    DYNAMIC_FEE_VARIANCE = "dynamic_fee_variance"
+    CROSS_LEDGER_ADJUSTMENT = "cross_ledger_adjustment"
+    FX_IMPACT = "fx_impact"
+    BALANCE_ADJUSTMENT = "balance_adjustment"
+    DISPUTE_HOLD = "dispute_hold"
 
 
 class BillingDiscrepancyStatus(str, Enum):

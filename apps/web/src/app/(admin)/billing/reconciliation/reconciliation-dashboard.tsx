@@ -394,13 +394,14 @@ export function ReconciliationDashboardView({ dashboard }: DashboardProps) {
                 <th className="px-5 py-3 font-semibold">Type</th>
                 <th className="px-5 py-3 font-semibold">Status</th>
                 <th className="px-5 py-3 font-semibold">Amount</th>
+                <th className="px-5 py-3 font-semibold">Playbook</th>
                 <th className="px-5 py-3 font-semibold">Observed</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 text-white/80">
               {filteredDiscrepancies.length === 0 ? (
                 <tr>
-                  <td className="px-5 py-4 text-center text-white/60" colSpan={5}>
+                  <td className="px-5 py-4 text-center text-white/60" colSpan={6}>
                     No discrepancies match the selected filter.
                   </td>
                 </tr>
@@ -487,6 +488,30 @@ function DiscrepancyRow({ discrepancy }: { discrepancy: ReconciliationDiscrepanc
       <td className="px-5 py-4 text-white/70">
         {typeof discrepancy.amountDelta === "number" ? `€${discrepancy.amountDelta.toFixed(2)}` : "—"}
       </td>
+      <td className="px-5 py-4 text-white/70">
+        {discrepancy.playbook ? (
+          <div className="space-y-2 text-xs text-white/60">
+            <ul className="list-disc space-y-1 pl-4">
+              {discrepancy.playbook.recommendedActions.map((action) => (
+                <li key={action}>{action}</li>
+              ))}
+            </ul>
+            <div className="space-y-1">
+              {typeof discrepancy.playbook.autoResolveThreshold === "number" && (
+                <div>
+                  Auto-resolve ≤ {formatAmount(discrepancy.playbook.autoResolveThreshold)}
+                </div>
+              )}
+              {typeof discrepancy.playbook.escalationAfterHours === "number" && (
+                <div>Escalate after {discrepancy.playbook.escalationAfterHours}h</div>
+              )}
+              {discrepancy.playbook.notes && <div>{discrepancy.playbook.notes}</div>}
+            </div>
+          </div>
+        ) : (
+          <span className="text-xs text-white/50">No playbook</span>
+        )}
+      </td>
       <td className="px-5 py-4 text-white/70">{formatDate(discrepancy.createdAt)}</td>
     </tr>
   );
@@ -504,6 +529,10 @@ function formatFailure(run: ReconciliationRun): string {
     return "None";
   }
   return `${run.failure.error} (${formatDate(run.startedAt)})`;
+}
+
+function formatAmount(value: number): string {
+  return `€${value.toFixed(2)}`;
 }
 
 function statusTone(status: string): string {

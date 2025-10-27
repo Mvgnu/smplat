@@ -128,6 +128,12 @@ export type ReconciliationDiscrepancy = {
   resolutionNote: string | null;
   resolvedAt: string | null;
   createdAt: string;
+  playbook: {
+    recommendedActions: string[];
+    autoResolveThreshold: number | null;
+    escalationAfterHours: number | null;
+    notes: string | null;
+  } | null;
 };
 
 export type ReconciliationStagingEntry = {

@@ -22,6 +22,9 @@ from smplat_api.models.billing_reconciliation import (
     ProcessorStatementStaging,
     ProcessorStatementStagingStatus,
 )
+from smplat_api.services.billing.discrepancy_playbooks import (
+    get_discrepancy_playbook,
+)
 
 router = APIRouter(
     prefix="/billing/reconciliation",
@@ -77,6 +80,17 @@ class BillingReconciliationRunResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class BillingDiscrepancyPlaybook(BaseModel):
+    """Operator resolution guidance surfaced alongside a discrepancy."""
+
+    recommended_actions: list[str] = Field(alias="recommendedActions")
+    auto_resolve_threshold: float | None = Field(default=None, alias="autoResolveThreshold")
+    escalation_after_hours: int | None = Field(default=None, alias="escalationAfterHours")
+    notes: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
 class BillingDiscrepancyResponse(BaseModel):
     """Serialized discrepancy record."""
 
@@ -92,6 +106,7 @@ class BillingDiscrepancyResponse(BaseModel):
     resolution_note: str | None = Field(default=None, alias="resolutionNote")
     resolved_at: datetime | None = Field(default=None, alias="resolvedAt")
     created_at: datetime = Field(alias="createdAt")
+    playbook: BillingDiscrepancyPlaybook | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -372,6 +387,7 @@ def _serialize_run(run: BillingReconciliationRun) -> BillingReconciliationRunRes
 
 
 def _serialize_discrepancy(discrepancy: BillingDiscrepancy) -> BillingDiscrepancyResponse:
+    playbook_payload = get_discrepancy_playbook(discrepancy.discrepancy_type)
     return BillingDiscrepancyResponse(
         id=discrepancy.id,
         runId=discrepancy.run_id,
@@ -389,6 +405,7 @@ def _serialize_discrepancy(discrepancy: BillingDiscrepancy) -> BillingDiscrepanc
         resolutionNote=discrepancy.resolution_note,
         resolvedAt=_normalize_dt(discrepancy.resolved_at),
         createdAt=_normalize_dt(discrepancy.created_at),
+        playbook=playbook_payload,
     )
 
 
