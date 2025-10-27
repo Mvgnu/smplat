@@ -45,6 +45,21 @@ class BillingReconciliationRunMetrics(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class BillingReconciliationRunFailure(BaseModel):
+    """Structured metadata for failed reconciliation runs."""
+
+    status: str
+    error: str
+    staged: int = 0
+    persisted: int = 0
+    updated: int = 0
+    removed: int = 0
+    disputes: int = 0
+    cursor: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
 class BillingReconciliationRunResponse(BaseModel):
     """Serialized reconciliation run summary."""
 
@@ -57,6 +72,7 @@ class BillingReconciliationRunResponse(BaseModel):
     discrepancy_count: int = Field(alias="discrepancyCount")
     notes: str | None
     metrics: BillingReconciliationRunMetrics | None = None
+    failure: BillingReconciliationRunFailure | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -337,6 +353,7 @@ async def _get_staging_entry(
 
 
 def _serialize_run(run: BillingReconciliationRun) -> BillingReconciliationRunResponse:
+    note_payload = _load_run_note(run.notes)
     return BillingReconciliationRunResponse(
         id=run.id,
         startedAt=_normalize_dt(run.started_at),
@@ -346,7 +363,8 @@ def _serialize_run(run: BillingReconciliationRun) -> BillingReconciliationRunRes
         matchedTransactions=run.matched_transactions,
         discrepancyCount=run.discrepancy_count,
         notes=run.notes,
-        metrics=_parse_run_metrics(run.notes),
+        metrics=_parse_run_metrics(note_payload),
+        failure=_parse_run_failure(note_payload),
     )
 
 
@@ -399,7 +417,7 @@ def _normalize_dt(value: datetime | None) -> datetime | None:
     return value
 
 
-def _parse_run_metrics(notes: str | None) -> BillingReconciliationRunMetrics | None:
+def _load_run_note(notes: str | None) -> dict[str, Any] | None:
     if not notes:
         return None
     try:
@@ -407,6 +425,12 @@ def _parse_run_metrics(notes: str | None) -> BillingReconciliationRunMetrics | N
     except (TypeError, ValueError):
         return None
     if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _parse_run_metrics(payload: dict[str, Any] | None) -> BillingReconciliationRunMetrics | None:
+    if payload is None:
         return None
 
     data: dict[str, Any] = {
@@ -420,3 +444,25 @@ def _parse_run_metrics(notes: str | None) -> BillingReconciliationRunMetrics | N
         "error": payload.get("error"),
     }
     return BillingReconciliationRunMetrics(**data)
+
+
+def _parse_run_failure(payload: dict[str, Any] | None) -> BillingReconciliationRunFailure | None:
+    if payload is None:
+        return None
+
+    status = str(payload.get("status", "unknown"))
+    error = payload.get("error")
+    if status != "failed" or not error:
+        return None
+
+    data: dict[str, Any] = {
+        "status": status,
+        "error": str(error),
+        "staged": int(payload.get("staged", 0) or 0),
+        "persisted": int(payload.get("persisted", 0) or 0),
+        "updated": int(payload.get("updated", 0) or 0),
+        "removed": int(payload.get("removed", 0) or 0),
+        "disputes": int(payload.get("disputes", 0) or 0),
+        "cursor": payload.get("cursor"),
+    }
+    return BillingReconciliationRunFailure(**data)

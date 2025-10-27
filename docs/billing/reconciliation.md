@@ -22,7 +22,7 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 ## API Endpoints
 
 - `GET /api/v1/billing/reconciliation/runs`: Lists recent reconciliation runs alongside open discrepancies.
--   The response contains a `metrics` object per run parsed from worker notes (persisted, updated, staged, removed, disputes, cursor, error) and a `stagingBacklog` aggregate covering pending and requeued staging rows.
+-   The response contains a `metrics` object per run parsed from worker notes (persisted, updated, staged, removed, disputes, cursor, error) and a `failure` object whenever `status="failed"`. Failure metadata includes the serialized error string, the staged count snapshot at failure time, persisted/updated totals, and the cursor used by the worker so finance can resume from the last checkpoint. The payload also includes a `stagingBacklog` aggregate covering pending and requeued staging rows.
 - `GET /api/v1/billing/reconciliation/discrepancies`: Returns discrepancies filtered by status.
 - `POST /api/v1/billing/reconciliation/discrepancies/{id}/acknowledge`: Marks a discrepancy as acknowledged.
 - `POST /api/v1/billing/reconciliation/discrepancies/{id}/resolve`: Resolves a discrepancy and records resolution notes.
@@ -31,6 +31,21 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 - `POST /api/v1/billing/reconciliation/staging/{id}/triage`: Records triage outcomes and notes while updating staging status, automatically marking resolution timestamps when the entry is resolved.
 - `POST /api/v1/billing/reconciliation/staging/{id}/requeue`: Flags a staged entry for reprocessing, increments its requeue counter, and clears prior resolution metadata.
 - `GET /api/v1/billing/reconciliation/statements`: Returns discrepancies linked to processor statements for focused review.
+
+## Operator Dashboard
+
+- The admin surface at `/admin/billing/reconciliation` renders the reconciliation snapshot for finance.
+- Summary KPIs highlight the staging backlog, open discrepancies, failure counts, and the most recent failure description sourced from the run `failure` metadata.
+- The run history table exposes metrics and failure metadata for each sweep so operators can confirm persistence counts before re-running.
+- The staging triage grid provides inline note capture with actions to mark entries triaged, resolved, or requeued; actions call the FastAPI endpoints through the Next.js API proxy.
+- Discrepancies are filterable by status to accelerate investigation. Notes entered in the triage grid are persisted through the backend APIs.
+
+## Failure Handling SOP
+
+- Every worker exception sets the run status to `failed` and persists structured notes that include the error string, staged counts, and the cursor checkpoint. The dashboard displays this context immediately.
+- Finance should review the staging backlog first; if staged count spikes, triage pending entries or requeue those that are ready for another sync attempt.
+- After addressing the root cause (e.g., missing metadata, processor downtime), operators can re-run the worker or resume ingestion using the cursor surfaced in the failure metadata.
+- Document unusual incidents in the triage notes to maintain a historical record visible in the dashboard.
 
 ## Run Cadence & SLAs
 

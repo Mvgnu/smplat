@@ -357,6 +357,7 @@ async def test_worker_run_once_marks_failure(session_factory, monkeypatch: pytes
         notes = json.loads(run.notes or "{}")
         assert notes.get("status") == "failed"
         assert "error" in notes
+        assert "staged" in notes
 
 
 @pytest.mark.asyncio
@@ -407,6 +408,56 @@ async def test_list_runs_includes_metrics_and_staging_backlog(app_with_db):
         assert body["runs"][0]["metrics"]["staged"] == 1
         assert body["runs"][0]["metrics"]["status"] == "completed"
         assert body["runs"][0]["metrics"]["cursor"] == "txn_cursor"
+    finally:
+        settings.checkout_api_key = previous_key
+
+
+@pytest.mark.asyncio
+async def test_list_runs_surfaces_failure_metadata(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "ops-key"
+
+    try:
+        async with session_factory() as session:
+            run = BillingReconciliationRun(
+                status="failed",
+                total_transactions=3,
+                matched_transactions=1,
+                discrepancy_count=2,
+                notes=json.dumps(
+                    {
+                        "status": "failed",
+                        "persisted": 1,
+                        "updated": 0,
+                        "staged": 2,
+                        "removed": 0,
+                        "disputes": 1,
+                        "cursor": None,
+                        "error": "stripe timeout",
+                    }
+                ),
+            )
+            session.add(run)
+            await session.commit()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/billing/reconciliation/runs",
+                headers={"X-API-Key": "ops-key"},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        run_payload = payload["runs"][0]
+        assert run_payload["metrics"]["status"] == "failed"
+        assert run_payload["metrics"]["error"] == "stripe timeout"
+        failure = run_payload.get("failure")
+        assert failure is not None
+        assert failure["status"] == "failed"
+        assert failure["error"] == "stripe timeout"
+        assert failure["staged"] == 2
+        assert failure["persisted"] == 1
     finally:
         settings.checkout_api_key = previous_key
 
