@@ -10,6 +10,7 @@ import type {
   MarketingPreviewSnapshot,
   MarketingPreviewTimelineEntry
 } from "@/server/cms/preview";
+import type { MarketingPreviewHistoryAggregates } from "@/server/cms/history";
 import type {
   MarketingPreviewTriageNote,
   MarketingPreviewTriageNoteSeverity
@@ -24,6 +25,10 @@ import {
   type LiveBlockDiffStatus,
   type LiveRegressionHotspot
 } from "./useLivePreview";
+import {
+  useMarketingPreviewHistory,
+  type MarketingPreviewHistoryTimelineEntry
+} from "./useMarketingPreviewHistory";
 import { BlockDiagnosticsPanel } from "./BlockDiagnosticsPanel";
 
 const formatDateTime = (timestamp: string) => {
@@ -141,6 +146,61 @@ const severityLabels: Record<MarketingPreviewTriageNoteSeverity, string> = {
   blocker: "Blocker"
 };
 
+const severityOptions: Array<{ label: string; value?: MarketingPreviewTriageNoteSeverity }> = [
+  { label: "All severities", value: undefined },
+  { label: severityLabels.info, value: "info" },
+  { label: severityLabels.warning, value: "warning" },
+  { label: severityLabels.blocker, value: "blocker" }
+];
+
+const variantOptions: Array<{ label: string; value?: "draft" | "published" }> = [
+  { label: "All variants", value: undefined },
+  { label: "Draft", value: "draft" },
+  { label: "Published", value: "published" }
+];
+
+const hasHistoryMetadata = (
+  entry: MarketingPreviewTimelineEntry
+): entry is MarketingPreviewHistoryTimelineEntry =>
+  Boolean((entry as MarketingPreviewHistoryTimelineEntry).aggregates);
+
+const ensureAggregates = (
+  entry: MarketingPreviewTimelineEntry
+): MarketingPreviewHistoryAggregates => {
+  if (hasHistoryMetadata(entry)) {
+    return entry.aggregates;
+  }
+
+  const totalRoutes = entry.routes.length;
+  let diffDetectedRoutes = 0;
+  let draftRoutes = 0;
+  let publishedRoutes = 0;
+
+  for (const route of entry.routes) {
+    if (route.diffDetected) {
+      diffDetectedRoutes += 1;
+    }
+    if (route.hasDraft) {
+      draftRoutes += 1;
+    }
+    if (route.hasPublished) {
+      publishedRoutes += 1;
+    }
+  }
+
+  return {
+    totalRoutes,
+    diffDetectedRoutes,
+    draftRoutes,
+    publishedRoutes
+  };
+};
+
+const getNoteSummary = (
+  entry: MarketingPreviewTimelineEntry
+): MarketingPreviewHistoryTimelineEntry["notes"] =>
+  hasHistoryMetadata(entry) ? entry.notes : undefined;
+
 const blockStatusStyles = {
   ok: "bg-emerald-500/20 text-emerald-100",
   warn: "bg-amber-500/20 text-amber-100",
@@ -236,6 +296,26 @@ type PreviewWorkbenchProps = {
 
 export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbenchProps) {
   const {
+    entries: persistedHistoryEntries,
+    total: historyTotal,
+    page: historyPage,
+    limit: historyLimit,
+    hasNextPage: historyHasNextPage,
+    isLoading: isHistoryLoading,
+    isFetching: isHistoryFetching,
+    isOffline: isHistoryOffline,
+    isUsingCache: historyUsingCache,
+    lastUpdatedAt: historyLastUpdatedAt,
+    error: historyError,
+    availableRoutes: historyAvailableRoutes,
+    filters: historyFilters,
+    setRouteFilter,
+    setSeverityFilter,
+    setVariantFilter,
+    nextPage: historyNextPage,
+    previousPage: historyPreviousPage
+  } = useMarketingPreviewHistory({ initialEntries: history });
+  const {
     timelineEntries,
     connectionState,
     validationQueue,
@@ -244,7 +324,7 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     routeDiagnostics,
     variants: variantCatalog,
     baselineVariantKey
-  } = useLivePreview({ current, history });
+  } = useLivePreview({ current, history: persistedHistoryEntries });
   const [selectedEntryId, setSelectedEntryId] = useState(timelineEntries[0]?.id ?? "");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
   const [localNotes, setLocalNotes] = useState<MarketingPreviewTriageNote[]>(notes);
@@ -274,8 +354,15 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     );
   }, [selectedEntryId, timelineEntries]);
 
+  const historyEntryLookup = useMemo(
+    () => new Map(persistedHistoryEntries.map((entry) => [entry.id, entry])),
+    [persistedHistoryEntries]
+  );
+
   const routeGroups = useMemo(() => buildRouteGroups(activeEntry ?? undefined), [activeEntry]);
-  const [selectedRoute, setSelectedRoute] = useState(routeGroups[0]?.route ?? "");
+  const [selectedRoute, setSelectedRoute] = useState(
+    historyFilters.route ?? routeGroups[0]?.route ?? ""
+  );
   const [selectedVariantKey, setSelectedVariantKey] = useState(baselineVariantKey);
 
   useEffect(() => {
@@ -284,12 +371,15 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
       return;
     }
     setSelectedRoute((currentRoute) => {
+      if (historyFilters.route && routeGroups.some((group) => group.route === historyFilters.route)) {
+        return historyFilters.route;
+      }
       if (routeGroups.some((group) => group.route === currentRoute)) {
         return currentRoute;
       }
       return routeGroups[0]?.route ?? "";
     });
-  }, [routeGroups]);
+  }, [historyFilters.route, routeGroups]);
 
   useEffect(() => {
     setViewMode("diff");
@@ -419,6 +509,9 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
 
   const changedRouteCount = activeEntry?.routes.filter((route) => route.diffDetected).length ?? 0;
   const totalRoutes = activeEntry?.routes.length ?? routeGroups.length;
+  const historyTotalPages = Math.max(1, Math.ceil(Math.max(historyTotal, 1) / historyLimit));
+  const isHistoryBusy = isHistoryLoading || isHistoryFetching;
+  const historyUpdatedLabel = historyLastUpdatedAt ? formatDateTime(historyLastUpdatedAt) : null;
 
   const handleSubmitNote = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -462,40 +555,189 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     <section className="grid gap-8 xl:grid-cols-[320px_1fr]">
       <aside className="space-y-6">
         <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur">
-          <p className="text-xs uppercase tracking-[0.3em] text-white/50">Timeline</p>
-          <p className="mt-1 text-sm text-white/70">
-            {timelineEntries.length} capture{timelineEntries.length === 1 ? "" : "s"} · {changedRouteCount}/
-            {totalRoutes} active diffs
-          </p>
-          <span
-            className={`mt-3 inline-flex items-center rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${connectionBadgeStyles[connectionState]}`}
-          >
-            {connectionBadgeLabels[connectionState]}
-          </span>
-          <div className="mt-4 flex flex-col gap-2">
-            {timelineEntries.map((entry, index) => {
-              const isActive = entry.id === activeEntry?.id;
-              const diffCount = entry.routes.filter((route) => route.diffDetected).length;
-              const key = entry.id ?? entry.generatedAt;
-              const label = index === 0 ? "Current capture" : formatDateTime(entry.generatedAt);
-              return (
+          <header className="space-y-2">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/50">Timeline</p>
+            <p className="text-sm text-white/70">
+              {timelineEntries.length} capture{timelineEntries.length === 1 ? "" : "s"} · {changedRouteCount}/
+              {totalRoutes} active diffs
+            </p>
+            <p className="text-[11px] text-white/50">
+              {historyTotal} persisted manifest{historyTotal === 1 ? "" : "s"} · page {historyPage + 1} of {historyTotalPages}
+            </p>
+            <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em]">
+              <span className={`inline-flex items-center rounded-full px-3 py-1 ${connectionBadgeStyles[connectionState]}`}>
+                {connectionBadgeLabels[connectionState]}
+              </span>
+              {historyUsingCache ? (
+                <span className="inline-flex items-center rounded-full bg-amber-500/20 px-3 py-1 text-amber-100">
+                  Offline cache
+                </span>
+              ) : null}
+              {isHistoryBusy ? (
+                <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-white/60">
+                  Refreshing…
+                </span>
+              ) : null}
+              {historyUpdatedLabel ? (
+                <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-white/60">
+                  Updated {historyUpdatedLabel}
+                </span>
+              ) : null}
+            </div>
+            {isHistoryOffline && !historyUsingCache ? (
+              <p className="text-xs text-amber-200">
+                Offline detected — cached captures are shown until the history API is reachable again.
+              </p>
+            ) : null}
+            {historyError ? (
+              <p className="text-xs text-rose-200">{historyError.message}</p>
+            ) : null}
+          </header>
+
+          <div className="mt-5 space-y-5">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Variants</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {variantOptions.map(({ value, label }) => {
+                  const isActive = value ? historyFilters.variant === value : !historyFilters.variant;
+                  return (
+                    <button
+                      key={value ?? "all"}
+                      type="button"
+                      onClick={() => setVariantFilter(isActive ? undefined : value)}
+                      className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
+                        isActive
+                          ? "border-white/40 bg-white/20 text-white"
+                          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Severity</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {severityOptions.map(({ value, label }) => {
+                  const isActive = value ? historyFilters.severity === value : !historyFilters.severity;
+                  return (
+                    <button
+                      key={value ?? "all"}
+                      type="button"
+                      onClick={() => setSeverityFilter(isActive ? undefined : value)}
+                      className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
+                        isActive
+                          ? "border-white/40 bg-white/20 text-white"
+                          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Routes</p>
+              <div className="mt-2 flex max-h-32 flex-wrap gap-2 overflow-y-auto pr-1">
                 <button
-                  key={key}
                   type="button"
-                  onClick={() => setSelectedEntryId(entry.id)}
-                  className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                    isActive
-                      ? "border-white/40 bg-white/20 text-white shadow-lg"
-                      : "border-white/10 bg-white/5 text-white/70 hover:border-white/20 hover:bg-white/10 hover:text-white"
+                  onClick={() => setRouteFilter(undefined)}
+                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
+                    historyFilters.route
+                      ? "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10 hover:text-white"
+                      : "border-white/40 bg-white/20 text-white"
                   }`}
                 >
-                  <p className="text-sm font-semibold">{label}</p>
-                  <p className="mt-1 text-xs text-white/60">
-                    {diffCount} diff{diffCount === 1 ? "" : "s"} · {entry.routes.length} routes
-                  </p>
+                  All routes
                 </button>
-              );
-            })}
+                {historyAvailableRoutes.map((route) => {
+                  const isActive = historyFilters.route === route;
+                  return (
+                    <button
+                      key={route}
+                      type="button"
+                      onClick={() => setRouteFilter(isActive ? undefined : route)}
+                      className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
+                        isActive
+                          ? "border-white/40 bg-white/20 text-white"
+                          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      {route}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex flex-col gap-2">
+                {timelineEntries.map((entry, index) => {
+                  const isActive = entry.id === activeEntry?.id;
+                  const metadata = historyEntryLookup.get(entry.id);
+                  const aggregates = metadata?.aggregates ?? ensureAggregates(entry);
+                  const noteSummary = metadata?.notes;
+                  const diffPercent = aggregates.totalRoutes
+                    ? Math.round((aggregates.diffDetectedRoutes / aggregates.totalRoutes) * 100)
+                    : 0;
+                  const key = entry.id ?? entry.generatedAt;
+                  const label = index === 0 ? "Current capture" : formatDateTime(entry.generatedAt);
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setSelectedEntryId(entry.id)}
+                      className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                        isActive
+                          ? "border-white/40 bg-white/20 text-white shadow-lg"
+                          : "border-white/10 bg-white/5 text-white/70 hover:border-white/20 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">{label}</p>
+                      <p className="mt-1 text-xs text-white/60">
+                        {diffPercent}% diff coverage · {aggregates.totalRoutes} routes · {noteSummary?.total ?? 0} notes
+                      </p>
+                      <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-white/10">
+                        <span
+                          className="h-full bg-rose-500/70"
+                          style={{ width: `${Math.min(Math.max(diffPercent, 0), 100)}%` }}
+                        />
+                        <span
+                          className="h-full bg-emerald-400/40"
+                          style={{ width: `${Math.max(100 - Math.min(Math.max(diffPercent, 0), 100), 0)}%` }}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex items-center justify-between text-xs text-white/60">
+                <button
+                  type="button"
+                  onClick={historyPreviousPage}
+                  disabled={historyPage === 0 || isHistoryBusy}
+                  className="rounded-full border border-white/10 px-3 py-1 uppercase tracking-[0.2em] transition disabled:opacity-40"
+                >
+                  Prev
+                </button>
+                <span>
+                  Page {historyPage + 1} of {historyTotalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={historyNextPage}
+                  disabled={!historyHasNextPage || isHistoryBusy}
+                  className="rounded-full border border-white/10 px-3 py-1 uppercase tracking-[0.2em] transition disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
