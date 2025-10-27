@@ -19,4 +19,6 @@ The workbench consumes `collectMarketingPreviewSnapshotTimeline` output, which i
 - `useLivePreview.ts` opens an SSE connection to `/api/marketing-preview/stream` and merges incoming payloads into the current timeline entry. When offline, the hook gracefully falls back to the last persisted snapshot.
 - The SSE handler verifies `PAYLOAD_LIVE_PREVIEW_SECRET`, normalizes Lexical content, renders markup with `MarketingSections`, and validates each block via `validateMarketingBlock`.
 - Live activity appears in the workbench header, per-route badges, and the validation feed. Editors can clear the feed after triage for a clean slate.
-- Per-block panels surface inline errors and warnings so marketing teams can adjust Payload documents without waiting for the next static snapshot.
+- Diagnostics are persisted per route through the live stream. `useLivePreview` maintains a rolling ledger that compares the latest diagnostics with the previous snapshot so regressions are obvious.
+- `BlockDiagnosticsPanel.tsx` renders the ledger summary, section-level warnings, and detailed block traces. Editors can copy Payload paths, inspect fallback provenance, or reprioritize fallbacks from the cockpit without leaving the workbench.
+- `/api/marketing-preview/fallbacks` accepts authenticated `reset` and `prioritize` actions, updating in-memory counters for governance monitoring while respecting the privacy requirement (no personal telemetry is stored).

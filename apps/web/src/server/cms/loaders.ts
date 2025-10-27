@@ -10,6 +10,7 @@ import {
   pageSchema,
   type BlogPostSummary,
   type CaseStudyDocument,
+  type MarketingContentDocument,
   type PageDocument,
   type PricingTierDocument,
   type TestimonialDocument
@@ -239,10 +240,13 @@ const normalizePayloadPage = (item: unknown) => {
 
       const blockTypeName = typeof blockType === "string" ? blockType : undefined;
       const sectionLabel = key ?? blockTypeName ?? "section";
-      const { nodes: marketingContent } = normalizeMarketingLexicalContent(blockRecord.content, {
+      const normalized = normalizeMarketingLexicalContent(blockRecord.content, {
         sectionLabel,
         logger: (message) => console.warn(message)
       });
+      const marketingContent = normalized.blocks
+        .map((block) => block.node as MarketingContentDocument | null)
+        .filter((block): block is MarketingContentDocument => Boolean(block));
 
       return {
         _type: "section" as const,

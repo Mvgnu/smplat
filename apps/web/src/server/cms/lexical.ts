@@ -18,9 +18,30 @@ type LexicalNode = {
 type NormalizedBlock = {
   blockType: string;
   fields: Record<string, unknown>;
+  lexicalKey?: string;
+  lexicalIndex: number;
+  warnings: string[];
+  supported: boolean;
 };
 
-type WarnFn = (message: string) => void;
+type WarnFn = (message: string) => string;
+
+export type NormalizeLexicalBlockTrace = {
+  blockType: string;
+  lexicalIndex: number;
+  lexicalKey?: string;
+  sectionLabel?: string;
+  provenance: "payload" | "fixture";
+  operations: string[];
+  warnings: string[];
+  normalized: boolean;
+  skipReason?: string;
+};
+
+export type NormalizedLexicalBlock = {
+  node: MarketingContent | null;
+  trace: NormalizeLexicalBlockTrace;
+};
 
 const hydrateField = (value: unknown, warn: WarnFn): unknown => {
   if (Array.isArray(value)) {
@@ -81,6 +102,7 @@ const collectSupportedBlocks = (
 
   type Pending = { node: unknown; depth: number };
   const pending: Pending[] = rootChildren.map((child) => ({ node: child, depth: 1 }));
+  let lexicalIndex = 0;
 
   while (pending.length > 0) {
     const { node, depth } = pending.pop()!;
@@ -97,23 +119,69 @@ const collectSupportedBlocks = (
 
     if (lexicalNode.type === "block") {
       const fields = lexicalNode.fields;
-      if (!fields || typeof fields !== "object") {
-        warn("Encountered block node without fields in lexical payload.");
-      } else {
-        const blockType = toStringOrUndefined((fields as Record<string, unknown>).blockType);
-        if (!blockType) {
-          warn("Encountered block node without a blockType in lexical payload.");
-        } else if (!MARKETING_BLOCK_TYPES.has(blockType)) {
-          if (!unsupportedTypes.has(blockType)) {
-            unsupportedTypes.add(blockType);
-            warn(`Unsupported marketing block type "${blockType}" will be ignored.`);
-          }
-        } else {
-          blocks.push({
-            blockType,
-            fields: fields as Record<string, unknown>
-          });
+      const blockWarnings: string[] = [];
+      const appendWarning = (message: string) => {
+        const formatted = warn(message);
+        blockWarnings.push(formatted);
+        return formatted;
+      };
+
+      const rawFields = fields && typeof fields === "object" ? (fields as Record<string, unknown>) : undefined;
+      const blockType = rawFields ? toStringOrUndefined(rawFields.blockType) : undefined;
+      const lexicalKey = rawFields
+        ? toStringOrUndefined(rawFields.id) ?? toStringOrUndefined(rawFields.key)
+        : undefined;
+
+      if (!rawFields) {
+        appendWarning("Encountered block node without fields in lexical payload.");
+        const currentIndex = lexicalIndex;
+        lexicalIndex += 1;
+        blocks.push({
+          blockType: blockType ?? "unknown",
+          fields: {},
+          lexicalKey,
+          lexicalIndex: currentIndex,
+          warnings: blockWarnings,
+          supported: false
+        });
+      } else if (!blockType) {
+        appendWarning("Encountered block node without a blockType in lexical payload.");
+        const currentIndex = lexicalIndex;
+        lexicalIndex += 1;
+        blocks.push({
+          blockType: "unknown",
+          fields: rawFields,
+          lexicalKey,
+          lexicalIndex: currentIndex,
+          warnings: blockWarnings,
+          supported: false
+        });
+      } else if (!MARKETING_BLOCK_TYPES.has(blockType)) {
+        if (!unsupportedTypes.has(blockType)) {
+          unsupportedTypes.add(blockType);
+          appendWarning(`Unsupported marketing block type "${blockType}" will be ignored.`);
         }
+        const currentIndex = lexicalIndex;
+        lexicalIndex += 1;
+        blocks.push({
+          blockType,
+          fields: rawFields,
+          lexicalKey,
+          lexicalIndex: currentIndex,
+          warnings: blockWarnings,
+          supported: false
+        });
+      } else {
+        const currentIndex = lexicalIndex;
+        lexicalIndex += 1;
+        blocks.push({
+          blockType,
+          fields: rawFields,
+          lexicalKey,
+          lexicalIndex: currentIndex,
+          warnings: blockWarnings,
+          supported: true
+        });
       }
     }
 
@@ -148,7 +216,7 @@ export type NormalizeLexicalOptions = {
 };
 
 export type NormalizeLexicalResult = {
-  nodes: MarketingContent[];
+  blocks: NormalizedLexicalBlock[];
   warnings: string[];
 };
 
@@ -165,18 +233,46 @@ export const normalizeMarketingLexicalContent = (
     if (typeof options.logger === "function") {
       options.logger(formatted);
     }
+    return formatted;
   };
 
   if (!isLexicalEditorState(value)) {
     emitWarning(`Lexical content for ${contextLabel} is not a valid editor state.`);
-    return { nodes: [], warnings };
+    return { blocks: [], warnings };
   }
 
   const supportedBlocks = collectSupportedBlocks(value, emitWarning, maxDepth);
-  const nodes: MarketingContent[] = [];
+  const normalizedBlocks: NormalizedLexicalBlock[] = [];
 
   for (const block of supportedBlocks) {
-    const hydratedFields = toHydratedFields(block.fields, emitWarning);
+    const trace: NormalizeLexicalBlockTrace = {
+      blockType: block.blockType,
+      lexicalIndex: block.lexicalIndex,
+      lexicalKey: block.lexicalKey,
+      sectionLabel: options.sectionLabel,
+      provenance: options.sectionLabel?.toLowerCase().includes("fixture") ? "fixture" : "payload",
+      operations: [],
+      warnings: [...block.warnings],
+      normalized: false
+    };
+
+    if (!block.supported) {
+      trace.skipReason =
+        trace.warnings.at(-1) ??
+        `Lexical block "${block.blockType}" in ${contextLabel} was not supported by the normalizer.`;
+      normalizedBlocks.push({ node: null, trace });
+      continue;
+    }
+
+    const captureWarning: WarnFn = (message) => {
+      const formatted = emitWarning(message);
+      if (!trace.warnings.includes(formatted)) {
+        trace.warnings.push(formatted);
+      }
+      return formatted;
+    };
+
+    const hydratedFields = toHydratedFields(block.fields, captureWarning);
 
     if (block.blockType === "marketing-testimonial") {
       if (!toStringOrUndefined(hydratedFields.quote) && hydratedFields.testimonial) {
@@ -186,40 +282,53 @@ export const normalizeMarketingLexicalContent = (
           const referencedQuote = toStringOrUndefined(record.quote);
           if (referencedQuote) {
             hydratedFields.quote = referencedQuote;
+            trace.operations.push("hydrated testimonial quote from referenced document");
           }
           if (!toStringOrUndefined(hydratedFields.author)) {
             hydratedFields.author = toStringOrUndefined(record.author);
+            trace.operations.push("hydrated testimonial author from referenced document");
           }
           if (!toStringOrUndefined(hydratedFields.role)) {
             hydratedFields.role = toStringOrUndefined(record.role);
+            trace.operations.push("hydrated testimonial role from referenced document");
           }
           if (!toStringOrUndefined(hydratedFields.company)) {
             hydratedFields.company = toStringOrUndefined(record.company);
+            trace.operations.push("hydrated testimonial company from referenced document");
           }
         } else {
-          emitWarning(`Testimonial relationship in ${contextLabel} did not provide a populated document.`);
+          trace.skipReason = `Testimonial relationship in ${contextLabel} did not provide a populated document.`;
+          captureWarning(trace.skipReason);
+          normalizedBlocks.push({ node: null, trace });
+          continue;
         }
       }
 
       const quote = toStringOrUndefined(hydratedFields.quote);
       if (!quote) {
-        emitWarning(`Testimonial block in ${contextLabel} is missing a quote and was skipped.`);
+        trace.skipReason = `Testimonial block in ${contextLabel} is missing a quote and was skipped.`;
+        captureWarning(trace.skipReason);
+        normalizedBlocks.push({ node: null, trace });
         continue;
       }
     }
 
     if (block.blockType === "marketing-metrics" && !hasValidMetric(hydratedFields.metrics)) {
-      emitWarning(`Metrics block in ${contextLabel} does not include any valid metric entries.`);
+      trace.operations.push("metrics fallback recommended due to invalid metric entries");
+      captureWarning(`Metrics block in ${contextLabel} does not include any valid metric entries.`);
     }
 
     const content = createMarketingContentFromBlock(block.blockType, hydratedFields);
     if (!content) {
-      emitWarning(`Marketing block "${block.blockType}" in ${contextLabel} could not be normalized and was skipped.`);
+      trace.skipReason = `Marketing block "${block.blockType}" in ${contextLabel} could not be normalized and was skipped.`;
+      captureWarning(trace.skipReason);
+      normalizedBlocks.push({ node: null, trace });
       continue;
     }
 
-    nodes.push(content);
+    trace.normalized = true;
+    normalizedBlocks.push({ node: content, trace });
   }
 
-  return { nodes, warnings };
+  return { blocks: normalizedBlocks, warnings };
 };

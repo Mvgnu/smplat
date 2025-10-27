@@ -31,7 +31,7 @@ describe("normalizeMarketingLexicalContent", () => {
 
     const result = normalizeMarketingLexicalContent(state, { sectionLabel: "hero" });
     expect(result.warnings).toHaveLength(0);
-    expect(result.nodes).toEqual([
+    expect(result.blocks.map((block) => block.node)).toEqual([
       expect.objectContaining({
         kind: "hero",
         headline: "Welcome",
@@ -52,7 +52,7 @@ describe("normalizeMarketingLexicalContent", () => {
     ]);
 
     const result = normalizeMarketingLexicalContent(state, { sectionLabel: "unsupported" });
-    expect(result.nodes).toHaveLength(0);
+    expect(result.blocks.filter((block) => block.node)).toHaveLength(0);
     expect(result.warnings.some((message) => message.includes("Unsupported marketing block type \"custom-block\""))).toBe(
       true
     );
@@ -78,7 +78,7 @@ describe("normalizeMarketingLexicalContent", () => {
 
     const result = normalizeMarketingLexicalContent(state, { sectionLabel: "testimonial" });
     expect(result.warnings).toHaveLength(0);
-    expect(result.nodes).toEqual([
+    expect(result.blocks.map((block) => block.node)).toEqual([
       expect.objectContaining({
         kind: "testimonial",
         quote: "This platform is outstanding.",
@@ -90,7 +90,7 @@ describe("normalizeMarketingLexicalContent", () => {
 
   it("warns when lexical state is invalid", () => {
     const result = normalizeMarketingLexicalContent(null, { sectionLabel: "invalid" });
-    expect(result.nodes).toHaveLength(0);
+    expect(result.blocks).toHaveLength(0);
     expect(result.warnings.some((message) => message.includes("not a valid editor state"))).toBe(true);
   });
 });

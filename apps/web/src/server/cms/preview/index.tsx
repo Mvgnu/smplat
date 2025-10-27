@@ -128,12 +128,14 @@ const ensureLexicalState = (state?: LexicalEditorState): LexicalEditorState => {
 };
 
 const createFixtureSection = (state: LexicalEditorState, label: string): NonNullable<PageDocument["content"]>[number] => {
-  const { nodes } = normalizeMarketingLexicalContent(state, {
+  const normalized = normalizeMarketingLexicalContent(state, {
     sectionLabel: label,
     logger: () => {}
   });
 
-  const marketingContent = nodes as MarketingContentDocument[];
+  const marketingContent = normalized.blocks
+    .map((block) => block.node as MarketingContentDocument | null)
+    .filter((block): block is MarketingContentDocument => Boolean(block));
 
   return {
     _type: "section",

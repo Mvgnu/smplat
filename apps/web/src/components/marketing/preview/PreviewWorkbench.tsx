@@ -19,6 +19,7 @@ import {
   type LivePreviewConnectionState,
   type LiveValidationEntry
 } from "./useLivePreview";
+import { BlockDiagnosticsPanel } from "./BlockDiagnosticsPanel";
 
 const formatDateTime = (timestamp: string) => {
   const date = new Date(timestamp);
@@ -206,8 +207,14 @@ type PreviewWorkbenchProps = {
 };
 
 export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbenchProps) {
-  const { timelineEntries, connectionState, validationQueue, clearValidationQueue, routeValidation } =
-    useLivePreview({ current, history });
+  const {
+    timelineEntries,
+    connectionState,
+    validationQueue,
+    clearValidationQueue,
+    routeValidation,
+    routeDiagnostics
+  } = useLivePreview({ current, history });
   const [selectedEntryId, setSelectedEntryId] = useState(timelineEntries[0]?.id ?? "");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
   const [localNotes, setLocalNotes] = useState<MarketingPreviewTriageNote[]>(notes);
@@ -272,6 +279,9 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
   const hasDifferences = diffLines.some((line) => line.kind !== "same");
   const snapshotForView = viewMode === "draft" ? activeGroup?.draft : activeGroup?.published;
   const activeValidation = activeGroup ? routeValidation[activeGroup.route] : undefined;
+  const diagnosticsLedger = activeGroup ? routeDiagnostics[activeGroup.route] : undefined;
+  const activeDiagnostics = diagnosticsLedger?.latest;
+  const diagnosticsHistory = diagnosticsLedger?.history ?? [];
   const activeValidationBadge = determineValidationBadge(connectionState, activeValidation);
 
   const noteCounts = useMemo(() => {
@@ -581,6 +591,25 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                               ))}
                             </ul>
                           ) : null}
+                          {block.recoveryHints.length > 0 ? (
+                            <ul className="mt-2 space-y-1 text-xs text-sky-100">
+                              {block.recoveryHints.map((hint, hintIndex) => (
+                                <li key={`${activeValidation.id}-${blockKey}-hint-${hintIndex}`}>• {hint}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          {block.trace.operations.length > 0 ? (
+                            <ul className="mt-2 space-y-1 text-[10px] text-white/50">
+                              {block.trace.operations.map((operation, operationIndex) => (
+                                <li key={`${activeValidation.id}-${blockKey}-operation-${operationIndex}`}>{operation}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-white/50">
+                            <span>Trace {block.trace.lexicalIndex}</span>
+                            {block.fallback?.used ? <span>Fallback used</span> : null}
+                            {block.trace.skipReason ? <span>Skipped</span> : null}
+                          </div>
                         </div>
                       );
                     })}
@@ -592,6 +621,15 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                 Live stream offline — displaying the last persisted snapshot. Resume Payload publishing to
                 restore real-time validation.
               </section>
+            ) : null}
+
+            {activeGroup ? (
+              <BlockDiagnosticsPanel
+                route={activeGroup.route}
+                entry={activeDiagnostics}
+                history={diagnosticsHistory}
+                validation={activeValidation}
+              />
             ) : null}
 
             {viewMode === "diff" ? (
