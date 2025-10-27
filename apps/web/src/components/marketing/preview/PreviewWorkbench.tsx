@@ -159,6 +159,12 @@ const variantOptions: Array<{ label: string; value?: "draft" | "published" }> = 
   { label: "Published", value: "published" }
 ];
 
+const actionModeOptions: Array<{ label: string; value?: "live" | "rehearsal" | "all" }> = [
+  { label: "All actions", value: "all" },
+  { label: "Live fallbacks", value: "live" },
+  { label: "Rehearsals", value: "rehearsal" }
+];
+
 const hasHistoryMetadata = (
   entry: MarketingPreviewTimelineEntry
 ): entry is MarketingPreviewHistoryTimelineEntry =>
@@ -418,6 +424,7 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     setRouteFilter,
     setSeverityFilter,
     setVariantFilter,
+    setActionModeFilter,
     nextPage: historyNextPage,
     previousPage: historyPreviousPage,
     analytics: historyAnalytics
@@ -788,6 +795,31 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
             </div>
 
             <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Action mode</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {actionModeOptions.map(({ value, label }) => {
+                  const normalizedValue = value ?? "all";
+                  const activeValue = historyFilters.mode ?? "all";
+                  const isActive = normalizedValue === activeValue;
+                  return (
+                    <button
+                      key={normalizedValue}
+                      type="button"
+                      onClick={() => setActionModeFilter(isActive ? "all" : normalizedValue)}
+                      className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
+                        isActive
+                          ? "border-white/40 bg-white/20 text-white"
+                          : "border-white/10 bg-white/5 text-white/60 hover:border-white/20 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
               <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Severity</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {severityOptions.map(({ value, label }) => {
@@ -851,6 +883,8 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                   const metadata = historyEntryLookup.get(entry.id);
                   const aggregates = metadata?.aggregates ?? ensureAggregates(entry);
                   const noteSummary = metadata?.notes;
+                  const rehearsalCount = metadata?.rehearsals?.length ?? 0;
+                  const remediationCount = metadata?.remediations?.length ?? 0;
                   const diffPercent = aggregates.totalRoutes
                     ? Math.round((aggregates.diffDetectedRoutes / aggregates.totalRoutes) * 100)
                     : 0;
@@ -871,6 +905,20 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                       <p className="mt-1 text-xs text-white/60">
                         {diffPercent}% diff coverage · {aggregates.totalRoutes} routes · {noteSummary?.total ?? 0} notes
                       </p>
+                      {(rehearsalCount > 0 || remediationCount > 0) && (
+                        <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.2em] text-white/60">
+                          {rehearsalCount > 0 ? (
+                            <span className="inline-flex items-center gap-2 rounded-full bg-sky-500/20 px-3 py-1 text-sky-100">
+                              Rehearsals {rehearsalCount}
+                            </span>
+                          ) : null}
+                          {remediationCount > 0 ? (
+                            <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/20 px-3 py-1 text-emerald-100">
+                              Live fallbacks {remediationCount}
+                            </span>
+                          ) : null}
+                        </div>
+                      )}
                       <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-white/10">
                         <span
                           className="h-full bg-rose-500/70"

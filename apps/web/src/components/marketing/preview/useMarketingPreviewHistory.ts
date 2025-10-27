@@ -16,6 +16,7 @@ import type {
   MarketingPreviewRecommendation,
   MarketingPreviewRegressionVelocity,
   MarketingPreviewRemediationActionRecord,
+  MarketingPreviewRehearsalActionRecord,
   MarketingPreviewSeverityMomentum,
   MarketingPreviewTimeToGreenForecast
 } from "@/server/cms/history";
@@ -39,6 +40,7 @@ export type MarketingPreviewHistoryTimelineEntry = MarketingPreviewTimelineEntry
   notes?: MarketingPreviewHistoryNoteSummary;
   liveDeltas: MarketingPreviewLiveDeltaRecord[];
   remediations: MarketingPreviewRemediationActionRecord[];
+  rehearsals: MarketingPreviewRehearsalActionRecord[];
   noteRevisions: MarketingPreviewNoteRevisionRecord[];
 };
 
@@ -60,6 +62,7 @@ type HistoryFilters = {
   route?: string;
   variant?: "draft" | "published";
   severity?: MarketingPreviewTriageNoteSeverity;
+  mode?: "live" | "rehearsal" | "all";
 };
 
 const defaultGovernance: MarketingPreviewGovernanceStats = {
@@ -131,6 +134,7 @@ const convertHistoryEntry = (
   notes: coerceNoteSummary(entry.notes),
   liveDeltas: entry.liveDeltas ?? [],
   remediations: entry.remediations ?? [],
+  rehearsals: entry.rehearsals ?? [],
   noteRevisions: entry.noteRevisions ?? []
 });
 
@@ -172,6 +176,7 @@ const hydrateInitialEntries = (
     notes: undefined,
     liveDeltas: [],
     remediations: [],
+    rehearsals: [],
     noteRevisions: []
   }));
 
@@ -210,6 +215,7 @@ const paramsEqual = (a: HistoryCacheParams, b: HistoryCacheParams) =>
   a.offset === b.offset &&
   a.route === b.route &&
   a.variant === b.variant &&
+  a.actionMode === b.actionMode &&
   a.severity === b.severity;
 
 const HOURS_IN_MS = 60 * 60 * 1000;
@@ -430,6 +436,7 @@ type UseMarketingPreviewHistoryResult = {
   setRouteFilter: (route?: string) => void;
   setSeverityFilter: (severity?: MarketingPreviewTriageNoteSeverity) => void;
   setVariantFilter: (variant?: "draft" | "published") => void;
+  setActionModeFilter: (mode?: "live" | "rehearsal" | "all") => void;
   nextPage: () => void;
   previousPage: () => void;
   resetPagination: () => void;
@@ -453,9 +460,10 @@ export const useMarketingPreviewHistory = ({
       offset: page * initialLimit,
       route: filters.route,
       variant: filters.variant,
+      actionMode: filters.mode && filters.mode !== "all" ? filters.mode : undefined,
       severity: filters.severity
     }),
-    [filters.route, filters.severity, filters.variant, initialLimit, page]
+    [filters.mode, filters.route, filters.severity, filters.variant, initialLimit, page]
   );
 
   useEffect(() => {
@@ -592,6 +600,13 @@ export const useMarketingPreviewHistory = ({
     [updateFilters]
   );
 
+  const setActionModeFilter = useCallback(
+    (mode?: "live" | "rehearsal" | "all") => {
+      updateFilters((previous) => ({ ...previous, mode: mode === "all" ? undefined : mode }));
+    },
+    [updateFilters]
+  );
+
   const nextPage = useCallback(() => {
     setPage((current) => (hasNextPage ? current + 1 : current));
   }, [hasNextPage]);
@@ -621,6 +636,7 @@ export const useMarketingPreviewHistory = ({
     setRouteFilter,
     setSeverityFilter,
     setVariantFilter,
+    setActionModeFilter,
     nextPage,
     previousPage,
     resetPagination,

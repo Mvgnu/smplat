@@ -38,7 +38,8 @@ export WEB_URL="https://marketing.example.com"
   - `route=/landing` restricts results to manifests containing the route (matching via both clear text and the stored route hash).
   - `variant=draft|published` narrows history to manifests with the requested preview state available.
   - `severity=info|warning|blocker` cross-references triage notes to return entries with matching note counts.
-- Responses include aggregate counts (`aggregates.totalRoutes`, `aggregates.diffDetectedRoutes`) plus governance summaries (`governance.totalActions`, `governance.actionsByKind`) for cockpit dashboards. Note summaries (`notes.total`, `notes.severityCounts`) are derived from triage notes so workbench timelines can prioritise high-risk retrospectives. The payload also surfaces `liveDeltas`, `remediations`, and `noteRevisions` arrays so cockpit retrospectives can reconstruct intra-manifest activity without rehydrating the SSE stream or fallback endpoints.
+  - `actionMode=live|rehearsal` isolates live fallback executions versus rehearsal simulations so cockpit operators can focus on the appropriate ledger.
+- Responses include aggregate counts (`aggregates.totalRoutes`, `aggregates.diffDetectedRoutes`) plus governance summaries (`governance.totalActions`, `governance.actionsByKind`) for cockpit dashboards. Note summaries (`notes.total`, `notes.severityCounts`) are derived from triage notes so workbench timelines can prioritise high-risk retrospectives. The payload also surfaces `liveDeltas`, `remediations`, `rehearsals`, and `noteRevisions` arrays so cockpit retrospectives can reconstruct intra-manifest activity without rehydrating the SSE stream or fallback endpoints.
 - Every response now carries an `analytics` object that powers predictive diagnostics in the cockpit:
   - `regressionVelocity` reports average/current diff drift per hour with confidence weighting.
   - `severityMomentum` tracks rate-of-change for info/warning/blocker notes to forecast operator load.
@@ -58,6 +59,8 @@ export WEB_URL="https://marketing.example.com"
 ### Governance ledger API
 
 - `POST /api/marketing-preview/history/governance` records actions such as approvals or resets. Requests must include `x-preview-signature: ${PAYLOAD_LIVE_PREVIEW_SECRET}`; unauthenticated calls are rejected.
+- `POST /api/marketing-preview/fallbacks/simulate` records a rehearsal scenario (`scenarioFingerprint`, `expectedDeltas`, optional `manifestGeneratedAt` and `operatorId`), stores the hashed operator identifier, and responds with the delta between expected and live remediation counts. Use this endpoint to dry-run fallback playbooks without polluting live remediations.
+- `GET /api/marketing-preview/fallbacks/rehearsals/:id` returns a persisted rehearsal record plus the latest live remediation comparison so cockpit surfaces can badge simulations alongside production recoveries.
 - Payload shape:
 
   ```jsonc
@@ -124,3 +127,4 @@ Document successful validation by appending the date, Payload environment URL, a
 
 - 2025-01-15 — Added automated preview/webhook validation harness (`pnpm payload:validate`).
 - 2025-10-27 — Persist live preview deltas, fallback remediation attempts, and triage note revisions alongside manifests; bumped offline cache schema to v2 for delta-aware replay.
+- 2026-02-14 — Added rehearsal action persistence, history `actionMode` filtering, and rehearsal simulation APIs for governance dry-runs.

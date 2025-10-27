@@ -135,6 +135,19 @@ const historyEntrySchema = z.object({
       })
     )
     .default([]),
+  rehearsals: z
+    .array(
+      z.object({
+        id: z.string(),
+        manifestGeneratedAt: z.string().nullish(),
+        scenarioFingerprint: z.string(),
+        expectedDeltas: z.number(),
+        operatorHash: z.string().nullish(),
+        payloadHash: z.string(),
+        recordedAt: z.string()
+      })
+    )
+    .default([]),
   noteRevisions: z
     .array(
       z.object({
@@ -218,6 +231,9 @@ const buildQuery = (params: MarketingPreviewHistoryClientParams) => {
   }
   if (params.variant) {
     search.set("variant", params.variant);
+  }
+  if (params.actionMode) {
+    search.set("actionMode", params.actionMode);
   }
   if (params.severity) {
     search.set("severity", params.severity);

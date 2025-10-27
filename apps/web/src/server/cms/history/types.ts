@@ -64,6 +64,16 @@ export type MarketingPreviewRemediationActionRecord = {
   payloadHash: string;
 };
 
+export type MarketingPreviewRehearsalActionRecord = {
+  id: string;
+  manifestGeneratedAt?: string | null;
+  scenarioFingerprint: string;
+  expectedDeltas: number;
+  operatorHash?: string | null;
+  payloadHash: string;
+  recordedAt: string;
+};
+
 export type MarketingPreviewNoteRevisionRecord = {
   id: string;
   noteId: string;
@@ -81,6 +91,7 @@ export type MarketingPreviewHistoryQuery = {
   offset?: number;
   route?: string;
   variant?: "draft" | "published";
+  actionMode?: "live" | "rehearsal" | "all";
 };
 
 export type MarketingPreviewHistoryRouteRecord = {
@@ -161,6 +172,7 @@ export type MarketingPreviewHistoryEntry = {
   notes?: MarketingPreviewHistoryNoteSummary;
   liveDeltas: MarketingPreviewLiveDeltaRecord[];
   remediations: MarketingPreviewRemediationActionRecord[];
+  rehearsals: MarketingPreviewRehearsalActionRecord[];
   noteRevisions: MarketingPreviewNoteRevisionRecord[];
 };
 

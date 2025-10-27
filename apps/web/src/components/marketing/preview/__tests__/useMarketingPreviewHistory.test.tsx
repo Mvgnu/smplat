@@ -109,6 +109,7 @@ describe("useMarketingPreviewHistory", () => {
           },
           liveDeltas: [],
           remediations: [],
+          rehearsals: [],
           noteRevisions: []
         },
         {
@@ -147,6 +148,7 @@ describe("useMarketingPreviewHistory", () => {
           },
           liveDeltas: [],
           remediations: [],
+          rehearsals: [],
           noteRevisions: []
         }
       ],
@@ -224,6 +226,7 @@ describe("useMarketingPreviewHistory", () => {
       },
       liveDeltas: [],
       remediations: [],
+      rehearsals: [],
       noteRevisions: []
     };
 
@@ -331,6 +334,7 @@ describe("useMarketingPreviewHistory", () => {
           },
           liveDeltas: [],
           remediations: [],
+          rehearsals: [],
           noteRevisions: []
         }
       ],
@@ -387,5 +391,116 @@ describe("useMarketingPreviewHistory", () => {
       expect.stringContaining("route=marketing%2Fhome"),
       expect.objectContaining({ method: "GET" })
     );
+  });
+
+  test("toggles rehearsal action mode filter", async () => {
+    const responsePayload = {
+      total: 1,
+      limit: 10,
+      offset: 0,
+      entries: [
+        {
+          id: "persisted-rehearsal",
+          generatedAt: "2024-05-03T00:00:00.000Z",
+          label: "Rehearsal",
+          manifest: {
+            generatedAt: "2024-05-03T00:00:00.000Z",
+            snapshots: [createSnapshot()]
+          },
+          routes: [
+            {
+              route: "marketing/home",
+              routeHash: "ghi789",
+              diffDetected: false,
+              hasDraft: true,
+              hasPublished: true,
+              sectionCount: 1,
+              blockKinds: ["hero"]
+            }
+          ],
+          aggregates: {
+            totalRoutes: 1,
+            diffDetectedRoutes: 0,
+            draftRoutes: 1,
+            publishedRoutes: 1
+          },
+          governance: {
+            totalActions: 0,
+            actionsByKind: {},
+            lastActionAt: null
+          },
+          notes: {
+            total: 0,
+            severityCounts: { info: 0, warning: 0, blocker: 0 }
+          },
+          liveDeltas: [],
+          remediations: [],
+          rehearsals: [
+            {
+              id: "reh-1",
+              manifestGeneratedAt: "2024-05-03T00:00:00.000Z",
+              scenarioFingerprint: "scenario::1",
+              expectedDeltas: 2,
+              operatorHash: "hash",
+              payloadHash: "payload::hash",
+              recordedAt: "2024-05-03T00:01:00.000Z"
+            }
+          ],
+          noteRevisions: []
+        }
+      ],
+      analytics: {
+        regressionVelocity: {
+          averagePerHour: 0,
+          currentPerHour: 0,
+          sampleSize: 1,
+          confidence: 0
+        },
+        severityMomentum: {
+          info: 0,
+          warning: 0,
+          blocker: 0,
+          overall: 0,
+          sampleSize: 1
+        },
+        timeToGreen: {
+          forecastAt: null,
+          forecastHours: null,
+          slopePerHour: null,
+          confidence: 0,
+          sampleSize: 1
+        },
+        recommendations: []
+      }
+    };
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => responsePayload
+    } as Response);
+    global.fetch = fetchMock;
+
+    const { result } = renderHook(
+      () => useMarketingPreviewHistory({ initialEntries: [initialTimelineEntry] }),
+      { wrapper: createWrapper() }
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      result.current.setActionModeFilter("rehearsal");
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("actionMode=rehearsal"),
+      expect.objectContaining({ method: "GET" })
+    ));
+
+    act(() => {
+      result.current.setActionModeFilter("all");
+    });
+
+    await waitFor(() => expect(result.current.filters.mode).toBeUndefined());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

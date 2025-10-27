@@ -18,7 +18,8 @@ import type {
   MarketingPreviewLiveDeltaPayload,
   MarketingPreviewLiveDeltaRecord,
   MarketingPreviewNoteRevisionRecord,
-  MarketingPreviewRemediationActionRecord
+  MarketingPreviewRemediationActionRecord,
+  MarketingPreviewRehearsalActionRecord
 } from "./types";
 
 const DATABASE_FILE = path.resolve(
@@ -98,6 +99,16 @@ const openDatabase = (): Database => {
       recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS rehearsal_actions (
+      id TEXT PRIMARY KEY,
+      manifest_generated_at TEXT,
+      scenario_fingerprint TEXT NOT NULL,
+      expected_deltas INTEGER NOT NULL,
+      operator_hash TEXT,
+      payload_hash TEXT NOT NULL UNIQUE,
+      recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS note_revisions (
       id TEXT PRIMARY KEY,
       note_id TEXT NOT NULL,
@@ -115,6 +126,7 @@ const openDatabase = (): Database => {
     CREATE INDEX IF NOT EXISTS idx_governance_actions_manifest ON governance_actions(manifest_id);
     CREATE INDEX IF NOT EXISTS idx_live_deltas_manifest_generated_at ON live_preview_deltas(manifest_generated_at);
     CREATE INDEX IF NOT EXISTS idx_remediation_actions_manifest_generated_at ON remediation_actions(manifest_generated_at);
+    CREATE INDEX IF NOT EXISTS idx_rehearsal_actions_manifest_generated_at ON rehearsal_actions(manifest_generated_at);
     CREATE INDEX IF NOT EXISTS idx_note_revisions_manifest_generated_at ON note_revisions(manifest_generated_at);
   `);
 
@@ -168,6 +180,14 @@ type RecordRemediationActionInput = {
   collection?: string | null;
   docId?: string | null;
   occurredAt?: string;
+};
+
+type RecordRehearsalActionInput = {
+  manifestGeneratedAt?: string | null;
+  scenarioFingerprint: string;
+  expectedDeltas: number;
+  operatorId?: string | null;
+  recordedAt?: string;
 };
 
 type RecordNoteRevisionInput = {
@@ -238,6 +258,10 @@ export const persistSnapshotManifest = (
     DELETE FROM remediation_actions WHERE manifest_generated_at = ?;
   `);
 
+  const deleteRehearsalActions = database.prepare(`
+    DELETE FROM rehearsal_actions WHERE manifest_generated_at = ?;
+  `);
+
   const deleteNoteRevisions = database.prepare(`
     DELETE FROM note_revisions WHERE manifest_generated_at = ?;
   `);
@@ -278,6 +302,7 @@ export const persistSnapshotManifest = (
       deleteManifest.run(row.id);
       deleteLiveDeltas.run(row.generated_at);
       deleteRemediationActions.run(row.generated_at);
+      deleteRehearsalActions.run(row.generated_at);
       deleteNoteRevisions.run(row.generated_at);
     }
   })();
@@ -405,6 +430,78 @@ export const recordRemediationAction = (input: RecordRemediationActionInput) => 
     payload_hash: payloadHash,
     recorded_at: occurredAt
   });
+};
+
+export const recordRehearsalAction = (input: RecordRehearsalActionInput) => {
+  const database = openDatabase();
+  const operatorHash = input.operatorId ? hash(input.operatorId) : null;
+  const payloadSeed = {
+    manifestGeneratedAt: input.manifestGeneratedAt ?? null,
+    scenarioFingerprint: input.scenarioFingerprint,
+    expectedDeltas: input.expectedDeltas,
+    operatorHash
+  };
+  const payloadHash = hash(encodeJson(payloadSeed, "rehearsal payload seed"));
+  const recordedAt = input.recordedAt ?? new Date().toISOString();
+
+  const insert = database.prepare(`
+    INSERT INTO rehearsal_actions (
+      id,
+      manifest_generated_at,
+      scenario_fingerprint,
+      expected_deltas,
+      operator_hash,
+      payload_hash,
+      recorded_at
+    )
+    VALUES (@id, @manifest_generated_at, @scenario_fingerprint, @expected_deltas, @operator_hash, @payload_hash, @recorded_at)
+    ON CONFLICT(payload_hash) DO NOTHING;
+  `);
+
+  insert.run({
+    id: crypto.randomUUID(),
+    manifest_generated_at: input.manifestGeneratedAt ?? null,
+    scenario_fingerprint: input.scenarioFingerprint,
+    expected_deltas: input.expectedDeltas,
+    operator_hash: operatorHash,
+    payload_hash: payloadHash,
+    recorded_at: recordedAt
+  });
+};
+
+export const getRehearsalAction = (id: string): MarketingPreviewRehearsalActionRecord | null => {
+  const database = openDatabase();
+  const row = database
+    .prepare<unknown[]>(
+      `SELECT id, manifest_generated_at, scenario_fingerprint, expected_deltas, operator_hash, payload_hash, recorded_at
+       FROM rehearsal_actions
+       WHERE id = ?`
+    )
+    .get(id) as
+    | {
+        id: string;
+        manifest_generated_at: string | null;
+        scenario_fingerprint: string;
+        expected_deltas: number;
+        operator_hash: string | null;
+        payload_hash: string;
+        recorded_at: string;
+      }
+    | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    manifestGeneratedAt: row.manifest_generated_at,
+    scenarioFingerprint: row.scenario_fingerprint,
+    expectedDeltas: row.expected_deltas,
+    operatorHash: row.operator_hash,
+    payloadHash: row.payload_hash,
+    recordedAt: row.recorded_at
+  };
 };
 
 export const recordNoteRevision = (input: RecordNoteRevisionInput) => {
@@ -599,6 +696,42 @@ const fetchRemediationActions = (
   }));
 };
 
+const fetchRehearsalActions = (
+  manifestGeneratedAt: string,
+  database: Database
+): MarketingPreviewRehearsalActionRecord[] => {
+  if (!manifestGeneratedAt) {
+    return [];
+  }
+
+  const rows = database
+    .prepare<unknown[]>(
+      `SELECT id, manifest_generated_at, scenario_fingerprint, expected_deltas, operator_hash, payload_hash, recorded_at
+       FROM rehearsal_actions
+       WHERE manifest_generated_at = ?
+       ORDER BY datetime(recorded_at) DESC`
+    )
+    .all(manifestGeneratedAt) as Array<{
+      id: string;
+      manifest_generated_at: string | null;
+      scenario_fingerprint: string;
+      expected_deltas: number;
+      operator_hash: string | null;
+      payload_hash: string;
+      recorded_at: string;
+    }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    manifestGeneratedAt: row.manifest_generated_at,
+    scenarioFingerprint: row.scenario_fingerprint,
+    expectedDeltas: row.expected_deltas,
+    operatorHash: row.operator_hash,
+    payloadHash: row.payload_hash,
+    recordedAt: row.recorded_at
+  }));
+};
+
 const fetchNoteRevisions = (
   manifestGeneratedAt: string,
   database: Database
@@ -672,6 +805,7 @@ const buildHistoryEntry = (
   const governance = fetchGovernanceStats(row.id, database);
   const liveDeltas = fetchLivePreviewDeltas(row.generated_at, database);
   const remediations = fetchRemediationActions(row.generated_at, database);
+  const rehearsals = fetchRehearsalActions(row.generated_at, database);
   const noteRevisions = fetchNoteRevisions(row.generated_at, database);
   return {
     id: row.id,
@@ -683,6 +817,7 @@ const buildHistoryEntry = (
     governance,
     liveDeltas,
     remediations,
+    rehearsals,
     noteRevisions
   };
 };
@@ -707,6 +842,14 @@ const buildFilters = (query: MarketingPreviewHistoryQuery) => {
   if (query.variant === "published") {
     where.push(`EXISTS (SELECT 1 FROM snapshot_routes sr_published
       WHERE sr_published.manifest_id = sm.id AND sr_published.has_published = 1${query.route ? " AND (sr_published.route = @route OR sr_published.route_hash = @route_hash)" : ""})`);
+  }
+
+  if (query.actionMode === "rehearsal") {
+    where.push(`EXISTS (SELECT 1 FROM rehearsal_actions rehearsal_filter
+      WHERE rehearsal_filter.manifest_generated_at = sm.generated_at)`);
+  } else if (query.actionMode === "live") {
+    where.push(`EXISTS (SELECT 1 FROM remediation_actions remediation_filter
+      WHERE remediation_filter.manifest_generated_at = sm.generated_at)`);
   }
 
   const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
