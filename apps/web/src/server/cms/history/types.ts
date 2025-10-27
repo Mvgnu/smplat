@@ -2,7 +2,79 @@
 // meta: feature: marketing-preview-cockpit
 
 import type { MarketingPreviewTriageNoteSeverity } from "../preview/notes";
-import type { MarketingPreviewSnapshotManifest } from "../preview/types";
+import type {
+  MarketingPreviewSnapshot,
+  MarketingPreviewSnapshotManifest,
+  SnapshotMetrics
+} from "../preview/types";
+
+export type MarketingPreviewLiveDeltaPayload = {
+  route?: string | null;
+  slug?: string | null;
+  label?: string | null;
+  environment?: string | null;
+  generatedAt: string;
+  markup?: string | null;
+  blockKinds: string[];
+  sectionCount: number;
+  variant: {
+    key: string;
+    label: string;
+    persona?: string | null;
+    campaign?: string | null;
+    featureFlag?: string | null;
+  };
+  collection?: string | null;
+  docId?: string | null;
+  metrics?: SnapshotMetrics | null;
+  hero?: MarketingPreviewSnapshot["hero"];
+  validation?: {
+    ok: boolean;
+    warnings: string[];
+    blocks: Array<Record<string, unknown>>;
+  };
+  diagnostics?: Record<string, unknown>;
+};
+
+export type MarketingPreviewLiveDeltaRecord = {
+  id: string;
+  manifestGeneratedAt?: string | null;
+  generatedAt: string;
+  route?: string | null;
+  variantKey?: string | null;
+  payloadHash: string;
+  recordedAt: string;
+  payload: MarketingPreviewLiveDeltaPayload;
+};
+
+export type MarketingPreviewRemediationActionRecord = {
+  id: string;
+  manifestGeneratedAt?: string | null;
+  route: string;
+  action: "reset" | "prioritize";
+  fingerprint?: string | null;
+  summary?: {
+    totalBlocks?: number;
+    invalidBlocks?: number;
+    warningBlocks?: number;
+  } | null;
+  collection?: string | null;
+  docId?: string | null;
+  recordedAt: string;
+  payloadHash: string;
+};
+
+export type MarketingPreviewNoteRevisionRecord = {
+  id: string;
+  noteId: string;
+  manifestGeneratedAt: string;
+  route: string;
+  severity: MarketingPreviewTriageNoteSeverity;
+  body: string;
+  authorHash?: string | null;
+  recordedAt: string;
+  payloadHash: string;
+};
 
 export type MarketingPreviewHistoryQuery = {
   limit?: number;
@@ -48,6 +120,9 @@ export type MarketingPreviewHistoryEntry = {
   aggregates: MarketingPreviewHistoryAggregates;
   governance: MarketingPreviewGovernanceStats;
   notes?: MarketingPreviewHistoryNoteSummary;
+  liveDeltas: MarketingPreviewLiveDeltaRecord[];
+  remediations: MarketingPreviewRemediationActionRecord[];
+  noteRevisions: MarketingPreviewNoteRevisionRecord[];
 };
 
 export type MarketingPreviewHistoryQueryResult = {

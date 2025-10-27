@@ -10,6 +10,11 @@ import type {
   MarketingPreviewSnapshotManifest
 } from "@/server/cms/preview";
 
+const metricsSchema = z.object({
+  label: z.string().optional(),
+  values: z.array(z.object({ label: z.string().optional(), value: z.string().optional() }))
+});
+
 const snapshotSchema: z.ZodType<MarketingPreviewSnapshot> = z.object({
   route: z.string(),
   preview: z.boolean(),
@@ -17,13 +22,38 @@ const snapshotSchema: z.ZodType<MarketingPreviewSnapshot> = z.object({
   title: z.string().optional(),
   sectionCount: z.number(),
   blockKinds: z.array(z.string()),
-  metrics: z
+  metrics: metricsSchema.optional(),
+  markup: z.string()
+});
+
+const liveDeltaPayloadSchema = z.object({
+  route: z.string().nullish(),
+  slug: z.string().nullish(),
+  label: z.string().nullish(),
+  environment: z.string().nullish(),
+  generatedAt: z.string(),
+  markup: z.string().nullish(),
+  blockKinds: z.array(z.string()),
+  sectionCount: z.number(),
+  variant: z.object({
+    key: z.string(),
+    label: z.string(),
+    persona: z.string().nullish(),
+    campaign: z.string().nullish(),
+    featureFlag: z.string().nullish()
+  }),
+  collection: z.string().nullish(),
+  docId: z.string().nullish(),
+  metrics: metricsSchema.nullish(),
+  hero: z.any().optional(),
+  validation: z
     .object({
-      label: z.string().optional(),
-      values: z.array(z.object({ label: z.string().optional(), value: z.string().optional() }))
+      ok: z.boolean(),
+      warnings: z.array(z.string()),
+      blocks: z.array(z.record(z.any()))
     })
     .optional(),
-  markup: z.string()
+  diagnostics: z.record(z.any()).optional()
 });
 
 const manifestSchema: z.ZodType<MarketingPreviewSnapshotManifest> = z.object({
@@ -68,7 +98,58 @@ const historyEntrySchema = z.object({
         blocker: z.number().default(0)
       })
     })
-    .optional()
+    .optional(),
+  liveDeltas: z
+    .array(
+      z.object({
+        id: z.string(),
+        manifestGeneratedAt: z.string().nullish(),
+        generatedAt: z.string(),
+        route: z.string().nullish(),
+        variantKey: z.string().nullish(),
+        payloadHash: z.string(),
+        recordedAt: z.string(),
+        payload: liveDeltaPayloadSchema
+      })
+    )
+    .default([]),
+  remediations: z
+    .array(
+      z.object({
+        id: z.string(),
+        manifestGeneratedAt: z.string().nullish(),
+        route: z.string(),
+        action: z.union([z.literal("reset"), z.literal("prioritize")]),
+        fingerprint: z.string().nullish(),
+        summary: z
+          .object({
+            totalBlocks: z.number().optional(),
+            invalidBlocks: z.number().optional(),
+            warningBlocks: z.number().optional()
+          })
+          .nullish(),
+        collection: z.string().nullish(),
+        docId: z.string().nullish(),
+        payloadHash: z.string(),
+        recordedAt: z.string()
+      })
+    )
+    .default([]),
+  noteRevisions: z
+    .array(
+      z.object({
+        id: z.string(),
+        noteId: z.string(),
+        manifestGeneratedAt: z.string(),
+        route: z.string(),
+        severity: z.union([z.literal("info"), z.literal("warning"), z.literal("blocker")]),
+        body: z.string(),
+        authorHash: z.string().nullish(),
+        payloadHash: z.string(),
+        recordedAt: z.string()
+      })
+    )
+    .default([])
 });
 
 const historyResponseSchema = z.object({

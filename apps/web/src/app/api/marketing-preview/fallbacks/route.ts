@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { recordRemediationAction } from "@/server/cms/history";
+
 // meta: route: api/marketing-preview/fallbacks
 // meta: feature: marketing-preview-governance
 
@@ -22,6 +24,7 @@ type FallbackGovernancePayload = {
   } | null;
   collection?: string;
   docId?: string | null;
+  generatedAt?: string | null;
 };
 
 type ValidatedFallbackPayload = {
@@ -35,6 +38,7 @@ type ValidatedFallbackPayload = {
   } | null;
   collection?: string;
   docId?: string | null;
+  generatedAt?: string | null;
 };
 
 const authenticate = (request: Request) => {
@@ -80,6 +84,21 @@ export async function POST(request: Request) {
   }
 
   const acknowledgedAt = new Date().toISOString();
+
+  try {
+    recordRemediationAction({
+      manifestGeneratedAt: payload.generatedAt ?? null,
+      route: payload.route,
+      action: payload.action,
+      fingerprint: payload.fingerprint ?? null,
+      summary: payload.summary ?? null,
+      collection: payload.collection ?? null,
+      docId: payload.docId ?? null,
+      occurredAt: acknowledgedAt
+    });
+  } catch (error) {
+    console.error("Failed to persist remediation action", error);
+  }
 
   return NextResponse.json({
     acknowledged: true,

@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { recordNoteRevision } from "@/server/cms/history";
+
 // meta: module: marketing-preview-notes
 // meta: feature: marketing-preview-cockpit
 
@@ -99,6 +101,20 @@ export const createMarketingPreviewNote = async (
 
   const nextNotes = [note, ...data.notes];
   await writeNotesFile(nextNotes);
+
+  try {
+    recordNoteRevision({
+      noteId: note.id,
+      manifestGeneratedAt: note.generatedAt,
+      route: note.route,
+      severity: note.severity,
+      body: note.body,
+      author: note.author,
+      recordedAt: note.createdAt
+    });
+  } catch (error) {
+    console.error("Failed to persist note revision", error);
+  }
 
   return note;
 };

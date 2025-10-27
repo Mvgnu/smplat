@@ -28,6 +28,42 @@ type GovernanceAction = {
   createdAt: string;
 };
 
+type LiveDeltaRecord = {
+  id: string;
+  manifestGeneratedAt: string | null;
+  generatedAt: string;
+  route: string | null;
+  variantKey: string | null;
+  payload: string;
+  payloadHash: string;
+  recordedAt: string;
+};
+
+type RemediationActionRecord = {
+  id: string;
+  manifestGeneratedAt: string | null;
+  route: string;
+  action: "reset" | "prioritize";
+  fingerprint: string | null;
+  summary: string | null;
+  collection: string | null;
+  docId: string | null;
+  payloadHash: string;
+  recordedAt: string;
+};
+
+type NoteRevisionRecord = {
+  id: string;
+  noteId: string;
+  manifestGeneratedAt: string;
+  route: string;
+  severity: string;
+  body: string;
+  authorHash: string | null;
+  payloadHash: string;
+  recordedAt: string;
+};
+
 class Statement {
   private readonly sql: string;
   private readonly database: MockDatabase;
@@ -90,9 +126,13 @@ class Statement {
 
     if (this.sql.startsWith("DELETE FROM snapshot_manifests")) {
       const manifestId = Array.isArray(parameters) ? parameters[0] : parameters;
+      const manifest = this.database.manifests.get(manifestId);
       this.database.manifests.delete(manifestId);
       this.database.routes.delete(manifestId);
       this.database.governance.delete(manifestId);
+      if (manifest) {
+        this.database.deleteArtifactsForManifest(manifest.generatedAt);
+      }
       return { changes: 1 };
     }
 
@@ -123,17 +163,128 @@ class Statement {
       return { changes: 1 };
     }
 
+    if (this.sql.startsWith("INSERT INTO live_preview_deltas")) {
+      const payload = parameters as {
+        id: string;
+        manifest_generated_at: string | null;
+        generated_at: string;
+        route: string | null;
+        variant_key: string | null;
+        payload: string;
+        payload_hash: string;
+        recorded_at: string;
+      };
+      const records = this.database.ensureLiveDeltas(payload.manifest_generated_at ?? null);
+      if (records.has(payload.payload_hash)) {
+        return { changes: 0 };
+      }
+      records.set(payload.payload_hash, {
+        id: payload.id,
+        manifestGeneratedAt: payload.manifest_generated_at ?? null,
+        generatedAt: payload.generated_at,
+        route: payload.route ?? null,
+        variantKey: payload.variant_key ?? null,
+        payload: payload.payload,
+        payloadHash: payload.payload_hash,
+        recordedAt: payload.recorded_at
+      });
+      return { changes: 1 };
+    }
+
+    if (this.sql.startsWith("DELETE FROM live_preview_deltas")) {
+      const manifestGeneratedAt = Array.isArray(parameters) ? parameters[0] : parameters;
+      this.database.liveDeltas.delete(this.database.toKey(manifestGeneratedAt));
+      return { changes: 1 };
+    }
+
+    if (this.sql.startsWith("INSERT INTO remediation_actions")) {
+      const payload = parameters as {
+        id: string;
+        manifest_generated_at: string | null;
+        route: string;
+        action: "reset" | "prioritize";
+        fingerprint: string | null;
+        summary: string | null;
+        collection: string | null;
+        doc_id: string | null;
+        payload_hash: string;
+        recorded_at: string;
+      };
+      const records = this.database.ensureRemediationActions(payload.manifest_generated_at ?? null);
+      if (records.has(payload.payload_hash)) {
+        return { changes: 0 };
+      }
+      records.set(payload.payload_hash, {
+        id: payload.id,
+        manifestGeneratedAt: payload.manifest_generated_at ?? null,
+        route: payload.route,
+        action: payload.action,
+        fingerprint: payload.fingerprint ?? null,
+        summary: payload.summary ?? null,
+        collection: payload.collection ?? null,
+        docId: payload.doc_id ?? null,
+        payloadHash: payload.payload_hash,
+        recordedAt: payload.recorded_at
+      });
+      return { changes: 1 };
+    }
+
+    if (this.sql.startsWith("DELETE FROM remediation_actions")) {
+      const manifestGeneratedAt = Array.isArray(parameters) ? parameters[0] : parameters;
+      this.database.remediationActions.delete(this.database.toKey(manifestGeneratedAt));
+      return { changes: 1 };
+    }
+
+    if (this.sql.startsWith("INSERT INTO note_revisions")) {
+      const payload = parameters as {
+        id: string;
+        note_id: string;
+        manifest_generated_at: string;
+        route: string;
+        severity: string;
+        body: string;
+        author_hash: string | null;
+        payload_hash: string;
+        recorded_at: string;
+      };
+      const records = this.database.ensureNoteRevisions(payload.manifest_generated_at);
+      if (records.has(payload.payload_hash)) {
+        return { changes: 0 };
+      }
+      records.set(payload.payload_hash, {
+        id: payload.id,
+        noteId: payload.note_id,
+        manifestGeneratedAt: payload.manifest_generated_at,
+        route: payload.route,
+        severity: payload.severity,
+        body: payload.body,
+        authorHash: payload.author_hash ?? null,
+        payloadHash: payload.payload_hash,
+        recordedAt: payload.recorded_at
+      });
+      return { changes: 1 };
+    }
+
+    if (this.sql.startsWith("DELETE FROM note_revisions")) {
+      const manifestGeneratedAt = Array.isArray(parameters) ? parameters[0] : parameters;
+      this.database.noteRevisions.delete(this.database.toKey(manifestGeneratedAt));
+      return { changes: 1 };
+    }
+
     throw new Error(`Unsupported run statement: ${this.sql}`);
   }
 
   all(parameters?: any) {
-    if (this.sql.startsWith("SELECT id FROM snapshot_manifests")) {
+    if (
+      this.sql.startsWith("SELECT id FROM snapshot_manifests") ||
+      this.sql.startsWith("SELECT id, generated_at FROM snapshot_manifests")
+    ) {
       const offset = Array.isArray(parameters) ? parameters[0] : Number(parameters ?? 0);
-      const ids = this.database
-        .sortedManifests()
-        .slice(offset)
-        .map((entry) => ({ id: entry.id }));
-      return ids;
+      const manifests = this.database.sortedManifests().slice(offset);
+      const includeGeneratedAt = this.sql.includes("generated_at");
+      return manifests.map((entry) =>
+        includeGeneratedAt ? { id: entry.id, generated_at: entry.generatedAt } : { id: entry.id }
+      );
     }
 
     if (this.sql.startsWith("SELECT payload FROM snapshot_manifests")) {
@@ -173,6 +324,51 @@ class Statement {
         action_kind: actionKind,
         count: details.count,
         last_created_at: details.lastCreatedAt
+      }));
+    }
+
+    if (this.sql.startsWith("SELECT id, manifest_generated_at, generated_at")) {
+      const manifestGeneratedAt = Array.isArray(parameters) ? parameters[0] : parameters;
+      return this.database.getLiveDeltas(manifestGeneratedAt).map((record) => ({
+        id: record.id,
+        manifest_generated_at: record.manifestGeneratedAt,
+        generated_at: record.generatedAt,
+        route: record.route,
+        variant_key: record.variantKey,
+        payload: record.payload,
+        payload_hash: record.payloadHash,
+        recorded_at: record.recordedAt
+      }));
+    }
+
+    if (this.sql.startsWith("SELECT id, manifest_generated_at, route, action")) {
+      const manifestGeneratedAt = Array.isArray(parameters) ? parameters[0] : parameters;
+      return this.database.getRemediationActions(manifestGeneratedAt).map((record) => ({
+        id: record.id,
+        manifest_generated_at: record.manifestGeneratedAt,
+        route: record.route,
+        action: record.action,
+        fingerprint: record.fingerprint,
+        summary: record.summary,
+        collection: record.collection,
+        doc_id: record.docId,
+        payload_hash: record.payloadHash,
+        recorded_at: record.recordedAt
+      }));
+    }
+
+    if (this.sql.startsWith("SELECT id, note_id, manifest_generated_at")) {
+      const manifestGeneratedAt = Array.isArray(parameters) ? parameters[0] : parameters;
+      return this.database.getNoteRevisions(manifestGeneratedAt).map((record) => ({
+        id: record.id,
+        note_id: record.noteId,
+        manifest_generated_at: record.manifestGeneratedAt,
+        route: record.route,
+        severity: record.severity,
+        body: record.body,
+        author_hash: record.authorHash,
+        payload_hash: record.payloadHash,
+        recorded_at: record.recordedAt
       }));
     }
 
@@ -312,6 +508,9 @@ class MockDatabase {
   manifests = new Map<string, ManifestRecord>();
   routes = new Map<string, Map<string, RouteRecord>>();
   governance = new Map<string, GovernanceAction[]>();
+  liveDeltas = new Map<string, Map<string, LiveDeltaRecord>>();
+  remediationActions = new Map<string, Map<string, RemediationActionRecord>>();
+  noteRevisions = new Map<string, Map<string, NoteRevisionRecord>>();
 
   constructor(_file: string) {}
 
@@ -335,6 +534,13 @@ class MockDatabase {
     this.manifests.clear();
     this.routes.clear();
     this.governance.clear();
+    this.liveDeltas.clear();
+    this.remediationActions.clear();
+    this.noteRevisions.clear();
+  }
+
+  toKey(value: string | null | undefined) {
+    return value ?? "__null__";
   }
 
   ensureRoutes(manifestId: string) {
@@ -352,12 +558,73 @@ class MockDatabase {
     return this.governance.get(key)!;
   }
 
+  ensureLiveDeltas(manifestGeneratedAt: string | null | undefined) {
+    const key = this.toKey(manifestGeneratedAt);
+    if (!this.liveDeltas.has(key)) {
+      this.liveDeltas.set(key, new Map());
+    }
+    return this.liveDeltas.get(key)!;
+  }
+
+  ensureRemediationActions(manifestGeneratedAt: string | null | undefined) {
+    const key = this.toKey(manifestGeneratedAt);
+    if (!this.remediationActions.has(key)) {
+      this.remediationActions.set(key, new Map());
+    }
+    return this.remediationActions.get(key)!;
+  }
+
+  ensureNoteRevisions(manifestGeneratedAt: string) {
+    const key = this.toKey(manifestGeneratedAt);
+    if (!this.noteRevisions.has(key)) {
+      this.noteRevisions.set(key, new Map());
+    }
+    return this.noteRevisions.get(key)!;
+  }
+
   getRoutes(manifestId: string) {
     const routes = this.routes.get(manifestId);
     if (!routes) {
       return [] as RouteRecord[];
     }
     return Array.from(routes.values()).sort((a, b) => a.route.localeCompare(b.route));
+  }
+
+  getLiveDeltas(manifestGeneratedAt: string) {
+    const records = this.liveDeltas.get(this.toKey(manifestGeneratedAt));
+    if (!records) {
+      return [] as LiveDeltaRecord[];
+    }
+    return Array.from(records.values()).sort((a, b) =>
+      a.recordedAt < b.recordedAt ? 1 : a.recordedAt > b.recordedAt ? -1 : 0
+    );
+  }
+
+  getRemediationActions(manifestGeneratedAt: string) {
+    const records = this.remediationActions.get(this.toKey(manifestGeneratedAt));
+    if (!records) {
+      return [] as RemediationActionRecord[];
+    }
+    return Array.from(records.values()).sort((a, b) =>
+      a.recordedAt < b.recordedAt ? 1 : a.recordedAt > b.recordedAt ? -1 : 0
+    );
+  }
+
+  getNoteRevisions(manifestGeneratedAt: string) {
+    const records = this.noteRevisions.get(this.toKey(manifestGeneratedAt));
+    if (!records) {
+      return [] as NoteRevisionRecord[];
+    }
+    return Array.from(records.values()).sort((a, b) =>
+      a.recordedAt < b.recordedAt ? 1 : a.recordedAt > b.recordedAt ? -1 : 0
+    );
+  }
+
+  deleteArtifactsForManifest(manifestGeneratedAt: string) {
+    const key = this.toKey(manifestGeneratedAt);
+    this.liveDeltas.delete(key);
+    this.remediationActions.delete(key);
+    this.noteRevisions.delete(key);
   }
 
   sortedManifests() {
