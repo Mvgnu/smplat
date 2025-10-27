@@ -1,6 +1,14 @@
 """SQLAlchemy models package."""
 
 # Import all models
+from .billing_reconciliation import (  # noqa: F401
+    BillingDiscrepancy,
+    BillingDiscrepancyStatus,
+    BillingDiscrepancyType,
+    BillingReconciliationRun,
+    ProcessorStatement,
+    ProcessorStatementTransactionType,
+)
 from .customer_profile import CurrencyEnum, CustomerProfile  # noqa: F401
 from .fulfillment import (  # noqa: F401
     CampaignActivity,

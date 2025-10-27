@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Dict
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
+from smplat_api.services.billing.statements import (
+    StripeStatementIngestionService,
+    reconcile_statements,
+)
 
 
 class BillingLedgerReconciliationWorker:
@@ -26,8 +30,21 @@ class BillingLedgerReconciliationWorker:
 
         processed = 0
         settled = 0
+        statements_ingested = 0
+        disputes_logged = 0
         session = await self._ensure_session()
         async with session as managed_session:
+            ingestion = StripeStatementIngestionService(managed_session)
+            window_start = datetime.now(timezone.utc) - timedelta(days=7)
+            statements = await ingestion.sync_balance_transactions(created_gte=window_start)
+            if statements:
+                run = await ingestion.ensure_run()
+                await reconcile_statements(managed_session, statements=statements, run=run)
+                statements_ingested = len(statements)
+
+            disputes = await ingestion.sync_disputes(created_gte=window_start)
+            disputes_logged = len(disputes)
+
             stmt = (
                 select(Invoice)
                 .where(
@@ -60,12 +77,17 @@ class BillingLedgerReconciliationWorker:
                 if processed or settled:
                     invoice.payment_timeline_json = timeline
 
-            if processed or settled:
+            if any([processed, settled, statements_ingested, disputes_logged]):
                 await managed_session.commit()
             else:
                 await managed_session.rollback()
 
-        return {"processed": processed, "settled": settled}
+        return {
+            "processed": processed,
+            "settled": settled,
+            "statements_ingested": statements_ingested,
+            "disputes_logged": disputes_logged,
+        }
 
     async def _ensure_session(self) -> AsyncSession:
         maybe_session = self._session_factory()
