@@ -10,6 +10,20 @@ export type BillingInvoiceLineItem = {
   campaignReference: string | null;
 };
 
+export type PaymentTimelineEvent = {
+  event: string;
+  at: string;
+  amount?: number;
+  processorId?: string;
+};
+
+export type InvoiceAdjustment = {
+  type: string;
+  amount: number;
+  memo?: string;
+  appliedAt?: string;
+};
+
 export type BillingInvoice = {
   id: string;
   invoiceNumber: string;
@@ -19,12 +33,20 @@ export type BillingInvoice = {
   tax: number;
   total: number;
   balanceDue: number;
+  paymentIntentId: string | null;
+  externalProcessorId: string | null;
+  settlementAt: string | null;
+  adjustmentsTotal: number;
+  adjustments: InvoiceAdjustment[];
+  paymentTimeline: PaymentTimelineEvent[];
   issuedAt: string;
   dueAt: string;
   paidAt: string | null;
   memo: string | null;
   exportUrl: string;
   notifyUrl: string | null;
+  captureUrl: string | null;
+  refundUrl: string | null;
   lineItems: BillingInvoiceLineItem[];
 };
 

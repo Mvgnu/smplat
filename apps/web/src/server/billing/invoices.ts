@@ -32,6 +32,12 @@ type RawInvoiceResponse = {
     tax: number;
     total: number;
     balance_due: number;
+    paymentIntentId?: string | null;
+    externalProcessorId?: string | null;
+    settlementAt?: string | null;
+    adjustmentsTotal?: number;
+    adjustments?: Array<Record<string, unknown>> | null;
+    paymentTimeline?: Array<Record<string, unknown>> | null;
     issued_at: string;
     due_at: string;
     paid_at: string | null;
@@ -142,12 +148,35 @@ function normalizeInvoice(invoice: RawInvoiceResponse["invoices"][number], works
     campaignReference: item.campaign_reference,
   }));
 
+  const paymentTimeline = (invoice.paymentTimeline ?? []).map((entry) => ({
+    event: String(entry.event ?? entry["event"] ?? "unknown"),
+    at: String(entry.at ?? entry["at"] ?? ""),
+    amount: typeof entry.amount === "number" ? entry.amount : Number(entry.amount ?? 0) || undefined,
+    processorId: entry.processor_id ? String(entry.processor_id) : entry.processorId ? String(entry.processorId) : undefined,
+  }));
+
+  const adjustments = (invoice.adjustments ?? []).map((entry) => ({
+    type: String(entry.type ?? entry["type"] ?? "adjustment"),
+    amount: typeof entry.amount === "number" ? entry.amount : Number(entry.amount ?? 0),
+    memo: entry.memo ? String(entry.memo) : undefined,
+    appliedAt: entry.applied_at ? String(entry.applied_at) : entry.appliedAt ? String(entry.appliedAt) : undefined,
+  }));
+
   const exportUrl = `/api/billing/${invoice.id}/export?workspaceId=${encodeURIComponent(
     workspaceId,
   )}&format=csv`;
   const notifyUrl = invoice.balance_due > 0
     ? `/api/billing/${invoice.id}/notify?workspaceId=${encodeURIComponent(workspaceId)}`
     : null;
+  const captureUrl = invoice.balance_due > 0
+    ? `/api/billing/${invoice.id}/capture?workspaceId=${encodeURIComponent(workspaceId)}`
+    : null;
+  const hasSettleableEvent = paymentTimeline.some((entry) => entry.event !== "issued");
+  const refundUrl = hasSettleableEvent
+    ? `/api/billing/${invoice.id}/refund?workspaceId=${encodeURIComponent(workspaceId)}`
+    : null;
+
+  const settlementAt = invoice.settlementAt ?? invoice.settlement_at ?? null;
 
   return {
     id: invoice.id,
@@ -158,12 +187,20 @@ function normalizeInvoice(invoice: RawInvoiceResponse["invoices"][number], works
     tax: invoice.tax,
     total: invoice.total,
     balanceDue: invoice.balance_due,
+    paymentIntentId: invoice.paymentIntentId ?? invoice.payment_intent_id ?? null,
+    externalProcessorId: invoice.externalProcessorId ?? invoice.external_processor_id ?? null,
+    settlementAt,
+    adjustmentsTotal: invoice.adjustmentsTotal ?? invoice.adjustments_total ?? 0,
+    adjustments,
+    paymentTimeline,
     issuedAt: invoice.issued_at,
     dueAt: invoice.due_at,
     paidAt: invoice.paid_at,
     memo: invoice.memo,
     exportUrl,
     notifyUrl,
+    captureUrl,
+    refundUrl,
     lineItems,
   };
 }
