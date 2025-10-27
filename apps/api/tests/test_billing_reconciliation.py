@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -16,6 +16,7 @@ from smplat_api.models.billing_reconciliation import (
     BillingDiscrepancyStatus,
     BillingDiscrepancyType,
     BillingReconciliationRun,
+    BillingSyncCursor,
     ProcessorStatement,
     ProcessorStatementStaging,
     ProcessorStatementStagingStatus,
@@ -90,6 +91,7 @@ async def test_sync_balance_transactions_links_invoice(session_factory):
         session.add_all([user, invoice])
         await session.flush()
 
+        observed_at = datetime.now(timezone.utc)
         transactions = [
             StripeBalanceTransaction(
                 transaction_id="txn_1",
@@ -98,7 +100,8 @@ async def test_sync_balance_transactions_links_invoice(session_factory):
                 currency="EUR",
                 fee=Decimal("3.20"),
                 net=Decimal("96.80"),
-                created_at=datetime.now(timezone.utc),
+                created_at=observed_at,
+                updated_at=observed_at,
                 source_id="ch_txn_1",
                 raw={"id": "txn_1"},
             )
@@ -111,7 +114,7 @@ async def test_sync_balance_transactions_links_invoice(session_factory):
         )
 
         service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
-        result = await service.sync_balance_transactions()
+        result = await service.sync_balance_transactions(workspace_id=workspace_id)
         assert isinstance(result, StatementSyncResult)
         assert len(result.persisted) == 1
         statement = result.persisted[0]
@@ -129,6 +132,7 @@ async def test_sync_balance_transactions_links_invoice(session_factory):
 @pytest.mark.asyncio
 async def test_sync_balance_transactions_stages_orphans(session_factory):
     async with session_factory() as session:
+        observed_at = datetime.now(timezone.utc)
         transactions = [
             StripeBalanceTransaction(
                 transaction_id="txn_orphan",
@@ -137,7 +141,8 @@ async def test_sync_balance_transactions_stages_orphans(session_factory):
                 currency="USD",
                 fee=Decimal("0"),
                 net=Decimal("25.00"),
-                created_at=datetime.now(timezone.utc),
+                created_at=observed_at,
+                updated_at=observed_at,
                 source_id=None,
                 raw={"id": "txn_orphan"},
             )
@@ -145,7 +150,7 @@ async def test_sync_balance_transactions_stages_orphans(session_factory):
         provider = StubStatementProvider(transactions, [], {})
 
         service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
-        result = await service.sync_balance_transactions()
+        result = await service.sync_balance_transactions(workspace_id=uuid4())
         assert isinstance(result, StatementSyncResult)
         assert not result.persisted
         assert not result.updated
@@ -196,7 +201,7 @@ async def test_sync_balance_transactions_marks_removed_transactions(session_fact
 
         provider = StubStatementProvider([], [], {})
         service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
-        result = await service.sync_balance_transactions()
+        result = await service.sync_balance_transactions(workspace_id=workspace_id)
 
         assert statement in result.removed
         assert any(staging.reason == "processor_missing" for staging in result.staged)
@@ -279,19 +284,21 @@ async def test_worker_run_once_marks_run_completed(session_factory, monkeypatch:
         session.add_all([user, invoice])
         await session.commit()
 
-    transactions = [
-        StripeBalanceTransaction(
-            transaction_id="txn_worker",
-            type="charge",
-            amount=Decimal("40.00"),
-            currency="USD",
-            fee=Decimal("1.20"),
-            net=Decimal("38.80"),
-            created_at=datetime.now(timezone.utc),
-            source_id="ch_worker",
-            raw={"id": "txn_worker"},
-        )
-    ]
+        observed_at = datetime.now(timezone.utc)
+        transactions = [
+            StripeBalanceTransaction(
+                transaction_id="txn_worker",
+                type="charge",
+                amount=Decimal("40.00"),
+                currency="USD",
+                fee=Decimal("1.20"),
+                net=Decimal("38.80"),
+                created_at=observed_at,
+                updated_at=observed_at,
+                source_id="ch_worker",
+                raw={"id": "txn_worker"},
+            )
+        ]
     stub_provider = StubStatementProvider(
         transactions,
         [],
@@ -341,6 +348,24 @@ async def test_worker_run_once_marks_failure(session_factory, monkeypatch: pytes
         original_init(self, session, provider=provider or failing_provider)
 
     monkeypatch.setattr(StripeStatementIngestionService, "__init__", patched_init)
+
+    workspace_id = uuid4()
+    async with session_factory() as session:
+        user = User(id=workspace_id, email="worker-failure@example.com", role=UserRoleEnum.FINANCE)
+        invoice = Invoice(
+            workspace_id=workspace_id,
+            invoice_number="INV-WORKER-FAIL",
+            status=InvoiceStatusEnum.ISSUED,
+            currency=CurrencyEnum.USD,
+            subtotal=Decimal("10.00"),
+            tax=Decimal("0"),
+            total=Decimal("10.00"),
+            balance_due=Decimal("10.00"),
+            processor_charge_id="ch_worker_fail",
+            due_at=datetime.now(timezone.utc),
+        )
+        session.add_all([user, invoice])
+        await session.commit()
 
     worker = BillingLedgerReconciliationWorker(session_factory)
 
@@ -515,3 +540,139 @@ async def test_staging_triage_and_requeue_flow(app_with_db):
             assert refreshed.resolved_at is None
     finally:
         settings.checkout_api_key = previous_key
+
+
+@pytest.mark.asyncio
+async def test_sync_balance_transactions_persists_cursors(session_factory):
+    async with session_factory() as session:
+        workspace_id = uuid4()
+        user = User(id=workspace_id, email="finance+cursor@example.com", role=UserRoleEnum.FINANCE)
+        invoice_one = Invoice(
+            workspace_id=workspace_id,
+            invoice_number="INV-CURSOR-1",
+            status=InvoiceStatusEnum.ISSUED,
+            currency=CurrencyEnum.USD,
+            subtotal=Decimal("50.00"),
+            tax=Decimal("0"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("0"),
+            processor_charge_id="ch_cursor_1",
+            due_at=datetime.now(timezone.utc),
+        )
+        invoice_two = Invoice(
+            workspace_id=workspace_id,
+            invoice_number="INV-CURSOR-2",
+            status=InvoiceStatusEnum.ISSUED,
+            currency=CurrencyEnum.USD,
+            subtotal=Decimal("75.00"),
+            tax=Decimal("0"),
+            total=Decimal("75.00"),
+            balance_due=Decimal("0"),
+            processor_charge_id="ch_cursor_2",
+            due_at=datetime.now(timezone.utc),
+        )
+        session.add_all([user, invoice_one, invoice_two])
+        await session.flush()
+
+        base_time = datetime.now(timezone.utc)
+        tx_one = StripeBalanceTransaction(
+            transaction_id="txn_cursor_1",
+            type="charge",
+            amount=Decimal("50.00"),
+            currency="USD",
+            fee=Decimal("1.50"),
+            net=Decimal("48.50"),
+            created_at=base_time,
+            updated_at=base_time,
+            source_id="ch_cursor_1",
+            raw={"id": "txn_cursor_1"},
+        )
+        tx_two_time = base_time + timedelta(minutes=5)
+        tx_two = StripeBalanceTransaction(
+            transaction_id="txn_cursor_2",
+            type="charge",
+            amount=Decimal("75.00"),
+            currency="USD",
+            fee=Decimal("2.25"),
+            net=Decimal("72.75"),
+            created_at=tx_two_time,
+            updated_at=tx_two_time,
+            source_id="ch_cursor_2",
+            raw={"id": "txn_cursor_2"},
+        )
+
+        provider = StubStatementProvider(
+            [tx_one, tx_two],
+            [],
+            {
+                "ch_cursor_1": {"invoice_id": str(invoice_one.id), "workspace_id": str(workspace_id)},
+                "ch_cursor_2": {"invoice_id": str(invoice_two.id), "workspace_id": str(workspace_id)},
+            },
+        )
+        service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
+        first_result = await service.sync_balance_transactions(workspace_id=workspace_id)
+        assert len(first_result.persisted) == 2
+
+        cursor_result = await session.execute(
+            select(BillingSyncCursor).where(
+                BillingSyncCursor.workspace_id == workspace_id,
+                BillingSyncCursor.processor == "stripe",
+                BillingSyncCursor.object_type == "balance_transaction",
+            )
+        )
+        cursor_row = cursor_result.scalar_one()
+        assert cursor_row.last_transaction_id == "txn_cursor_2"
+        assert cursor_row.cursor_token == "txn_cursor_2"
+
+        provider_second = StubStatementProvider(
+            [tx_one, tx_two],
+            [],
+            {
+                "ch_cursor_1": {"invoice_id": str(invoice_one.id), "workspace_id": str(workspace_id)},
+                "ch_cursor_2": {"invoice_id": str(invoice_two.id), "workspace_id": str(workspace_id)},
+            },
+        )
+        service_second = StripeStatementIngestionService(session, provider=provider_second)  # type: ignore[arg-type]
+        second_result = await service_second.sync_balance_transactions(workspace_id=workspace_id)
+        assert not second_result.persisted
+        assert not second_result.updated
+
+        updated_time = tx_two_time + timedelta(minutes=10)
+        tx_two_updated = StripeBalanceTransaction(
+            transaction_id="txn_cursor_2",
+            type="charge",
+            amount=Decimal("80.00"),
+            currency="USD",
+            fee=Decimal("2.40"),
+            net=Decimal("77.60"),
+            created_at=tx_two_time,
+            updated_at=updated_time,
+            source_id="ch_cursor_2",
+            raw={"id": "txn_cursor_2"},
+        )
+        provider_third = StubStatementProvider(
+            [tx_one, tx_two_updated],
+            [],
+            {
+                "ch_cursor_1": {"invoice_id": str(invoice_one.id), "workspace_id": str(workspace_id)},
+                "ch_cursor_2": {"invoice_id": str(invoice_two.id), "workspace_id": str(workspace_id)},
+            },
+        )
+        service_third = StripeStatementIngestionService(session, provider=provider_third)  # type: ignore[arg-type]
+        third_result = await service_third.sync_balance_transactions(
+            workspace_id=workspace_id,
+            starting_after="txn_cursor_1",
+        )
+        assert not third_result.persisted
+        assert len(third_result.updated) == 1
+
+        cursor_result = await session.execute(
+            select(BillingSyncCursor).where(
+                BillingSyncCursor.workspace_id == workspace_id,
+                BillingSyncCursor.processor == "stripe",
+                BillingSyncCursor.object_type == "balance_transaction",
+            )
+        )
+        refreshed_cursor = cursor_result.scalar_one()
+        assert refreshed_cursor.last_transaction_updated_at == updated_time
+        assert refreshed_cursor.cursor_token == "txn_cursor_2"

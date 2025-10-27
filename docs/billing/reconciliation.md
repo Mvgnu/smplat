@@ -5,13 +5,15 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 ## Statement Ingestion
 
 - The `StripeStatementIngestionService` pulls Stripe balance transactions for the prior seven days, walking Stripe pagination cursors to guarantee idempotent reprocessing.
+- Durable checkpoints are stored in `billing_sync_cursors`, keyed by workspace, processor, and object type. Each sync compares Stripe `updated_at` values to skip transactions that have not changed since the last pass.
 - Transactions are matched to invoices through charge metadata (`invoice_id`, `workspace_id`) and stored with normalized gross, fee, and net amounts. Existing statements are updated in-place if Stripe adjusts the payload.
 - Transactions without a resolvable workspace or orphaned removals are preserved in `processor_statement_staging` for manual triage instead of being silently skipped.
 
 ## Reconciliation Runs
 
-- The `BillingLedgerReconciliationWorker` triggers statement ingestion and dispute syncs on each sweep and captures pagination cursors so subsequent runs continue from the last successful checkpoint.
+- The `BillingLedgerReconciliationWorker` triggers statement ingestion and dispute syncs on each sweep and leverages the durable cursor table so subsequent runs continue from the last successful checkpoint per workspace.
 - Each sweep opens a run with status `running`. Upon completion the worker records `completed_at`, persists a JSON note summarizing counts (persisted, updated, staged, removed, disputes, cursor), and flips the run status to `completed`. Failures are committed with `status="failed"` and error context for observability.
+- Run notes now include an array of `{ workspace_id, next_cursor }` objects reflecting the cursor values returned by each ingestion call. The dashboard surfaces this metadata alongside counts so operators can see which workspace last advanced.
 - The helper `reconcile_statements` evaluates persisted statements, incrementing `matched_transactions` for invoices with successful linkage and logging discrepancies when invoices are missing.
 
 ## Dispute Automation
@@ -42,10 +44,26 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 
 ## Failure Handling SOP
 
-- Every worker exception sets the run status to `failed` and persists structured notes that include the error string, staged counts, and the cursor checkpoint. The dashboard displays this context immediately.
+- Every worker exception sets the run status to `failed` and persists structured notes that include the error string, staged counts, and the per-workspace cursor checkpoints. The dashboard displays this context immediately.
 - Finance should review the staging backlog first; if staged count spikes, triage pending entries or requeue those that are ready for another sync attempt.
-- After addressing the root cause (e.g., missing metadata, processor downtime), operators can re-run the worker or resume ingestion using the cursor surfaced in the failure metadata.
+- After addressing the root cause (e.g., missing metadata, processor downtime), operators can re-run the worker or resume ingestion using the cursor surfaced in the failure metadata. The worker automatically resumes from the saved cursor for each workspace; no manual override is required for standard retries.
 - Document unusual incidents in the triage notes to maintain a historical record visible in the dashboard.
+
+### Manual Cursor Recovery
+
+- The `billing_sync_cursors` table captures `cursor_token`, `last_transaction_id`, and the last observed Stripe timestamps. Use these checkpoints when auditing ingestion progress or preparing a manual replay.
+- To reset a workspace cursor, update the relevant row by setting `cursor_token`, `last_transaction_id`, `last_transaction_occurred_at`, and `last_transaction_updated_at` to `NULL`. Example:
+  ```sql
+  UPDATE billing_sync_cursors
+     SET cursor_token = NULL,
+         last_transaction_id = NULL,
+         last_transaction_occurred_at = NULL,
+         last_transaction_updated_at = NULL
+   WHERE workspace_id = '<workspace-uuid>'
+     AND processor = 'stripe'
+     AND object_type = 'balance_transaction';
+  ```
+- After a reset, the next reconciliation run will start from the beginning of the Stripe history and repopulate the cursor fields using the latest data.
 
 ## Run Cadence & SLAs
 

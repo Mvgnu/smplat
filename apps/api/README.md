@@ -18,4 +18,5 @@ See `/docs` for full architecture decisions.
 - Hosted Stripe Checkout session endpoint: `POST /api/v1/billing/invoices/{invoiceId}/checkout` (requires `X-API-Key`).
 - Webhook receiver: `POST /api/v1/billing/webhooks/stripe` validates Stripe signatures and applies payment lifecycle updates.
 - Reconciliation endpoints under `/api/v1/billing/reconciliation` expose runs, discrepancies, and resolution actions for finance teams.
+- Durable ingestion cursors are persisted in the `billing_sync_cursors` table. Each reconciliation run logs per-workspace cursor checkpoints so operators can monitor ingestion progress (see `docs/billing/reconciliation.md`).
 - Run `poetry run pytest apps/api/tests/test_billing_gateway.py` before deployments touching billing flows.

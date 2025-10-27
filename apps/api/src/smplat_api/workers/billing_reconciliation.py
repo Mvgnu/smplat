@@ -9,9 +9,13 @@ from typing import Awaitable, Callable, Dict
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from smplat_api.models.billing_reconciliation import (
+    BillingSyncCursor,
+    ProcessorStatement,
+    ProcessorStatementStaging,
+)
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
 from smplat_api.services.billing.statements import (
-    StatementSyncResult,
     StripeStatementIngestionService,
     reconcile_statements,
 )
@@ -40,33 +44,52 @@ class BillingLedgerReconciliationWorker:
             ingestion = StripeStatementIngestionService(managed_session)
             run = await ingestion.ensure_run()
             window_start = datetime.now(timezone.utc) - timedelta(days=7)
-            starting_after = self._extract_cursor(run.notes)
-            sync_result: StatementSyncResult = StatementSyncResult(
-                persisted=[],
-                updated=[],
-                staged=[],
-                removed=[],
-                next_cursor=starting_after,
-            )
             should_commit = False
+            aggregated_statements: list[ProcessorStatement] = []
+            aggregated_staged: list[ProcessorStatementStaging] = []
+            aggregated_removed: list[ProcessorStatement] = []
+            cursor_summaries: list[dict[str, object | None]] = []
+
+            workspace_rows = await managed_session.execute(
+                select(Invoice.workspace_id).where(Invoice.workspace_id.isnot(None)).distinct()
+            )
+            cursor_workspace_rows = await managed_session.execute(
+                select(BillingSyncCursor.workspace_id).distinct()
+            )
+            workspace_ids = set(workspace_rows.scalars().all())
+            workspace_ids.update(cursor_workspace_rows.scalars().all())
+            workspace_ids.discard(None)
 
             try:
-                sync_result = await ingestion.sync_balance_transactions(
-                    created_gte=window_start,
-                    starting_after=starting_after,
-                )
-                statements_ingested = len(sync_result.persisted)
-                statements_updated = len(sync_result.updated)
+                for workspace_scope in sorted(workspace_ids):
+                    workspace_result = await ingestion.sync_balance_transactions(
+                        workspace_id=workspace_scope,
+                        created_gte=window_start,
+                    )
+                    statements_ingested += len(workspace_result.persisted)
+                    statements_updated += len(workspace_result.updated)
+                    if workspace_result.statements_for_reconciliation:
+                        aggregated_statements.extend(workspace_result.statements_for_reconciliation)
+                    if workspace_result.staged:
+                        aggregated_staged.extend(workspace_result.staged)
+                    if workspace_result.removed:
+                        aggregated_removed.extend(workspace_result.removed)
+                    cursor_summaries.append(
+                        {
+                            "workspace_id": str(workspace_scope),
+                            "next_cursor": workspace_result.next_cursor,
+                        }
+                    )
 
-                if sync_result.statements_for_reconciliation:
+                if aggregated_statements:
                     await reconcile_statements(
                         managed_session,
-                        statements=sync_result.statements_for_reconciliation,
+                        statements=aggregated_statements,
                         run=run,
                     )
                     should_commit = True
 
-                if sync_result.staged:
+                if aggregated_staged or aggregated_removed:
                     should_commit = True
 
                 disputes = await ingestion.sync_disputes(created_gte=window_start)
@@ -116,9 +139,9 @@ class BillingLedgerReconciliationWorker:
                     status="completed",
                     persisted=statements_ingested,
                     updated=statements_updated,
-                    staged=len(sync_result.staged),
-                    removed=len(sync_result.removed),
-                    cursor=sync_result.next_cursor,
+                    staged=len(aggregated_staged),
+                    removed=len(aggregated_removed),
+                    cursor=cursor_summaries,
                     disputes=disputes_logged,
                 )
                 should_commit = True
@@ -135,9 +158,9 @@ class BillingLedgerReconciliationWorker:
                     status="failed",
                     persisted=statements_ingested,
                     updated=statements_updated,
-                    staged=len(sync_result.staged),
-                    removed=len(sync_result.removed),
-                    cursor=sync_result.next_cursor,
+                    staged=len(aggregated_staged),
+                    removed=len(aggregated_removed),
+                    cursor=cursor_summaries,
                     disputes=disputes_logged,
                     error=str(exc),
                 )
@@ -160,19 +183,6 @@ class BillingLedgerReconciliationWorker:
         return await maybe_session
 
     @staticmethod
-    def _extract_cursor(notes: str | None) -> str | None:
-        if not notes:
-            return None
-        try:
-            payload = json.loads(notes)
-        except (TypeError, ValueError):
-            return None
-        if isinstance(payload, dict):
-            cursor = payload.get("cursor")
-            return str(cursor) if cursor else None
-        return None
-
-    @staticmethod
     def _build_run_note(
         *,
         status: str,
@@ -180,7 +190,7 @@ class BillingLedgerReconciliationWorker:
         updated: int,
         staged: int,
         removed: int,
-        cursor: str | None,
+        cursor: object | None,
         disputes: int,
         error: str | None = None,
     ) -> str:
