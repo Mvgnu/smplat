@@ -152,11 +152,49 @@ const historyEntrySchema = z.object({
     .default([])
 });
 
+const regressionVelocitySchema = z.object({
+  averagePerHour: z.number(),
+  currentPerHour: z.number(),
+  sampleSize: z.number(),
+  confidence: z.number()
+});
+
+const severityMomentumSchema = z.object({
+  info: z.number(),
+  warning: z.number(),
+  blocker: z.number(),
+  overall: z.number(),
+  sampleSize: z.number()
+});
+
+const timeToGreenSchema = z.object({
+  forecastAt: z.string().nullable(),
+  forecastHours: z.number().nullable(),
+  slopePerHour: z.number().nullable(),
+  confidence: z.number(),
+  sampleSize: z.number()
+});
+
+const recommendationSchema = z.object({
+  fingerprint: z.string(),
+  suggestion: z.string(),
+  occurrences: z.number(),
+  confidence: z.number(),
+  lastSeenAt: z.string().nullable(),
+  affectedRoutes: z.array(z.string())
+});
+
 const historyResponseSchema = z.object({
   total: z.number(),
   limit: z.number(),
   offset: z.number(),
-  entries: z.array(historyEntrySchema)
+  entries: z.array(historyEntrySchema),
+  analytics: z.object({
+    regressionVelocity: regressionVelocitySchema,
+    severityMomentum: severityMomentumSchema,
+    timeToGreen: timeToGreenSchema,
+    recommendations: z.array(recommendationSchema)
+  })
 });
 
 export type MarketingPreviewHistoryResponse = z.infer<typeof historyResponseSchema>;

@@ -149,7 +149,30 @@ describe("useMarketingPreviewHistory", () => {
           remediations: [],
           noteRevisions: []
         }
-      ]
+      ],
+      analytics: {
+        regressionVelocity: {
+          averagePerHour: -1.5,
+          currentPerHour: -1,
+          sampleSize: 2,
+          confidence: 0.75
+        },
+        severityMomentum: {
+          info: -0.25,
+          warning: 0,
+          blocker: 0,
+          overall: -0.07,
+          sampleSize: 2
+        },
+        timeToGreen: {
+          forecastAt: "2024-05-03T00:00:00.000Z",
+          forecastHours: 24,
+          slopePerHour: -1.5,
+          confidence: 0.65,
+          sampleSize: 2
+        },
+        recommendations: []
+      }
     };
 
     global.fetch = jest.fn().mockResolvedValue({
@@ -171,6 +194,8 @@ describe("useMarketingPreviewHistory", () => {
       "marketing/about",
       "marketing/home"
     ]);
+    expect(result.current.analytics.timeToGreen.forecastHours).toBe(24);
+    expect(result.current.analytics.regressionVelocity.sampleSize).toBe(2);
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining("/api/marketing-preview/history"),
       expect.objectContaining({ method: "GET" })
@@ -208,13 +233,36 @@ describe("useMarketingPreviewHistory", () => {
         entries: [cachedEntry],
         total: 1,
         limit: 10,
-        offset: 0
+        offset: 0,
+        analytics: {
+          regressionVelocity: {
+            averagePerHour: 0,
+            currentPerHour: 0,
+            sampleSize: 1,
+            confidence: 0
+          },
+          severityMomentum: {
+            info: 0,
+            warning: 0,
+            blocker: 0,
+            overall: 0,
+            sampleSize: 1
+          },
+          timeToGreen: {
+            forecastAt: null,
+            forecastHours: null,
+            slopePerHour: null,
+            confidence: 0,
+            sampleSize: 1
+          },
+          recommendations: []
+        }
       },
       cachedAt: "2024-05-01T00:00:00.000Z"
     };
 
     window.localStorage.setItem(
-      "marketing-preview-history-cache-v2",
+      "marketing-preview-history-cache-v3",
       JSON.stringify(cachedPayload)
     );
 
@@ -234,6 +282,7 @@ describe("useMarketingPreviewHistory", () => {
 
     expect(result.current.isUsingCache).toBe(true);
     expect(result.current.isOffline).toBe(true);
+    expect(result.current.analytics.regressionVelocity.sampleSize).toBe(1);
     expect(global.fetch).toHaveBeenCalled();
     expect(result.current.entries[0].liveDeltas).toEqual([]);
     expect(result.current.entries[0].remediations).toEqual([]);
@@ -284,7 +333,30 @@ describe("useMarketingPreviewHistory", () => {
           remediations: [],
           noteRevisions: []
         }
-      ]
+      ],
+      analytics: {
+        regressionVelocity: {
+          averagePerHour: 0,
+          currentPerHour: 0,
+          sampleSize: 1,
+          confidence: 0
+        },
+        severityMomentum: {
+          info: 0,
+          warning: 0,
+          blocker: 0,
+          overall: 0,
+          sampleSize: 1
+        },
+        timeToGreen: {
+          forecastAt: null,
+          forecastHours: null,
+          slopePerHour: null,
+          confidence: 0,
+          sampleSize: 1
+        },
+        recommendations: []
+      }
     };
 
     const fetchMock = jest.fn().mockResolvedValue({

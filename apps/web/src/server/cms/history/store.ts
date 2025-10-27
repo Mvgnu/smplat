@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import DatabaseConstructor, { type Database } from "better-sqlite3";
 
 import type { MarketingPreviewSnapshotManifest, MarketingPreviewTimelineRouteSummary } from "../preview/types";
+import { buildHistoryAnalytics } from "./analytics";
+
 import type {
   MarketingPreviewGovernanceStats,
   MarketingPreviewHistoryAggregates,
@@ -749,11 +751,14 @@ export const querySnapshotHistory = (
     .prepare(`SELECT COUNT(*) as count FROM snapshot_manifests sm ${whereClause}`)
     .get(params) as { count: number };
 
+  const entries = rows.map((row) => buildHistoryEntry(row, database));
+
   return {
     total: totalRow?.count ?? 0,
     limit,
     offset,
-    entries: rows.map((row) => buildHistoryEntry(row, database))
+    entries,
+    analytics: buildHistoryAnalytics(entries)
   };
 };
 

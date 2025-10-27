@@ -3,6 +3,7 @@
 
 export {
   createHistoryHash,
+  buildHistoryAnalytics,
   fetchSnapshotHistory,
   persistSnapshotManifest,
   querySnapshotHistory,
@@ -16,12 +17,17 @@ export {
 export type {
   MarketingPreviewGovernanceStats,
   MarketingPreviewHistoryAggregates,
+  MarketingPreviewHistoryAnalytics,
   MarketingPreviewHistoryEntry,
   MarketingPreviewHistoryNoteSummary,
   MarketingPreviewHistoryQuery,
   MarketingPreviewHistoryQueryResult,
   MarketingPreviewHistoryRouteRecord,
   MarketingPreviewLiveDeltaRecord,
+  MarketingPreviewRecommendation,
+  MarketingPreviewRegressionVelocity,
   MarketingPreviewRemediationActionRecord,
-  MarketingPreviewNoteRevisionRecord
+  MarketingPreviewNoteRevisionRecord,
+  MarketingPreviewSeverityMomentum,
+  MarketingPreviewTimeToGreenForecast
 } from "./types";
