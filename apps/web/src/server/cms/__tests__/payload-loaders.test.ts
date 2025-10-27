@@ -49,10 +49,13 @@ const lexicalState = lexicalMarketingFixture as unknown;
 type SectionBlock = Extract<NonNullable<PageDocument["content"]>[number], { _type: "section" }>;
 
 const createLexicalSection = (): SectionBlock => {
-  const { nodes } = normalizeMarketingLexicalContent(lexicalState, {
+  const normalized = normalizeMarketingLexicalContent(lexicalState, {
     sectionLabel: "preview-fixture",
     logger: () => {}
   });
+  const marketingContent = normalized.blocks
+    .map((block) => block.node as MarketingContentDocument | null)
+    .filter((block): block is MarketingContentDocument => Boolean(block));
 
   return {
     _type: "section",
@@ -61,7 +64,7 @@ const createLexicalSection = (): SectionBlock => {
     subheading: "Deterministic marketing content",
     layout: undefined,
     content: lexicalState,
-    marketingContent: nodes as MarketingContentDocument[],
+    marketingContent,
     metrics: undefined,
     faqItems: undefined,
     testimonials: undefined,

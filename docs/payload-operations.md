@@ -35,6 +35,8 @@ This guide consolidates the day-to-day tasks for operating Payload as the primar
 - Payload's `createLivePreviewPublisher` hook emits Lexical deltas for marketing pages. When the endpoint is unreachable the Payload logger emits `[payload] live preview` warnings with the `requestId`, collection, and route—use these to validate retries.
 - The cockpit shows a "Stream offline" badge whenever the SSE connection drops. Restart Payload or the frontend, confirm the badge flips to "Live stream", and watch for fresh entries in the live validation feed.
 - If validation responses highlight block errors, use the feed to identify the failing block, update the Payload document, and recheck until the badge returns to "Live clean".
+- Live preview payloads now emit per-block diagnostics including normalization traces, fallback provenance, and fingerprint hashes. Reference the cockpit diagnostics panel for remediation hints before escalating to engineering.
+- Use the authenticated `/api/marketing-preview/fallbacks` endpoint to reset or reprioritize fallback ordering when fixture data needs to override Payload content. The endpoint mirrors the stream signature requirement and only records aggregate counters so no personal data is logged.
 
 ## Secret rotation
 

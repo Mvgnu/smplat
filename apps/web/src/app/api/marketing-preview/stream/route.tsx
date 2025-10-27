@@ -33,6 +33,13 @@ type LivePreviewSectionInput = {
   content?: unknown;
 };
 
+type SectionDiagnostics = {
+  label: string;
+  index: number;
+  warnings: string[];
+  blocks: MarketingBlockValidationResult[];
+};
+
 type LivePreviewPayload = {
   requestId?: string;
   collection: string;
@@ -71,7 +78,37 @@ type LivePreviewBroadcast = {
       valid: boolean;
       errors: string[];
       warnings: string[];
+      fingerprint?: string;
+      recoveryHints: string[];
+      fallback?: MarketingBlockValidationResult["fallback"];
+      trace: MarketingBlockValidationResult["trace"];
     }>;
+  };
+  diagnostics: {
+    summary: {
+      totalBlocks: number;
+      invalidBlocks: number;
+      warningBlocks: number;
+    };
+    sections: Array<{
+      label: string;
+      index: number;
+      warnings: string[];
+      blockCount: number;
+      invalidBlocks: number;
+    }>;
+    blocks: Array<{
+      key?: string;
+      kind?: string;
+      valid: boolean;
+      errors: string[];
+      warnings: string[];
+      fingerprint?: string;
+      recoveryHints: string[];
+      fallback?: MarketingBlockValidationResult["fallback"];
+      trace: MarketingBlockValidationResult["trace"];
+    }>;
+    normalizationWarnings: string[];
   };
 };
 
@@ -108,23 +145,42 @@ const toSectionFromLexical = (
   input: LivePreviewSectionInput,
   index: number,
   validations: MarketingBlockValidationResult[],
-  warnings: string[]
+  warnings: string[],
+  sectionDiagnostics: SectionDiagnostics[]
 ): PageDocument["content"][number] | null => {
   const state = input.content;
   const label = toNonEmptyString(input.heading) ?? `section-${index + 1}`;
 
-  const { nodes, warnings: lexicalWarnings } = normalizeMarketingLexicalContent(state, {
+  const { blocks, warnings: lexicalWarnings } = normalizeMarketingLexicalContent(state, {
     sectionLabel: label
   });
 
   warnings.push(...lexicalWarnings);
 
-  if (!nodes.length) {
-    return null;
+  const sectionResults: MarketingBlockValidationResult[] = [];
+  const marketingContent: MarketingContentDocument[] = [];
+
+  for (const normalized of blocks) {
+    const validation = validateMarketingBlock(
+      (normalized.node as MarketingContentDocument) ?? null,
+      normalized.trace
+    );
+    validations.push(validation);
+    sectionResults.push(validation);
+    if (validation.block) {
+      marketingContent.push(validation.block);
+    }
   }
 
-  for (const block of nodes as MarketingContentDocument[]) {
-    validations.push(validateMarketingBlock(block));
+  sectionDiagnostics.push({
+    label,
+    index,
+    warnings: lexicalWarnings,
+    blocks: sectionResults
+  });
+
+  if (!marketingContent.length) {
+    return null;
   }
 
   return {
@@ -134,7 +190,7 @@ const toSectionFromLexical = (
     subheading: toNonEmptyString(input.subheading),
     layout: undefined,
     content: state,
-    marketingContent: nodes,
+    marketingContent,
     metrics: undefined,
     faqItems: undefined,
     testimonials: undefined,
@@ -273,22 +329,50 @@ const authenticate = (request: Request) => {
 
 const summarizeValidation = (
   validations: MarketingBlockValidationResult[],
-  warnings: string[]
-): LivePreviewBroadcast["validation"] => {
-  const blocks = validations.map((validation) => ({
-    key: validation.key,
-    kind: validation.kind,
+  warnings: string[],
+  sections: SectionDiagnostics[]
+): { validation: LivePreviewBroadcast["validation"]; diagnostics: LivePreviewBroadcast["diagnostics"] } => {
+  const mappedBlocks = validations.map((validation) => ({
+    key: validation.key ?? validation.trace.lexicalKey,
+    kind: validation.kind ?? validation.trace.blockType,
     valid: validation.valid,
     errors: validation.errors,
-    warnings: validation.warnings
+    warnings: validation.warnings,
+    fingerprint: validation.fingerprint,
+    recoveryHints: validation.recoveryHints,
+    fallback: validation.fallback,
+    trace: validation.trace
   }));
 
-  const ok = blocks.every((block) => block.valid) && warnings.length === 0;
+  const ok =
+    validations.every((validation) => validation.valid && validation.warnings.length === 0) && warnings.length === 0;
+
+  const diagnosticsSummary = {
+    totalBlocks: validations.length,
+    invalidBlocks: validations.filter((validation) => !validation.valid).length,
+    warningBlocks: validations.filter((validation) => validation.warnings.length > 0).length
+  };
+
+  const diagnosticsSections = sections.map((section) => ({
+    label: section.label,
+    index: section.index,
+    warnings: section.warnings,
+    blockCount: section.blocks.length,
+    invalidBlocks: section.blocks.filter((block) => !block.valid).length
+  }));
 
   return {
-    ok,
-    warnings,
-    blocks
+    validation: {
+      ok,
+      warnings,
+      blocks: mappedBlocks
+    },
+    diagnostics: {
+      summary: diagnosticsSummary,
+      sections: diagnosticsSections,
+      blocks: mappedBlocks,
+      normalizationWarnings: warnings
+    }
   };
 };
 
@@ -311,10 +395,17 @@ export async function POST(request: Request) {
   const lexicalSections = Array.isArray(body.lexical) ? body.lexical : [];
   const validations: MarketingBlockValidationResult[] = [];
   const normalizationWarnings: string[] = [];
+  const sectionDiagnostics: SectionDiagnostics[] = [];
   const sections: PageDocument["content"] = [];
 
   lexicalSections.forEach((section, index) => {
-    const rendered = toSectionFromLexical(section, index, validations, normalizationWarnings);
+    const rendered = toSectionFromLexical(
+      section,
+      index,
+      validations,
+      normalizationWarnings,
+      sectionDiagnostics
+    );
     if (rendered) {
       sections.push(rendered);
     }
@@ -325,7 +416,11 @@ export async function POST(request: Request) {
   }
 
   const markup = renderMarkup(sections);
-  const validationSummary = summarizeValidation(validations, normalizationWarnings);
+  const { validation: validationSummary, diagnostics } = summarizeValidation(
+    validations,
+    normalizationWarnings,
+    sectionDiagnostics
+  );
   const blockKinds = Array.from(
     new Set(validations.map((validation) => validation.kind).filter(Boolean))
   ) as string[];
@@ -345,10 +440,11 @@ export async function POST(request: Request) {
     sectionCount: sections.length,
     hero: body.hero ?? undefined,
     metrics: resolveMetricsSummary(sections),
-    validation: validationSummary
+    validation: validationSummary,
+    diagnostics
   };
 
   await broadcast(broadcastPayload);
 
-  return NextResponse.json({ acknowledged: true, validation: validationSummary });
+  return NextResponse.json({ acknowledged: true, validation: validationSummary, diagnostics });
 }
