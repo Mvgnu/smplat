@@ -26,6 +26,7 @@ from smplat_api.models.billing_reconciliation import (
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
 from smplat_api.models.user import User, UserRoleEnum
+from smplat_api.services.billing.discrepancy_playbooks import get_discrepancy_playbook
 from smplat_api.services.billing.providers import (
     StripeBalanceTransaction,
     StripeDisputeRecord,
@@ -164,6 +165,174 @@ async def test_sync_balance_transactions_stages_orphans(session_factory):
         staged_row = staged_rows.scalar_one()
         assert staged_row.transaction_id == "txn_orphan"
         assert staged_row.status == ProcessorStatementStagingStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_sync_balance_transactions_classifies_multi_invoice_payout(session_factory):
+    async with session_factory() as session:
+        workspace_id = uuid4()
+        user = User(id=workspace_id, email="multi-invoice@example.com", role=UserRoleEnum.FINANCE)
+        invoice_a = Invoice(
+            workspace_id=workspace_id,
+            invoice_number="INV-MULTI-A",
+            status=InvoiceStatusEnum.ISSUED,
+            currency=CurrencyEnum.USD,
+            subtotal=Decimal("120.00"),
+            tax=Decimal("0"),
+            total=Decimal("120.00"),
+            balance_due=Decimal("0.00"),
+            processor_charge_id="ch_multi_a",
+            due_at=datetime.now(timezone.utc),
+        )
+        invoice_b = Invoice(
+            workspace_id=workspace_id,
+            invoice_number="INV-MULTI-B",
+            status=InvoiceStatusEnum.ISSUED,
+            currency=CurrencyEnum.USD,
+            subtotal=Decimal("80.00"),
+            tax=Decimal("0"),
+            total=Decimal("80.00"),
+            balance_due=Decimal("0.00"),
+            processor_charge_id="ch_multi_b",
+            due_at=datetime.now(timezone.utc),
+        )
+        session.add_all([user, invoice_a, invoice_b])
+        await session.flush()
+
+        observed_at = datetime.now(timezone.utc)
+        transactions = [
+            StripeBalanceTransaction(
+                transaction_id="txn_multi_payout",
+                type="payout",
+                amount=Decimal("190.00"),
+                currency="USD",
+                fee=Decimal("0"),
+                net=Decimal("190.00"),
+                created_at=observed_at,
+                updated_at=observed_at,
+                source_id=None,
+                raw={
+                    "id": "txn_multi_payout",
+                    "status": "paid",
+                    "metadata": {
+                        "workspace_id": str(workspace_id),
+                        "invoice_ids": [str(invoice_a.id), str(invoice_b.id)],
+                    },
+                },
+            )
+        ]
+        provider = StubStatementProvider(transactions, [], {})
+
+        service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
+        result = await service.sync_balance_transactions(workspace_id=workspace_id)
+        assert len(result.persisted) == 1
+        statement = result.persisted[0]
+        assert (
+            statement.transaction_type
+            == ProcessorStatementTransactionType.MULTI_INVOICE_PAYOUT
+        )
+
+        run = await service.ensure_run()
+        await reconcile_statements(session, statements=result.statements_for_reconciliation, run=run)
+
+        discrepancy_rows = await session.execute(select(BillingDiscrepancy))
+        discrepancy = discrepancy_rows.scalars().one()
+        assert discrepancy.discrepancy_type == BillingDiscrepancyType.MULTI_INVOICE_SETTLEMENT
+        assert "Settlement" in (discrepancy.summary or "")
+
+
+@pytest.mark.asyncio
+async def test_sync_balance_transactions_detects_clawback(session_factory):
+    async with session_factory() as session:
+        workspace_id = uuid4()
+        user = User(id=workspace_id, email="clawback@example.com", role=UserRoleEnum.FINANCE)
+        session.add(user)
+        await session.flush()
+
+        observed_at = datetime.now(timezone.utc)
+        transactions = [
+            StripeBalanceTransaction(
+                transaction_id="txn_clawback",
+                type="payout",
+                amount=Decimal("-150.00"),
+                currency="USD",
+                fee=Decimal("0"),
+                net=Decimal("-150.00"),
+                created_at=observed_at,
+                updated_at=observed_at,
+                source_id=None,
+                raw={
+                    "id": "txn_clawback",
+                    "metadata": {"workspace_id": str(workspace_id)},
+                },
+            )
+        ]
+        provider = StubStatementProvider(transactions, [], {})
+
+        service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
+        result = await service.sync_balance_transactions(workspace_id=workspace_id)
+        assert len(result.persisted) == 1
+        statement = result.persisted[0]
+        assert statement.transaction_type == ProcessorStatementTransactionType.PAYOUT_REVERSAL
+
+        run = await service.ensure_run()
+        await reconcile_statements(session, statements=result.statements_for_reconciliation, run=run)
+
+        discrepancy_rows = await session.execute(select(BillingDiscrepancy))
+        discrepancy = discrepancy_rows.scalars().one()
+        assert discrepancy.discrepancy_type == BillingDiscrepancyType.PAYOUT_CLAWBACK
+        assert "clawback" in (discrepancy.summary or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_sync_balance_transactions_flags_fx_variance(session_factory):
+    async with session_factory() as session:
+        workspace_id = uuid4()
+        user = User(id=workspace_id, email="fx@example.com", role=UserRoleEnum.FINANCE)
+        session.add(user)
+        await session.flush()
+
+        observed_at = datetime.now(timezone.utc)
+        transactions = [
+            StripeBalanceTransaction(
+                transaction_id="txn_fx_loss",
+                type="currency_conversion",
+                amount=Decimal("0.00"),
+                currency="EUR",
+                fee=Decimal("0"),
+                net=Decimal("-3.25"),
+                created_at=observed_at,
+                updated_at=observed_at,
+                source_id=None,
+                raw={
+                    "id": "txn_fx_loss",
+                    "metadata": {"workspace_id": str(workspace_id)},
+                    "reporting_category": "currency_exchange",
+                },
+            )
+        ]
+        provider = StubStatementProvider(transactions, [], {})
+
+        service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
+        result = await service.sync_balance_transactions(workspace_id=workspace_id)
+        assert len(result.persisted) == 1
+        statement = result.persisted[0]
+        assert statement.transaction_type == ProcessorStatementTransactionType.FX_LOSS
+
+        run = await service.ensure_run()
+        await reconcile_statements(session, statements=result.statements_for_reconciliation, run=run)
+
+        discrepancy_rows = await session.execute(select(BillingDiscrepancy))
+        discrepancy = discrepancy_rows.scalars().one()
+        assert discrepancy.discrepancy_type == BillingDiscrepancyType.FX_IMPACT
+        assert "fx loss" in (discrepancy.summary or "").lower()
+
+
+def test_discrepancy_playbook_metadata_includes_actions():
+    payload = get_discrepancy_playbook(BillingDiscrepancyType.DYNAMIC_FEE_VARIANCE)
+    assert payload is not None
+    assert payload["recommendedActions"]
+    assert payload["autoResolveThreshold"] == 2.5
 
 
 @pytest.mark.asyncio
@@ -640,6 +809,9 @@ async def test_list_discrepancies_supports_type_filter(app_with_db):
         payload = response.json()
         assert len(payload) == 1
         assert payload[0]["discrepancyType"] == BillingDiscrepancyType.FEE_ADJUSTMENT.value
+        playbook = payload[0].get("playbook")
+        assert playbook is not None
+        assert playbook["recommendedActions"]
     finally:
         settings.checkout_api_key = previous_key
 

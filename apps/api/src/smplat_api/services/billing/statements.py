@@ -575,13 +575,15 @@ class StripeStatementIngestionService:
     ) -> ProcessorStatementTransactionType:
         normalized = transaction.type.lower()
         raw = dict(transaction.raw) if isinstance(transaction.raw, Mapping) else {}
+        metadata = raw.get("metadata") if isinstance(raw.get("metadata"), Mapping) else {}
+        reporting_category = str(raw.get("reporting_category", "")).lower()
+        description = str(raw.get("description", "")).lower()
 
         if normalized in {"charge", "payment", "payment_intent"}:
             return ProcessorStatementTransactionType.CHARGE
 
         if normalized in {"refund", "application_fee_refund"}:
             raw_type = str(raw.get("type", "")).lower() if isinstance(raw, dict) else ""
-            description = str(raw.get("description", "")).lower() if isinstance(raw, dict) else ""
             if raw.get("reversed") is True or raw_type in {"refund_reversal", "reversal"} or "reversal" in description:
                 return ProcessorStatementTransactionType.REFUND_REVERSAL
             return ProcessorStatementTransactionType.REFUND
@@ -590,16 +592,52 @@ class StripeStatementIngestionService:
             raw_type = str(raw.get("type", "")).lower() if isinstance(raw, dict) else ""
             if raw_type in {"adjustment", "fee_adjustment"}:
                 return ProcessorStatementTransactionType.FEE_ADJUSTMENT
+            if isinstance(metadata, Mapping) and metadata.get("dynamic_fee") == "true":
+                return ProcessorStatementTransactionType.DYNAMIC_FEE
+            if "dynamic" in description or "tier" in description:
+                return ProcessorStatementTransactionType.DYNAMIC_FEE
             return ProcessorStatementTransactionType.FEE
 
         if normalized == "payout":
             status = str(raw.get("status", "")).lower() if isinstance(raw, dict) else ""
             if status in {"pending", "in_transit"}:
                 return ProcessorStatementTransactionType.PAYOUT_DELAY
+            invoice_ids = None
+            if isinstance(metadata, Mapping):
+                candidate = metadata.get("invoice_ids") or metadata.get("invoices")
+                if isinstance(candidate, str):
+                    invoice_ids = [part.strip() for part in candidate.split(",") if part.strip()]
+                elif isinstance(candidate, (list, tuple, set)):
+                    invoice_ids = [str(item).strip() for item in candidate if str(item).strip()]
+            if invoice_ids and len(invoice_ids) > 1:
+                return ProcessorStatementTransactionType.MULTI_INVOICE_PAYOUT
+            if transaction.net < 0:
+                return ProcessorStatementTransactionType.PAYOUT_REVERSAL
             return ProcessorStatementTransactionType.PAYOUT
 
-        if normalized == "adjustment":
-            return ProcessorStatementTransactionType.ADJUSTMENT
+        if normalized in {"payout_reversal", "negative_payout"} or "payout_reversal" in reporting_category:
+            return ProcessorStatementTransactionType.PAYOUT_REVERSAL
+
+        if normalized in {"adjustment", "balance_adjustment"}:
+            if "connect" in reporting_category or "transfer" in reporting_category or "transfer" in description:
+                return ProcessorStatementTransactionType.CROSS_LEDGER_TRANSFER
+            return ProcessorStatementTransactionType.BALANCE_ADJUSTMENT
+
+        if normalized in {"transfer", "transfer_reversal"}:
+            return ProcessorStatementTransactionType.CROSS_LEDGER_TRANSFER
+
+        if normalized in {"currency_conversion", "fx", "foreign_exchange"} or "currency" in reporting_category:
+            return (
+                ProcessorStatementTransactionType.FX_LOSS
+                if transaction.net < 0
+                else ProcessorStatementTransactionType.FX_GAIN
+            )
+
+        if "dispute" in normalized or "dispute" in reporting_category:
+            return ProcessorStatementTransactionType.DISPUTE_WITHHOLD
+
+        if normalized in {"clawback", "charge_clawback"} or "clawback" in description:
+            return ProcessorStatementTransactionType.PAYOUT_REVERSAL
 
         return ProcessorStatementTransactionType.ADJUSTMENT
 
@@ -679,6 +717,14 @@ def _map_discrepancy_type(
         ProcessorStatementTransactionType.FEE_ADJUSTMENT: BillingDiscrepancyType.FEE_ADJUSTMENT,
         ProcessorStatementTransactionType.PAYOUT_DELAY: BillingDiscrepancyType.PAYOUT_DELAY,
         ProcessorStatementTransactionType.REFUND_REVERSAL: BillingDiscrepancyType.REFUND_REVERSAL,
+        ProcessorStatementTransactionType.PAYOUT_REVERSAL: BillingDiscrepancyType.PAYOUT_CLAWBACK,
+        ProcessorStatementTransactionType.MULTI_INVOICE_PAYOUT: BillingDiscrepancyType.MULTI_INVOICE_SETTLEMENT,
+        ProcessorStatementTransactionType.DYNAMIC_FEE: BillingDiscrepancyType.DYNAMIC_FEE_VARIANCE,
+        ProcessorStatementTransactionType.BALANCE_ADJUSTMENT: BillingDiscrepancyType.BALANCE_ADJUSTMENT,
+        ProcessorStatementTransactionType.CROSS_LEDGER_TRANSFER: BillingDiscrepancyType.CROSS_LEDGER_ADJUSTMENT,
+        ProcessorStatementTransactionType.FX_GAIN: BillingDiscrepancyType.FX_IMPACT,
+        ProcessorStatementTransactionType.FX_LOSS: BillingDiscrepancyType.FX_IMPACT,
+        ProcessorStatementTransactionType.DISPUTE_WITHHOLD: BillingDiscrepancyType.DISPUTE_HOLD,
     }
     return mapping.get(transaction_type)
 
@@ -686,6 +732,7 @@ def _map_discrepancy_type(
 def _summarize_discrepancy(statement: ProcessorStatement) -> str:
     amount = statement.net_amount or statement.gross_amount
     formatted_amount = f"{amount}" if amount is not None else "unknown amount"
+    data = statement.data if isinstance(statement.data, Mapping) else {}
     if statement.transaction_type == ProcessorStatementTransactionType.PAYOUT_DELAY:
         return f"Payout {statement.transaction_id} delayed for {formatted_amount}"
     if statement.transaction_type == ProcessorStatementTransactionType.FEE_ADJUSTMENT:
@@ -696,4 +743,36 @@ def _summarize_discrepancy(statement: ProcessorStatement) -> str:
         return f"Refund {statement.transaction_id} not linked to invoice"
     if statement.transaction_type == ProcessorStatementTransactionType.FEE:
         return f"Fee {statement.transaction_id} not tracked against an invoice"
+    if statement.transaction_type == ProcessorStatementTransactionType.PAYOUT_REVERSAL:
+        return f"Payout clawback {statement.transaction_id} reduced balances by {formatted_amount}"
+    if statement.transaction_type == ProcessorStatementTransactionType.MULTI_INVOICE_PAYOUT:
+        invoice_count = None
+        if isinstance(data, Mapping):
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), Mapping) else {}
+            if isinstance(metadata, Mapping):
+                invoice_ids = metadata.get("invoice_ids") or metadata.get("invoices")
+                if isinstance(invoice_ids, str):
+                    invoice_count = len([part for part in invoice_ids.split(",") if part.strip()])
+                elif isinstance(invoice_ids, (list, tuple, set)):
+                    invoice_count = len(invoice_ids)
+        invoice_fragment = f"across {invoice_count} invoices" if invoice_count else "across multiple invoices"
+        return f"Settlement {statement.transaction_id} {invoice_fragment} requires allocation review"
+    if statement.transaction_type == ProcessorStatementTransactionType.DYNAMIC_FEE:
+        return f"Dynamic fee {statement.transaction_id} deviates by {formatted_amount}"
+    if statement.transaction_type == ProcessorStatementTransactionType.BALANCE_ADJUSTMENT:
+        return f"Balance adjustment {statement.transaction_id} posted for {formatted_amount}"
+    if statement.transaction_type == ProcessorStatementTransactionType.CROSS_LEDGER_TRANSFER:
+        target_workspace = None
+        if isinstance(data, Mapping):
+            target_workspace = data.get("destination") or data.get("connected_account")
+        target_fragment = f" to {target_workspace}" if target_workspace else ""
+        return f"Cross-ledger transfer{target_fragment} {statement.transaction_id} needs confirmation"
+    if statement.transaction_type in {
+        ProcessorStatementTransactionType.FX_GAIN,
+        ProcessorStatementTransactionType.FX_LOSS,
+    }:
+        direction = "gain" if statement.transaction_type == ProcessorStatementTransactionType.FX_GAIN else "loss"
+        return f"FX {direction} {statement.transaction_id} recorded for {formatted_amount}"
+    if statement.transaction_type == ProcessorStatementTransactionType.DISPUTE_WITHHOLD:
+        return f"Dispute hold {statement.transaction_id} locks {formatted_amount}"
     return f"Statement {statement.transaction_id} missing invoice linkage"

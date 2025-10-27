@@ -15,15 +15,12 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 - Each sweep opens a run with status `running`. Upon completion the worker records `completed_at`, persists a JSON note summarizing counts (persisted, updated, staged, removed, disputes, cursor), and flips the run status to `completed`. Failures are committed with `status="failed"` and error context for observability.
 - Run notes now include an array of `{ workspace_id, next_cursor }` objects reflecting the cursor values returned by each ingestion call. The dashboard surfaces this metadata alongside counts so operators can see which workspace last advanced.
 - The helper `reconcile_statements` evaluates persisted statements, incrementing `matched_transactions` for invoices with successful linkage and logging discrepancies when invoices are missing.
-- Stripe balance transactions are now enriched with type-aware reconciliation semantics:
-  - **Payout delays** – when Stripe marks a payout as `pending`/`in_transit`, it is stored as a `PAYOUT_DELAY` statement and reconciled into a `payout_delay` discrepancy. Operators can immediately see pending cash movement without digging through staging.
-  - **Fee adjustments** – `application_fee` transactions tagged as `fee_adjustment` retain invoice linkage while still surfacing a `fee_adjustment` discrepancy so finance can confirm the downstream accounting treatment.
-  - **Refund reversals** – Stripe refund payloads marked with `refund_reversal` are normalized into `REFUND_REVERSAL` statements and surfaced as `refund_reversal` discrepancies, keeping reversal flows distinct from unapplied refunds.
+- Stripe balance transactions are now enriched with a broader type-aware reconciliation matrix covering multi-invoice settlements, payout clawbacks, dynamic fees, cross-ledger adjustments, FX variance, dispute holds, and traditional refund/fee flows. Each classification maps to a dedicated discrepancy with operator playbook metadata.
 - Decision tree summary:
   1. Resolve invoice/workspace from charge metadata or payout metadata.
-  2. Map transaction type → statement type (`charge`, `refund`, `payout_delay`, `fee_adjustment`, `refund_reversal`).
-  3. If an invoice is missing, raise the default discrepancy (`missing_invoice`, `unapplied_refund`, `untracked_fee`).
-  4. If a payout delay, fee adjustment, or refund reversal is observed, log the dedicated discrepancy even when the invoice link exists so the dashboard highlights operator action items.
+  2. Map transaction type → statement type using the extended taxonomy (`charge`, `refund`, `payout_delay`, `refund_reversal`, `multi_invoice_payout`, `payout_reversal`, `dynamic_fee`, `cross_ledger_transfer`, `fx_gain/fx_loss`, `dispute_withhold`, etc.).
+  3. If an invoice is missing, raise the default discrepancy (`missing_invoice`, `unapplied_refund`, `untracked_fee`, `balance_adjustment`, `cross_ledger_adjustment`, `payout_clawback`, etc.).
+  4. Always attach the playbook payload so dashboards/API consumers can surface recommended actions, auto-resolve thresholds, and escalation timers.
 - Sample normalized payloads:
   ```json
   {
@@ -49,6 +46,25 @@ This document outlines the workflow for ingesting Stripe statements, processing 
   }
   ```
 
+### Classification Matrix
+
+| Statement type | Discrepancy type | Auto-resolve threshold | Key operator actions |
+| -------------- | ---------------- | ---------------------- | -------------------- |
+| `PAYOUT_DELAY` | `payout_delay` | — | Track payout ETA, escalate to Stripe if SLA breached |
+| `MULTI_INVOICE_PAYOUT` | `multi_invoice_settlement` | ≤ 5.00 | Allocate payout across listed invoices, confirm totals |
+| `PAYOUT_REVERSAL` | `payout_clawback` | — | Verify clawback reason, notify finance lead |
+| `DYNAMIC_FEE` | `dynamic_fee_variance` | ≤ 2.50 | Review workspace fee overrides, sync application fees |
+| `FEE_ADJUSTMENT` | `fee_adjustment` | ≤ 1.00 | Validate adjustment memo, update fee accrual workbook |
+| `FEE` | `untracked_fee` | ≤ 1.00 | Map fee to invoice, update catalog |
+| `REFUND` | `unapplied_refund` | — | Link refund to invoice, confirm customer comms |
+| `REFUND_REVERSAL` | `refund_reversal` | — | Confirm reversal and downstream settlement |
+| `CROSS_LEDGER_TRANSFER` | `cross_ledger_adjustment` | — | Confirm destination workspace/ledger, annotate memo |
+| `BALANCE_ADJUSTMENT` | `balance_adjustment` | — | Document adjustment and reconcile timeline |
+| `FX_GAIN`/`FX_LOSS` | `fx_impact` | ≤ 3.00 | Compare FX rate to contract, post gain/loss journal |
+| `DISPUTE_WITHHOLD` | `dispute_hold` | — | Confirm dispute submission, coordinate support |
+
+Playbook metadata is embedded in each discrepancy response (`playbook.recommendedActions`, `playbook.autoResolveThreshold`, `playbook.escalationAfterHours`, `playbook.notes`) and rendered in the admin dashboard for rapid execution.
+
 ## Dispute Automation
 
 - Stripe disputes are fetched during every worker run. Each dispute is recorded as an `UNAPPLIED_REFUND` discrepancy tied to the open reconciliation run.
@@ -58,7 +74,7 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 
 - `GET /api/v1/billing/reconciliation/runs`: Lists recent reconciliation runs alongside open discrepancies.
 -   The response contains a `metrics` object per run parsed from worker notes (persisted, updated, staged, removed, disputes, cursor, error) and a `failure` object whenever `status="failed"`. Failure metadata includes the serialized error string, the staged count snapshot at failure time, persisted/updated totals, and the cursor used by the worker so finance can resume from the last checkpoint. The payload also includes a `stagingBacklog` aggregate covering pending and requeued staging rows.
-- `GET /api/v1/billing/reconciliation/discrepancies`: Returns discrepancies filtered by status and optional type (`?type=fee_adjustment|payout_delay|refund_reversal`).
+- `GET /api/v1/billing/reconciliation/discrepancies`: Returns discrepancies filtered by status and optional type (`?type=fee_adjustment|payout_delay|refund_reversal|multi_invoice_settlement|payout_clawback|cross_ledger_adjustment|fx_impact|dynamic_fee_variance|balance_adjustment|dispute_hold`). Responses now include a `playbook` payload with recommended actions and auto-resolution guidance.
 - `POST /api/v1/billing/reconciliation/discrepancies/{id}/acknowledge`: Marks a discrepancy as acknowledged.
 - `POST /api/v1/billing/reconciliation/discrepancies/{id}/resolve`: Resolves a discrepancy and records resolution notes.
 - `POST /api/v1/billing/reconciliation/discrepancies/{id}/requeue`: Reopens a discrepancy for further investigation.
@@ -73,7 +89,7 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 - Summary KPIs highlight the staging backlog, open discrepancies, failure counts, and the most recent failure description sourced from the run `failure` metadata.
 - The run history table exposes metrics and failure metadata for each sweep so operators can confirm persistence counts before re-running.
 - The staging triage grid provides inline note capture with actions to mark entries triaged, resolved, or requeued; actions call the FastAPI endpoints through the Next.js API proxy.
-- Discrepancies are filterable by status to accelerate investigation. Notes entered in the triage grid are persisted through the backend APIs.
+- Discrepancies are filterable by status to accelerate investigation. Each row now surfaces the operator playbook (actions, thresholds, escalation clocks) so teams can resolve directly from the dashboard without consulting separate runbooks. Notes entered in the triage grid are persisted through the backend APIs.
 
 ## Failure Handling SOP
 
