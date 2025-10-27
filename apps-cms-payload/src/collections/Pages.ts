@@ -2,6 +2,7 @@ import type { Block, CollectionConfig } from "payload";
 
 import { canWrite } from "@/access/canWrite";
 import { environmentField } from "@/fields/environment";
+import { createLivePreviewPublisher } from "@/hooks/livePreview";
 import { createRevalidateHooks } from "@/hooks/revalidate";
 
 const sectionBlock: Block = {
@@ -110,6 +111,7 @@ const testimonialHighlightBlock: Block = {
 };
 
 const pagesRevalidateHooks = createRevalidateHooks("pages");
+const pagesLivePreview = createLivePreviewPublisher("pages");
 
 export const Pages: CollectionConfig = {
   slug: "pages",
@@ -125,7 +127,7 @@ export const Pages: CollectionConfig = {
     delete: canWrite
   },
   hooks: {
-    afterChange: [pagesRevalidateHooks.afterChange],
+    afterChange: [pagesRevalidateHooks.afterChange, pagesLivePreview.afterChange],
     afterDelete: [pagesRevalidateHooks.afterDelete]
   },
   fields: [

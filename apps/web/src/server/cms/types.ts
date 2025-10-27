@@ -267,6 +267,7 @@ export const pageSchema = z.object({
 
 export type PageDocument = z.infer<typeof pageSchema>;
 export type MarketingContentDocument = z.infer<typeof marketingContentSchema>;
+export const marketingContentValidationSchema = marketingContentSchema;
 export type TestimonialDocument = z.infer<typeof testimonialSchema>;
 export type FaqDocument = z.infer<typeof faqSchema>;
 export type CaseStudyDocument = z.infer<typeof caseStudySchema>;
