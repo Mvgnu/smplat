@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from .endpoints import (
     billing,
     billing_reconciliation,
+    billing_replay,
     billing_webhooks,
     fulfillment,
     health,
@@ -20,6 +21,7 @@ router.include_router(payments.router)
 router.include_router(orders.router)
 router.include_router(billing.router)
 router.include_router(billing_reconciliation.router)
+router.include_router(billing_replay.router)
 router.include_router(billing_webhooks.router)
 router.include_router(observability.router)
 router.include_router(fulfillment.router, tags=["Fulfillment"])
