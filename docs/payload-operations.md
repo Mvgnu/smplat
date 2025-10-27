@@ -28,6 +28,14 @@ This guide consolidates the day-to-day tasks for operating Payload as the primar
 - Preview counters (`preview_*`) and revalidation counters (`revalidate_*`) live in `getCmsMetricSnapshot()`. Expose these through your preferred metrics adapter if Prometheus is available.
 - During incidents capture the `requestId` from Payload logs and search for matching entries in Next.js logs to understand end-to-end behaviour.
 
+## Live preview streaming channel
+
+- Configure `PAYLOAD_LIVE_PREVIEW_SECRET` in both Payload and the marketing frontend. Payload hooks sign live preview payloads with this value, and the SSE endpoint rejects unsigned requests.
+- Optional: set `PAYLOAD_LIVE_PREVIEW_ENDPOINT` if the marketing site is not hosted at `WEB_URL/api/marketing-preview/stream`.
+- Payload's `createLivePreviewPublisher` hook emits Lexical deltas for marketing pages. When the endpoint is unreachable the Payload logger emits `[payload] live preview` warnings with the `requestId`, collection, and route—use these to validate retries.
+- The cockpit shows a "Stream offline" badge whenever the SSE connection drops. Restart Payload or the frontend, confirm the badge flips to "Live stream", and watch for fresh entries in the live validation feed.
+- If validation responses highlight block errors, use the feed to identify the failing block, update the Payload document, and recheck until the badge returns to "Live clean".
+
 ## Secret rotation
 
 1. Generate new values for `PAYLOAD_PREVIEW_SECRET` and `PAYLOAD_REVALIDATE_SECRET`.

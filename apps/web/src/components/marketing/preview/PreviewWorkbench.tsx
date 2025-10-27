@@ -14,6 +14,11 @@ import type {
   MarketingPreviewTriageNote,
   MarketingPreviewTriageNoteSeverity
 } from "@/server/cms/preview/notes";
+import {
+  useLivePreview,
+  type LivePreviewConnectionState,
+  type LiveValidationEntry
+} from "./useLivePreview";
 
 const formatDateTime = (timestamp: string) => {
   const date = new Date(timestamp);
@@ -130,6 +135,68 @@ const severityLabels: Record<MarketingPreviewTriageNoteSeverity, string> = {
   blocker: "Blocker"
 };
 
+const blockStatusStyles = {
+  ok: "bg-emerald-500/20 text-emerald-100",
+  warn: "bg-amber-500/20 text-amber-100",
+  error: "bg-rose-500/20 text-rose-100"
+};
+
+const blockStatusLabels = {
+  ok: "Valid",
+  warn: "Warnings",
+  error: "Errors"
+};
+
+const connectionBadgeStyles: Record<LivePreviewConnectionState, string> = {
+  connecting: "bg-amber-500/20 text-amber-100",
+  connected: "bg-emerald-500/20 text-emerald-100",
+  disconnected: "bg-rose-500/20 text-rose-100"
+};
+
+const connectionBadgeLabels: Record<LivePreviewConnectionState, string> = {
+  connecting: "Connecting stream",
+  connected: "Live stream",
+  disconnected: "Stream offline"
+};
+
+const classifyBlockStatus = (block: LiveValidationEntry["blocks"][number]): "ok" | "warn" | "error" => {
+  if (!block.valid || block.errors.length > 0) {
+    return "error";
+  }
+  if (block.warnings.length > 0) {
+    return "warn";
+  }
+  return "ok";
+};
+
+const determineValidationBadge = (
+  state: LivePreviewConnectionState,
+  entry?: LiveValidationEntry
+) => {
+  if (entry) {
+    const hasErrors = !entry.valid || entry.blocks.some((block) => classifyBlockStatus(block) === "error");
+    const hasWarnings =
+      !hasErrors &&
+      (entry.warnings.length > 0 || entry.blocks.some((block) => classifyBlockStatus(block) === "warn"));
+
+    if (hasErrors) {
+      return { label: "Live errors", className: blockStatusStyles.error };
+    }
+    if (hasWarnings) {
+      return { label: "Live warnings", className: blockStatusStyles.warn };
+    }
+    return { label: "Live clean", className: blockStatusStyles.ok };
+  }
+
+  if (state === "connected") {
+    return { label: "Awaiting stream", className: "bg-white/10 text-white/60" };
+  }
+  if (state === "connecting") {
+    return { label: "Connecting", className: connectionBadgeStyles.connecting };
+  }
+  return { label: "Stream offline", className: "bg-white/10 text-white/50" };
+};
+
 const noteKey = (generatedAt: string, route: string) => `${generatedAt}::${route}`;
 
 type PreviewWorkbenchProps = {
@@ -139,7 +206,8 @@ type PreviewWorkbenchProps = {
 };
 
 export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbenchProps) {
-  const timelineEntries = useMemo(() => [current, ...history], [current, history]);
+  const { timelineEntries, connectionState, validationQueue, clearValidationQueue, routeValidation } =
+    useLivePreview({ current, history });
   const [selectedEntryId, setSelectedEntryId] = useState(timelineEntries[0]?.id ?? "");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
   const [localNotes, setLocalNotes] = useState<MarketingPreviewTriageNote[]>(notes);
@@ -203,6 +271,8 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
 
   const hasDifferences = diffLines.some((line) => line.kind !== "same");
   const snapshotForView = viewMode === "draft" ? activeGroup?.draft : activeGroup?.published;
+  const activeValidation = activeGroup ? routeValidation[activeGroup.route] : undefined;
+  const activeValidationBadge = determineValidationBadge(connectionState, activeValidation);
 
   const noteCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -272,6 +342,11 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
             {timelineEntries.length} capture{timelineEntries.length === 1 ? "" : "s"} · {changedRouteCount}/
             {totalRoutes} active diffs
           </p>
+          <span
+            className={`mt-3 inline-flex items-center rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${connectionBadgeStyles[connectionState]}`}
+          >
+            {connectionBadgeLabels[connectionState]}
+          </span>
           <div className="mt-4 flex flex-col gap-2">
             {timelineEntries.map((entry, index) => {
               const isActive = entry.id === activeEntry?.id;
@@ -306,6 +381,8 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
             const noteCount = noteCounts.get(key) ?? 0;
             const summary = activeEntry?.routes.find((route) => route.route === group.route);
             const statusLabel = summary?.diffDetected ? "Diff detected" : "In sync";
+            const validationEntry = routeValidation[group.route];
+            const validationBadge = determineValidationBadge(connectionState, validationEntry);
             return (
               <button
                 key={group.route}
@@ -319,23 +396,28 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                     : "border-white/10 bg-white/5 text-white/70 hover:border-white/20 hover:bg-white/10 hover:text-white"
                 }`}
               >
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold">{group.route}</p>
-                    <p className="mt-1 text-xs text-white/60">{summarizeBlocks(group.published ?? group.draft)}</p>
-                  </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <span
-                      className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${
-                        summary?.diffDetected ? "bg-amber-500/20 text-amber-100" : "bg-emerald-500/20 text-emerald-100"
-                      }`}
-                    >
-                      {statusLabel}
-                    </span>
-                    {noteCount > 0 ? (
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-white/60">
-                        {noteCount} note{noteCount === 1 ? "" : "s"}
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold">{group.route}</p>
+                      <p className="mt-1 text-xs text-white/60">{summarizeBlocks(group.published ?? group.draft)}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <span
+                        className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${
+                          summary?.diffDetected ? "bg-amber-500/20 text-amber-100" : "bg-emerald-500/20 text-emerald-100"
+                        }`}
+                      >
+                        {statusLabel}
                       </span>
+                      <span
+                        className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${validationBadge.className}`}
+                      >
+                        {validationBadge.label}
+                      </span>
+                      {noteCount > 0 ? (
+                        <span className="text-[10px] uppercase tracking-[0.2em] text-white/60">
+                          {noteCount} note{noteCount === 1 ? "" : "s"}
+                        </span>
                     ) : null}
                   </div>
                 </div>
@@ -346,6 +428,57 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
       </aside>
 
       <div className="space-y-6">
+        {validationQueue.length > 0 ? (
+          <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-white">Live validation activity</p>
+                <p className="mt-1 text-xs text-white/60">
+                  Latest payloads from the streaming bridge surface below. Clear the feed after triage.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={clearValidationQueue}
+                className="rounded-full border border-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/60 transition hover:border-white/30 hover:text-white"
+              >
+                Clear
+              </button>
+            </div>
+
+            <ul className="mt-4 space-y-3">
+              {validationQueue.map((entry) => {
+                const badge = determineValidationBadge(connectionState, entry);
+                const errorCount = entry.blocks.filter((block) => classifyBlockStatus(block) === "error").length;
+                const warningCount =
+                  entry.warnings.length + entry.blocks.filter((block) => classifyBlockStatus(block) === "warn").length;
+
+                return (
+                  <li
+                    key={`${entry.id}-${entry.receivedAt}`}
+                    className="rounded-2xl border border-white/10 bg-black/40 p-4"
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-white">{entry.route}</p>
+                        <p className="mt-1 text-xs text-white/60">Updated {formatDateTime(entry.receivedAt)}</p>
+                      </div>
+                      <span
+                        className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${badge.className}`}
+                      >
+                        {badge.label}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-white/60">
+                      {errorCount} block error{errorCount === 1 ? "" : "s"} · {warningCount} warning signal
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : null}
+
         {activeEntry && activeGroup ? (
           <>
             <header className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
@@ -391,6 +524,75 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                 </div>
               </div>
             </header>
+
+            {activeValidation ? (
+              <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-white">Live validation</p>
+                      <p className="text-xs text-white/60">
+                        Received {formatDateTime(activeValidation.receivedAt)}
+                      </p>
+                    </div>
+                    <span
+                      className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${activeValidationBadge.className}`}
+                    >
+                      {activeValidationBadge.label}
+                    </span>
+                  </div>
+
+                  {activeValidation.warnings.length > 0 ? (
+                    <ul className="space-y-1 text-xs text-amber-100">
+                      {activeValidation.warnings.map((warning, warningIndex) => (
+                        <li key={`${activeValidation.id}-global-warning-${warningIndex}`}>• {warning}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+
+                  <div className="space-y-3">
+                    {activeValidation.blocks.map((block, index) => {
+                      const status = classifyBlockStatus(block);
+                      const badgeClass = blockStatusStyles[status];
+                      const label = blockStatusLabels[status];
+                      const blockKey = block.key ?? `${block.kind ?? "block"}-${index}`;
+
+                      return (
+                        <div key={`${activeValidation.id}-${blockKey}`} className="rounded-2xl border border-white/10 bg-black/40 p-4">
+                          <div className="flex items-center justify-between gap-4">
+                            <p className="text-sm font-semibold text-white">{block.kind ?? "Block"}</p>
+                            <span
+                              className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] ${badgeClass}`}
+                            >
+                              {label}
+                            </span>
+                          </div>
+                          {block.errors.length > 0 ? (
+                            <ul className="mt-2 space-y-1 text-xs text-rose-100">
+                              {block.errors.map((error, errorIndex) => (
+                                <li key={`${activeValidation.id}-${blockKey}-error-${errorIndex}`}>• {error}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          {block.warnings.length > 0 ? (
+                            <ul className="mt-2 space-y-1 text-xs text-amber-100">
+                              {block.warnings.map((warning, warningIndex) => (
+                                <li key={`${activeValidation.id}-${blockKey}-warning-${warningIndex}`}>• {warning}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+            ) : connectionState === "disconnected" ? (
+              <section className="rounded-3xl border border-white/10 bg-black/40 p-6 text-sm text-white/70">
+                Live stream offline — displaying the last persisted snapshot. Resume Payload publishing to
+                restore real-time validation.
+              </section>
+            ) : null}
 
             {viewMode === "diff" ? (
               <section className="rounded-3xl border border-white/10 bg-black/60 p-6 font-mono text-xs text-white/80">
