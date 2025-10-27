@@ -12,7 +12,7 @@ The workbench consumes `collectMarketingPreviewSnapshotTimeline` output, which i
 
 - Use the severity selector to categorize issues (`info`, `warning`, or `blocker`).
 - Notes are grouped by `generatedAt` + route and surface counts directly in the route navigation to guide triage.
-- Timeline history is sourced from `marketing-preview-history.json`; running the snapshot writer appends new entries automatically.
+- Timeline history is sourced from the durable SQLite-backed history service at `apps/web/.data/marketing-preview-history.sqlite`; running the snapshot writer appends new entries automatically.
 
 ## Live streaming & validation loop
 

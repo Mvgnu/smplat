@@ -28,6 +28,7 @@
     "@sanity/client": "^6.21.0",
     "@smplat/shared": "workspace:*",
     "@tanstack/react-query": "^5.14.5",
+    "better-sqlite3": "^9.4.3",
     "axios": "^1.6.7",
     "clsx": "^2.0.0",
     "groq": "^3.42.2",
