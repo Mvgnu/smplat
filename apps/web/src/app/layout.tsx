@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+
+import { QueryProvider } from "@/components/providers/QueryProvider";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -24,7 +27,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background text-foreground antialiased">
-        {children}
+        <QueryProvider>{children}</QueryProvider>
       </body>
     </html>
   );

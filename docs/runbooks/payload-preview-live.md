@@ -41,6 +41,14 @@ export WEB_URL="https://marketing.example.com"
 - Responses include aggregate counts (`aggregates.totalRoutes`, `aggregates.diffDetectedRoutes`) plus governance summaries (`governance.totalActions`, `governance.actionsByKind`) for cockpit dashboards. Note summaries (`notes.total`, `notes.severityCounts`) are derived from triage notes so workbench timelines can prioritise high-risk retrospectives.
 - Default pagination returns the ten newest manifests; increase `limit` (max 25) for broader retrospectives. The API internally hydrates against the full 24-manifest retention window to ensure severity filters remain accurate.
 
+### Cockpit workbench consumption
+
+- The admin Preview Workbench seeds its live capture with `collectMarketingPreviewSnapshotTimeline` and then delegates historical queries to the `useMarketingPreviewHistory` hook.
+- The hook uses React Query for caching and background revalidation, merges filter state (`route`, `variant`, `severity`, `limit`, `offset`) into the query key, and persists the last successful payload in `localStorage` (`marketing-preview-history-cache-v1`) for offline replay.
+- Timeline filter chips issue server-side queries, and pagination controls walk persisted manifests without losing cache state. Cache entries are invalidated whenever the active manifest ID changes so fresh captures surface automatically.
+- When the browser reports `navigator.onLine === false` or the history request fails, the hook replays the cached payload and surfaces an "Offline cache" badge. Reconnecting triggers an automatic refresh.
+- Diff heatmaps derive from `aggregates.diffDetectedRoutes` while note badges surface `notes.severityCounts`, allowing editors to triage high-risk captures before drilling into the diff view.
+
 ### Governance ledger API
 
 - `POST /api/marketing-preview/history/governance` records actions such as approvals or resets. Requests must include `x-preview-signature: ${PAYLOAD_LIVE_PREVIEW_SECRET}`; unauthenticated calls are rejected.

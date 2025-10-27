@@ -2,17 +2,17 @@
 
 This folder contains interactive components that power the marketing preview cockpit within the admin surface.
 
-- `PreviewWorkbench.tsx` – timeline-aware workspace for navigating routes, comparing draft/published snapshots, triaging regressions, and documenting notes.
+- `PreviewWorkbench.tsx` – timeline-aware workspace for navigating routes, comparing draft/published snapshots, triaging regressions, and documenting notes. The workbench now hydrates its history stream through the live `/api/marketing-preview/history` endpoint rather than local fixtures.
 
 Components in this directory assume marketing preview snapshots are collected through `@/server/cms/preview`. Keep metadata comments (`key: value`) up to date so automation can track features.
 
 ## Timeline & triage workflow
 
-The workbench consumes `collectMarketingPreviewSnapshotTimeline` output, which includes the current capture and prior manifests. Editors can scrub through captures via the left sidebar timeline, review per-route diff badges, and open regression notes for the active route. Notes are persisted through the `/api/marketing-preview/notes` endpoint and stored locally for development under `apps/web/src/server/cms/__fixtures__/marketing-preview-notes.json`.
+`PreviewWorkbench` receives the latest capture from `collectMarketingPreviewSnapshotTimeline` for instant hydration, then streams persisted history through the `useMarketingPreviewHistory` hook. The hook issues typed queries against `/api/marketing-preview/history`, caches responses with React Query, and mirrors the latest successful payload in `localStorage` so the cockpit keeps working offline. Editors can scrub through captures via the left sidebar timeline, review per-route diff badges, and open regression notes for the active route. Notes are persisted through the `/api/marketing-preview/notes` endpoint and stored locally for development under `apps/web/src/server/cms/__fixtures__/marketing-preview-notes.json`.
 
 - Use the severity selector to categorize issues (`info`, `warning`, or `blocker`).
 - Notes are grouped by `generatedAt` + route and surface counts directly in the route navigation to guide triage.
-- Timeline history is sourced from the durable SQLite-backed history service at `apps/web/.data/marketing-preview-history.sqlite`; running the snapshot writer appends new entries automatically.
+- Timeline history is sourced from the durable SQLite-backed history service at `apps/web/.data/marketing-preview-history.sqlite`; running the snapshot writer appends new entries automatically. Route, severity, and variant filters issue server-side queries, and pagination buttons page through persisted manifests without losing cache state. When offline, the hook replays the most recent cached payload until connectivity returns.
 
 ## Live streaming & validation loop
 
