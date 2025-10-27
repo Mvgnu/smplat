@@ -3,16 +3,26 @@
 // meta: component: BillingCenter
 // meta: feature: dashboard-billing
 
-import { type ReactNode, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useState } from "react";
 import Link from "next/link";
 
-import { AlertCircle, ArrowDownToLine, BellRing, CheckCircle2, Loader2 } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowDownToLine,
+  BellRing,
+  CheckCircle2,
+  CreditCard,
+  Loader2,
+  RotateCcw,
+} from "lucide-react";
 
 import type {
   BillingAgingBuckets,
   BillingInvoice,
   BillingSummary,
   CampaignInsight,
+  InvoiceAdjustment,
+  PaymentTimelineEvent,
 } from "@/server/billing/types";
 
 import { CampaignIntelligenceGrid } from "./CampaignIntelligenceGrid";
@@ -40,6 +50,9 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 
 export function BillingCenter({ invoices, summary, aging, insights }: BillingCenterProps) {
   const [notifying, setNotifying] = useState<string | null>(null);
+  const [processingAction, setProcessingAction] = useState<{ id: string; type: "capture" | "refund" } | null>(
+    null,
+  );
   const formatter = useMemo(() => currencyFormatter(summary.currency), [summary.currency]);
 
   async function handleNotify(invoice: BillingInvoice) {
@@ -56,6 +69,27 @@ export function BillingCenter({ invoices, summary, aging, insights }: BillingCen
       console.warn("Unexpected error queueing invoice reminder", error);
     } finally {
       setNotifying(null);
+    }
+  }
+
+  async function handleAction(
+    invoice: BillingInvoice,
+    action: "capture" | "refund",
+    url: string | null,
+  ) {
+    if (!url) {
+      return;
+    }
+    try {
+      setProcessingAction({ id: invoice.id, type: action });
+      const response = await fetch(url, { method: "POST" });
+      if (!response.ok) {
+        console.warn(`Failed to ${action} invoice`, await response.text());
+      }
+    } catch (error) {
+      console.warn(`Unexpected error during invoice ${action}`, error);
+    } finally {
+      setProcessingAction(null);
     }
   }
 
@@ -119,56 +153,86 @@ export function BillingCenter({ invoices, summary, aging, insights }: BillingCen
                   ? dateFormatter.format(new Date(invoice.issuedAt))
                   : "";
                 const statusTone = deriveStatusTone(invoice.status);
+                const captureInFlight =
+                  processingAction?.id === invoice.id && processingAction?.type === "capture";
+                const refundInFlight =
+                  processingAction?.id === invoice.id && processingAction?.type === "refund";
+                const hasPaymentDetails =
+                  invoice.paymentTimeline.length > 0 || invoice.adjustments.length > 0;
                 return (
-                  <tr key={invoice.id} className="hover:bg-white/5">
-                    <td className="px-4 py-3">
-                      <div className="flex flex-col">
-                        <span className="font-semibold text-white">{invoice.invoiceNumber}</span>
-                        {invoice.memo && (
-                          <span className="text-xs text-white/50">{invoice.memo}</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">{issuedDate}</td>
-                    <td className="px-4 py-3">{dueDate}</td>
-                    <td className="px-4 py-3 text-right">
-                      {formatter.format(invoice.total)}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {formatter.format(invoice.balanceDue)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusTone}`}>
-                        {invoice.status.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Link
-                          href={invoice.exportUrl}
-                          prefetch={false}
-                          className="inline-flex items-center gap-2 rounded-full border border-white/20 px-3 py-1 text-xs font-semibold text-white transition hover:border-white/40"
-                        >
-                          <ArrowDownToLine className="h-4 w-4" /> CSV
-                        </Link>
-                        {invoice.notifyUrl && (
-                          <button
-                            type="button"
-                            onClick={() => handleNotify(invoice)}
-                            disabled={notifying === invoice.id}
-                            className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60"
+                  <Fragment key={invoice.id}>
+                    <tr className="hover:bg-white/5">
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-white">{invoice.invoiceNumber}</span>
+                          {invoice.memo && (
+                            <span className="text-xs text-white/50">{invoice.memo}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">{issuedDate}</td>
+                      <td className="px-4 py-3">{dueDate}</td>
+                      <td className="px-4 py-3 text-right">
+                        {formatter.format(invoice.total)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {formatter.format(invoice.balanceDue)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusTone}`}>
+                          {invoice.status.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <Link
+                            href={invoice.exportUrl}
+                            prefetch={false}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/20 px-3 py-1 text-xs font-semibold text-white transition hover:border-white/40"
                           >
-                            {notifying === invoice.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <BellRing className="h-4 w-4" />
-                            )}
-                            Remind
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+                            <ArrowDownToLine className="h-4 w-4" /> CSV
+                          </Link>
+                          {invoice.notifyUrl && (
+                            <button
+                              type="button"
+                              onClick={() => handleNotify(invoice)}
+                              disabled={notifying === invoice.id}
+                              className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {notifying === invoice.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <BellRing className="h-4 w-4" />
+                              )}
+                              Remind
+                            </button>
+                          )}
+                          {invoice.captureUrl && (
+                            <ActionButton
+                              label="Capture"
+                              icon={<CreditCard className="h-4 w-4" />}
+                              onClick={() => handleAction(invoice, "capture", invoice.captureUrl)}
+                              disabled={captureInFlight}
+                              busy={captureInFlight}
+                            />
+                          )}
+                          {invoice.refundUrl && (
+                            <ActionButton
+                              label="Refund"
+                              tone="danger"
+                              icon={<RotateCcw className="h-4 w-4" />}
+                              onClick={() => handleAction(invoice, "refund", invoice.refundUrl)}
+                              disabled={refundInFlight}
+                              busy={refundInFlight}
+                            />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {hasPaymentDetails && (
+                      <PaymentDetailRow formatter={formatter} invoice={invoice} />
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -238,4 +302,175 @@ function deriveStatusTone(status: string): string {
     return "bg-emerald-500/10 text-emerald-200";
   }
   return "bg-white/10 text-white";
+}
+
+type ActionButtonProps = {
+  label: string;
+  icon: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+  tone?: "default" | "danger";
+};
+
+function ActionButton({ label, icon, onClick, disabled, busy, tone = "default" }: ActionButtonProps) {
+  const toneClasses =
+    tone === "danger"
+      ? "border-red-500/40 text-red-200 hover:border-red-300/60"
+      : "border-white/20 text-white hover:border-white/40";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${toneClasses}`}
+    >
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : icon}
+      {label}
+    </button>
+  );
+}
+
+// meta: ledger-ux: payment-detail-row
+type PaymentDetailRowProps = {
+  invoice: BillingInvoice;
+  formatter: Intl.NumberFormat;
+};
+
+function PaymentDetailRow({ invoice, formatter }: PaymentDetailRowProps) {
+  return (
+    <tr className="bg-white/5 text-xs text-white/60">
+      <td colSpan={7} className="px-4 py-4">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <PaymentTimeline timeline={invoice.paymentTimeline} formatter={formatter} />
+          <AdjustmentSummary
+            adjustments={invoice.adjustments}
+            formatter={formatter}
+            total={invoice.adjustmentsTotal}
+          />
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+type PaymentTimelineProps = {
+  timeline: PaymentTimelineEvent[];
+  formatter: Intl.NumberFormat;
+};
+
+function PaymentTimeline({ timeline, formatter }: PaymentTimelineProps) {
+  if (timeline.length === 0) {
+    return (
+      <div className="flex-1">
+        <h4 className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">Payment Timeline</h4>
+        <p className="mt-2 text-xs text-white/40">Awaiting initial capture.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1">
+      <h4 className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">Payment Timeline</h4>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {timeline.map((event, index) => (
+          <div
+            key={`${event.event}-${event.at}-${index}`}
+            className="flex flex-col rounded-xl border border-white/10 bg-black/40 px-3 py-2"
+          >
+            <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-white/50">
+              {formatTimelineLabel(event.event)}
+            </span>
+            <span className="text-xs text-white/70">{formatDisplayDate(event.at)}</span>
+            {typeof event.amount === "number" && event.amount > 0 && (
+              <span className="text-xs font-semibold text-white">
+                {formatter.format(event.amount)}
+              </span>
+            )}
+            {event.processorId && (
+              <span className="text-[0.65rem] text-white/40">Ref {event.processorId}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type AdjustmentSummaryProps = {
+  adjustments: InvoiceAdjustment[];
+  formatter: Intl.NumberFormat;
+  total: number;
+};
+
+function AdjustmentSummary({ adjustments, formatter, total }: AdjustmentSummaryProps) {
+  return (
+    <div className="flex-1 md:max-w-sm">
+      <h4 className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">Adjustments</h4>
+      {adjustments.length === 0 ? (
+        <p className="mt-2 text-xs text-white/40">No adjustments recorded.</p>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {adjustments.map((adjustment, index) => {
+            const isCredit = adjustment.type.toLowerCase() === "credit";
+            const signedAmount = isCredit ? adjustment.amount * -1 : adjustment.amount;
+            return (
+              <li
+                key={`${adjustment.type}-${index}`}
+                className="flex justify-between gap-3 rounded-xl border border-white/10 bg-black/40 px-3 py-2"
+              >
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-white/80">{adjustment.type}</span>
+                  {adjustment.memo && <span className="text-[0.65rem] text-white/40">{adjustment.memo}</span>}
+                  {adjustment.appliedAt && (
+                    <span className="text-[0.65rem] text-white/40">{formatDisplayDate(adjustment.appliedAt)}</span>
+                  )}
+                </div>
+                <span className="text-xs font-semibold text-white">
+                  {formatter.format(signedAmount)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <p className="mt-3 text-[0.65rem] uppercase tracking-[0.3em] text-white/40">
+        Net Impact: <span className="ml-2 text-xs text-white">{formatter.format(total)}</span>
+      </p>
+    </div>
+  );
+}
+
+function formatTimelineLabel(event: string): string {
+  const normalized = event.toLowerCase();
+  switch (normalized) {
+    case "issued":
+      return "Invoice Issued";
+    case "captured":
+      return "Payment Captured";
+    case "pending":
+      return "Pending";
+    case "settled":
+      return "Settled";
+    case "outstanding":
+      return "Outstanding";
+    default:
+      return normalized.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
+  }
+}
+
+function formatDisplayDate(raw: string): string {
+  if (!raw) {
+    return "";
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
 }

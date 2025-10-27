@@ -58,6 +58,46 @@ def _create_invoice(session: Session, user: User, index: int, currency: Currency
 
     status = InvoiceStatusEnum.PAID if balance_due == 0 else InvoiceStatusEnum.ISSUED
 
+    payment_intent_id = f"pi_{uuid4().hex[:10]}"
+    external_processor_id = f"ch_{uuid4().hex[:10]}"
+    settlement_at = issued_at + timedelta(days=3) if balance_due == 0 else None
+    adjustments_total = Decimal("-25.00") if index == 1 else Decimal("0.00")
+    adjustments = None
+    if adjustments_total != 0:
+        adjustments = [
+            {
+                "type": "credit",
+                "amount": float(abs(adjustments_total)),
+                "memo": "Retention goodwill",
+                "applied_at": (issued_at + timedelta(days=5)).isoformat(),
+            }
+        ]
+
+    payment_timeline = [
+        {
+            "event": "issued",
+            "at": issued_at.isoformat(),
+            "amount": float(total),
+        },
+    ]
+    if balance_due < total:
+        payment_timeline.append(
+            {
+                "event": "captured",
+                "at": (issued_at + timedelta(days=3)).isoformat(),
+                "amount": float(total - balance_due),
+                "processor_id": external_processor_id,
+            }
+        )
+    if balance_due > 0:
+        payment_timeline.append(
+            {
+                "event": "outstanding",
+                "at": due_at.isoformat(),
+                "amount": float(balance_due),
+            }
+        )
+
     invoice = Invoice(
         workspace_id=user.id,
         invoice_number=f"INV-{issued_at:%Y%m%d}-{index:02d}",
@@ -67,6 +107,12 @@ def _create_invoice(session: Session, user: User, index: int, currency: Currency
         tax=tax,
         total=total,
         balance_due=balance_due,
+        payment_intent_id=payment_intent_id,
+        external_processor_id=external_processor_id if balance_due < total else None,
+        settlement_at=settlement_at,
+        adjustments_total=adjustments_total,
+        adjustments_json=adjustments,
+        payment_timeline_json=payment_timeline,
         issued_at=issued_at,
         due_at=due_at,
         memo="Seeded invoice for billing demo",

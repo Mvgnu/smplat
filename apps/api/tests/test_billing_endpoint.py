@@ -174,3 +174,115 @@ async def test_invoice_notify_honors_preferences(app_with_db):
         settings.checkout_api_key = previous_key
         settings.billing_rollout_stage = previous_stage
         settings.billing_rollout_workspaces = previous_workspaces
+
+
+@pytest.mark.asyncio
+async def test_capture_invoice_partial_updates_balance_and_timeline(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    previous_stage = settings.billing_rollout_stage
+    previous_workspaces = list(settings.billing_rollout_workspaces)
+    settings.checkout_api_key = "capture-key"
+    settings.billing_rollout_stage = "ga"
+
+    workspace_id = uuid4()
+    settings.billing_rollout_workspaces = [str(workspace_id)]
+
+    try:
+        async with session_factory() as session:
+            user = User(id=workspace_id, email="capture@example.com", role=UserRoleEnum.CLIENT)
+            now = datetime.now(timezone.utc)
+            invoice = Invoice(
+                workspace_id=workspace_id,
+                invoice_number="INV-4004",
+                status=InvoiceStatusEnum.ISSUED,
+                currency=CurrencyEnum.EUR,
+                subtotal=Decimal("100.00"),
+                tax=Decimal("20.00"),
+                total=Decimal("120.00"),
+                balance_due=Decimal("120.00"),
+                issued_at=now,
+                due_at=now + timedelta(days=14),
+            )
+            session.add_all([user, invoice])
+            await session.commit()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                f"/api/v1/billing/invoices/{invoice.id}/capture?workspace_id={workspace_id}",
+                headers={"X-API-Key": "capture-key"},
+                json={"amount": 60.0},
+            )
+
+        assert response.status_code == 202
+        body = response.json()
+        assert pytest.approx(body["balance_due"], rel=1e-5) == 60.0
+        assert body["paymentTimeline"]
+        assert body["status"] == "issued"
+
+        async with session_factory() as session:
+            refreshed = await session.get(Invoice, invoice.id)
+            assert refreshed is not None
+            assert refreshed.balance_due == Decimal("60.00")
+            assert refreshed.payment_timeline_json[-1]["event"] == "captured"
+    finally:
+        settings.checkout_api_key = previous_key
+        settings.billing_rollout_stage = previous_stage
+        settings.billing_rollout_workspaces = previous_workspaces
+
+
+@pytest.mark.asyncio
+async def test_refund_invoice_records_adjustment(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    previous_stage = settings.billing_rollout_stage
+    previous_workspaces = list(settings.billing_rollout_workspaces)
+    settings.checkout_api_key = "refund-key"
+    settings.billing_rollout_stage = "ga"
+
+    workspace_id = uuid4()
+    settings.billing_rollout_workspaces = [str(workspace_id)]
+
+    try:
+        async with session_factory() as session:
+            user = User(id=workspace_id, email="refund@example.com", role=UserRoleEnum.CLIENT)
+            now = datetime.now(timezone.utc)
+            invoice = Invoice(
+                workspace_id=workspace_id,
+                invoice_number="INV-5005",
+                status=InvoiceStatusEnum.PAID,
+                currency=CurrencyEnum.EUR,
+                subtotal=Decimal("80.00"),
+                tax=Decimal("16.00"),
+                total=Decimal("96.00"),
+                balance_due=Decimal("0"),
+                payment_intent_id="pi_test",
+                external_processor_id="txn_test",
+                payment_timeline_json=[{"event": "captured", "at": now.isoformat(), "amount": 96.0}],
+                issued_at=now - timedelta(days=3),
+                due_at=now,
+            )
+            session.add_all([user, invoice])
+            await session.commit()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                f"/api/v1/billing/invoices/{invoice.id}/refund?workspace_id={workspace_id}",
+                headers={"X-API-Key": "refund-key"},
+                json={"amount": 25.0},
+            )
+
+        assert response.status_code == 202
+        body = response.json()
+        assert body["adjustmentsTotal"] == pytest.approx(-25.0)
+        assert any(entry["event"] == "refunded" for entry in body["paymentTimeline"])
+
+        async with session_factory() as session:
+            refreshed = await session.get(Invoice, invoice.id)
+            assert refreshed is not None
+            assert refreshed.adjustments_total == Decimal("-25.00")
+            assert refreshed.adjustments_json[-1]["type"] == "refund"
+    finally:
+        settings.checkout_api_key = previous_key
+        settings.billing_rollout_stage = previous_stage
+        settings.billing_rollout_workspaces = previous_workspaces

@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 from uuid import UUID
 import csv
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -21,6 +21,7 @@ from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.core.settings import settings
 from smplat_api.db.session import get_session
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
+from smplat_api.services.billing import BillingGatewayClient
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -51,11 +52,25 @@ class InvoiceResponse(BaseModel):
     tax: float
     total: float
     balance_due: float
+    payment_intent_id: Optional[str] = Field(default=None, alias="paymentIntentId")
+    external_processor_id: Optional[str] = Field(default=None, alias="externalProcessorId")
+    settlement_at: Optional[str] = Field(default=None, alias="settlementAt")
+    adjustments_total: float = Field(default=0, alias="adjustmentsTotal")
+    adjustments: Optional[List[Dict[str, object]]] = None
+    payment_timeline: Optional[List[Dict[str, object]]] = Field(
+        default=None,
+        alias="paymentTimeline",
+        description="Chronological events representing the invoice payment lifecycle.",
+    )
     issued_at: str
     due_at: str
     paid_at: Optional[str]
     memo: Optional[str]
     line_items: List[InvoiceLineItemResponse]
+
+    model_config = {
+        "populate_by_name": True,
+    }
 
 
 class InvoiceSummary(BaseModel):
@@ -86,6 +101,26 @@ class InvoiceListResponse(BaseModel):
     invoices: List[InvoiceResponse]
     summary: InvoiceSummary
     aging: AgingBuckets
+
+
+class CaptureInvoiceRequest(BaseModel):
+    """Payload to capture an outstanding invoice."""
+
+    amount: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Optional amount override for partial captures.",
+    )
+
+
+class RefundInvoiceRequest(BaseModel):
+    """Payload to refund a previously captured invoice."""
+
+    amount: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Optional amount override for partial refunds.",
+    )
 
 
 class InvoiceExportFormat(str, Enum):
@@ -139,6 +174,10 @@ def _normalize_invoice(invoice: Invoice) -> InvoiceResponse:
     due_at = _ensure_datetime(invoice.due_at)
     issued_at = _ensure_datetime(invoice.issued_at)
     paid_at = _ensure_datetime(invoice.paid_at)
+    settlement_at = _ensure_datetime(getattr(invoice, "settlement_at", None))
+    adjustments_total = _coerce_decimal(getattr(invoice, "adjustments_total", 0))
+    adjustments = getattr(invoice, "adjustments_json", None)
+    payment_timeline = getattr(invoice, "payment_timeline_json", None)
     if (
         status_value in {InvoiceStatusEnum.ISSUED.value, InvoiceStatusEnum.DRAFT.value}
         and due_at
@@ -156,6 +195,12 @@ def _normalize_invoice(invoice: Invoice) -> InvoiceResponse:
         tax=_coerce_decimal(invoice.tax),
         total=_coerce_decimal(invoice.total),
         balance_due=_coerce_decimal(invoice.balance_due),
+        payment_intent_id=getattr(invoice, "payment_intent_id", None),
+        external_processor_id=getattr(invoice, "external_processor_id", None),
+        settlement_at=settlement_at.isoformat() if settlement_at else None,
+        adjustments_total=adjustments_total,
+        adjustments=adjustments,
+        payment_timeline=payment_timeline,
         issued_at=issued_at.isoformat() if issued_at else "",
         due_at=due_at.isoformat() if due_at else "",
         paid_at=paid_at.isoformat() if paid_at else None,
@@ -319,6 +364,88 @@ async def export_invoice(
     filename = f"invoice-{invoice.invoice_number}.csv"
     headers = {"Content-Disposition": f"attachment; filename={filename}"}
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+
+
+@router.post(
+    "/invoices/{invoice_id}/capture",
+    response_model=InvoiceResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def capture_invoice(
+    invoice_id: UUID,
+    payload: CaptureInvoiceRequest = Body(default=CaptureInvoiceRequest()),
+    workspace_id: UUID = Query(..., description="Workspace identifier"),
+    db: AsyncSession = Depends(get_session),
+) -> InvoiceResponse:
+    """Capture payment for an outstanding invoice and persist ledger data."""
+
+    _ensure_rollout(workspace_id)
+
+    stmt = (
+        select(Invoice)
+        .options(selectinload(Invoice.line_items))
+        .where(Invoice.id == invoice_id, Invoice.workspace_id == workspace_id)
+    )
+    result = await db.execute(stmt)
+    invoice = result.scalar_one_or_none()
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    gateway = BillingGatewayClient(db)
+    try:
+        decimal_amount = Decimal(str(payload.amount)) if payload.amount is not None else None
+        await gateway.capture_payment(invoice, decimal_amount)
+    except ValueError as exc:  # meta: ledger-validation: capture
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await db.commit()
+    await db.refresh(invoice)
+    await db.refresh(invoice, attribute_names=["line_items"])
+    return _normalize_invoice(invoice)
+
+
+@router.post(
+    "/invoices/{invoice_id}/refund",
+    response_model=InvoiceResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def refund_invoice(
+    invoice_id: UUID,
+    payload: RefundInvoiceRequest = Body(default=RefundInvoiceRequest()),
+    workspace_id: UUID = Query(..., description="Workspace identifier"),
+    db: AsyncSession = Depends(get_session),
+) -> InvoiceResponse:
+    """Refund a previously captured invoice and update ledger adjustments."""
+
+    _ensure_rollout(workspace_id)
+
+    stmt = (
+        select(Invoice)
+        .options(selectinload(Invoice.line_items))
+        .where(Invoice.id == invoice_id, Invoice.workspace_id == workspace_id)
+    )
+    result = await db.execute(stmt)
+    invoice = result.scalar_one_or_none()
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    gateway = BillingGatewayClient(db)
+    try:
+        decimal_amount = Decimal(str(payload.amount)) if payload.amount is not None else None
+        await gateway.refund_payment(invoice, decimal_amount)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await db.commit()
+    await db.refresh(invoice)
+    await db.refresh(invoice, attribute_names=["line_items"])
+    return _normalize_invoice(invoice)
 
 
 @router.post(
