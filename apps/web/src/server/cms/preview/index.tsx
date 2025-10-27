@@ -9,8 +9,17 @@ import { MarketingSections, defaultMarketingMetricsFallback, type MetricItem } f
 import lexicalMarketingFixture from "../__fixtures__/payload-lexical-marketing.json" assert { type: "json" };
 import { normalizeMarketingLexicalContent } from "../lexical";
 import { getHomepage, getPageBySlug, getBlogPosts } from "../loaders";
+import { fetchSnapshotHistory, persistSnapshotManifest } from "../history/store";
 import type { BlogPostSummary, MarketingContentDocument, PageDocument } from "../types";
 import type { LexicalEditorState } from "@/marketing/content";
+import type {
+  MarketingPreviewSnapshot,
+  MarketingPreviewSnapshotManifest,
+  MarketingPreviewTimeline,
+  MarketingPreviewTimelineEntry,
+  MarketingPreviewTimelineRouteSummary,
+  SnapshotMetrics
+} from "./types";
 
 if (typeof globalThis.TextEncoder === "undefined") {
   globalThis.TextEncoder = NodeTextEncoder as unknown as typeof globalThis.TextEncoder;
@@ -30,11 +39,6 @@ const DEFAULT_OUTPUT_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../__fixtures__/marketing-preview-snapshots.json"
 );
-const DEFAULT_HISTORY_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../__fixtures__/marketing-preview-history.json"
-);
-
 type MarketingPreviewRoute =
   | { route: string; kind: "homepage" }
   | { route: string; kind: "page"; slug: string }
@@ -61,50 +65,6 @@ type CollectPreviewOptions = {
   sectionContentClassName?: string;
   includeRoutes?: string[];
   loaders?: Partial<MarketingPreviewLoaders>;
-};
-
-type SnapshotMetrics = {
-  label?: string;
-  values: Array<{ label?: string; value?: string }>;
-};
-
-type MarketingPreviewSnapshot = {
-  route: string;
-  preview: boolean;
-  hero?: PageDocument["hero"];
-  title?: string;
-  sectionCount: number;
-  blockKinds: string[];
-  metrics?: SnapshotMetrics;
-  markup: string;
-};
-
-type MarketingPreviewSnapshotManifest = {
-  generatedAt: string;
-  snapshots: MarketingPreviewSnapshot[];
-  label?: string;
-};
-
-type MarketingPreviewTimelineRouteSummary = {
-  route: string;
-  hasDraft: boolean;
-  hasPublished: boolean;
-  diffDetected: boolean;
-  sectionCount: number;
-  blockKinds: string[];
-};
-
-type MarketingPreviewTimelineEntry = {
-  id: string;
-  generatedAt: string;
-  label?: string;
-  routes: MarketingPreviewTimelineRouteSummary[];
-  snapshots: Record<"published" | "draft", MarketingPreviewSnapshot[]>;
-};
-
-type MarketingPreviewTimeline = {
-  current: MarketingPreviewTimelineEntry;
-  history: MarketingPreviewTimelineEntry[];
 };
 
 const defaultLoaders: MarketingPreviewLoaders = {
@@ -345,42 +305,16 @@ const toTimelineEntry = (manifest: MarketingPreviewSnapshotManifest): MarketingP
   };
 };
 
-const readSnapshotHistory = async (historyLimit = 8): Promise<MarketingPreviewSnapshotManifest[]> => {
-  try {
-    const payload = await fs.readFile(DEFAULT_HISTORY_PATH, "utf8");
-    const json = JSON.parse(payload) as { history?: MarketingPreviewSnapshotManifest[] };
-    if (!json.history) {
-      return [];
-    }
-    return json.history
-      .filter((entry): entry is MarketingPreviewSnapshotManifest => Boolean(entry?.generatedAt && entry?.snapshots))
-      .sort((a, b) => (a.generatedAt < b.generatedAt ? 1 : -1))
-      .slice(0, Math.max(0, historyLimit));
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-};
+const readSnapshotHistory = async (
+  historyLimit = 8
+): Promise<MarketingPreviewSnapshotManifest[]> => fetchSnapshotHistory(historyLimit);
 
 const writeSnapshotHistory = async (
   manifest: MarketingPreviewSnapshotManifest,
   historyLimit = 24
 ) => {
-  const history = await readSnapshotHistory(historyLimit * 2);
-  const normalizedHistory = [
-    manifest,
-    ...history.filter((entry) => entry.generatedAt !== manifest.generatedAt)
-  ];
-  const trimmed = normalizedHistory.slice(0, Math.max(1, historyLimit));
-  await fs.mkdir(path.dirname(DEFAULT_HISTORY_PATH), { recursive: true });
-  await fs.writeFile(
-    DEFAULT_HISTORY_PATH,
-    `${JSON.stringify({ history: trimmed }, null, 2)}\n`,
-    "utf8"
-  );
+  const snapshots = splitSnapshotsByPreview(manifest.snapshots);
+  persistSnapshotManifest(manifest, computeRouteSummary(snapshots), historyLimit);
 };
 
 export const collectMarketingPreviewSnapshots = async (

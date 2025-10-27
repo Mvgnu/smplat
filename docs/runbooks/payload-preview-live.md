@@ -26,6 +26,12 @@ export WEB_URL="https://marketing.example.com"
 
 > NOTE: When the marketing deployment uses environment-specific slugs (e.g. `preview`, `staging`), ensure `WEB_URL` matches the exact origin that Payload webhooks will invoke.
 
+## Timeline history persistence
+
+- Marketing preview timeline snapshots and route analytics are stored in `apps/web/.data/marketing-preview-history.sqlite` via the durable history service introduced for cockpit baseline hardening.
+- The history writer enforces retention automatically (default: 24 manifests). To prune manually, delete the SQLite file and rerun the preview validation harness (`pnpm payload:validate`) to repopulate baseline manifests.
+- For recovery drills, back up the `.sqlite` file before maintenance, then restore it alongside the `.data` directory. Synthetic tests (`apps/web/src/server/cms/__tests__/history-store.test.ts`) validate that persistence, trimming, and hashing still behave correctly after recovery.
+
 ## Draft preview validation
 
 1. Run the automated validation harness (combines Jest integration + live endpoint smoke tests):
