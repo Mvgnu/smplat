@@ -1,0 +1,103 @@
+{
+  "runs": [
+    {
+      "id": "run-failed",
+      "startedAt": "2024-03-01T12:00:00Z",
+      "completedAt": "2024-03-01T12:05:00Z",
+      "status": "failed",
+      "totalTransactions": 12,
+      "matchedTransactions": 9,
+      "discrepancyCount": 3,
+      "notes": "{\"status\":\"failed\"}",
+      "metrics": {
+        "status": "failed",
+        "persisted": 6,
+        "updated": 3,
+        "staged": 2,
+        "removed": 1,
+        "disputes": 1,
+        "cursor": "txn_123",
+        "error": "stripe timeout"
+      },
+      "failure": {
+        "status": "failed",
+        "error": "stripe timeout",
+        "staged": 2,
+        "persisted": 6,
+        "updated": 3,
+        "removed": 1,
+        "disputes": 1,
+        "cursor": "txn_123"
+      }
+    },
+    {
+      "id": "run-completed",
+      "startedAt": "2024-02-28T10:00:00Z",
+      "completedAt": "2024-02-28T10:03:00Z",
+      "status": "completed",
+      "totalTransactions": 20,
+      "matchedTransactions": 20,
+      "discrepancyCount": 0,
+      "notes": "{\"status\":\"completed\"}",
+      "metrics": {
+        "status": "completed",
+        "persisted": 10,
+        "updated": 5,
+        "staged": 0,
+        "removed": 0,
+        "disputes": 0,
+        "cursor": "txn_456",
+        "error": null
+      },
+      "failure": null
+    }
+  ],
+  "discrepancies": [
+    {
+      "id": "disc-1",
+      "runId": "run-failed",
+      "invoiceId": "inv-1",
+      "processorStatementId": "stmt-1",
+      "transactionId": "txn-789",
+      "discrepancyType": "missing_invoice",
+      "status": "open",
+      "amountDelta": 42.5,
+      "summary": "Statement txn-789 missing invoice",
+      "resolutionNote": null,
+      "resolvedAt": null,
+      "createdAt": "2024-03-01T12:02:00Z"
+    },
+    {
+      "id": "disc-2",
+      "runId": "run-completed",
+      "invoiceId": null,
+      "processorStatementId": null,
+      "transactionId": null,
+      "discrepancyType": "unapplied_refund",
+      "status": "resolved",
+      "amountDelta": 15.0,
+      "summary": "Dispute dp_123 resolved",
+      "resolutionNote": "Refund applied",
+      "resolvedAt": "2024-02-28T11:00:00Z",
+      "createdAt": "2024-02-28T10:30:00Z"
+    }
+  ],
+  "staging": [
+    {
+      "id": "stage-1",
+      "transactionId": "txn-staged",
+      "processor": "stripe",
+      "reason": "unresolved_workspace:charge",
+      "status": "pending",
+      "triageNote": "",
+      "requeueCount": 1,
+      "workspaceHint": "11111111-1111-1111-1111-111111111111",
+      "payload": { "id": "txn-staged" },
+      "firstObservedAt": "2024-03-01T11:50:00Z",
+      "lastObservedAt": "2024-03-01T11:55:00Z",
+      "lastTriagedAt": null,
+      "resolvedAt": null
+    }
+  ],
+  "stagingBacklog": 5
+}
