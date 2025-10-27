@@ -7,6 +7,7 @@ import {
   type MarketingContentDocument
 } from "./types";
 import type { NormalizeLexicalBlockTrace } from "./lexical";
+import type { RemediationCategory } from "@/shared/marketing/remediation";
 
 // meta: cms-validation: marketing-blocks
 
@@ -21,6 +22,14 @@ export type MarketingBlockFallbackInsight = {
   source?: string;
 };
 
+export type MarketingBlockRecoveryHintCategory = RemediationCategory;
+
+export type MarketingBlockRecoveryHint = {
+  message: string;
+  category: MarketingBlockRecoveryHintCategory;
+  fieldPath?: string;
+};
+
 export type MarketingBlockValidationResult = {
   valid: boolean;
   errors: string[];
@@ -29,7 +38,7 @@ export type MarketingBlockValidationResult = {
   kind?: MarketingContentDocument["kind"];
   key?: string;
   fingerprint?: string;
-  recoveryHints: string[];
+  recoveryHints: MarketingBlockRecoveryHint[];
   trace: MarketingBlockValidationTrace;
   fallback?: MarketingBlockFallbackInsight;
 };
@@ -124,51 +133,100 @@ const deriveFallbackInsight = (
   };
 };
 
+const addRecoveryHint = (
+  hints: Map<string, MarketingBlockRecoveryHint>,
+  hint: MarketingBlockRecoveryHint
+) => {
+  const key = `${hint.category}:${hint.message}:${hint.fieldPath ?? ""}`;
+  if (!hints.has(key)) {
+    hints.set(key, hint);
+  }
+};
+
 const deriveRecoveryHints = (
   errors: string[],
   warnings: string[],
   trace: MarketingBlockValidationTrace
-): string[] => {
-  const hints = new Set<string>();
-
-  if (errors.length > 0) {
-    hints.add("Resolve schema validation errors in Payload for this block.");
-  }
+): MarketingBlockRecoveryHint[] => {
+  const hints = new Map<string, MarketingBlockRecoveryHint>();
 
   for (const error of errors) {
-    const normalized = error.toLowerCase();
-    if (normalized.includes("quote")) {
-      hints.add("Populate the testimonial quote or confirm the referenced testimonial document.");
+    const [path, rawMessage] = error.includes(":") ? error.split(/:(.+)/).map((value) => value.trim()) : ["value", error];
+    addRecoveryHint(hints, {
+      message: rawMessage,
+      category: "schema",
+      fieldPath: path
+    });
+
+    const normalized = rawMessage.toLowerCase();
+    if (normalized.includes("missing") || normalized.includes("required")) {
+      addRecoveryHint(hints, {
+        message: "Populate required fields for this marketing block.",
+        category: "content-gap",
+        fieldPath: path
+      });
     }
     if (normalized.includes("metrics")) {
-      hints.add("Ensure marketing metrics include labeled values or adjust fallback ordering.");
+      addRecoveryHint(hints, {
+        message: "Ensure marketing metrics include labeled values or adjust fallback ordering.",
+        category: "fallback",
+        fieldPath: path
+      });
     }
     if (normalized.includes("cta")) {
-      hints.add("Confirm CTA labels and href values are populated for this block.");
+      addRecoveryHint(hints, {
+        message: "Confirm CTA labels and href values are populated.",
+        category: "content-gap",
+        fieldPath: path
+      });
     }
   }
 
   if (warnings.length > 0) {
-    hints.add("Review warning signals before promoting this block.");
+    addRecoveryHint(hints, {
+      message: "Review warning signals before promoting this block.",
+      category: "content-gap",
+      fieldPath: trace.blockType
+    });
+  }
+
+  for (const warning of warnings) {
+    addRecoveryHint(hints, {
+      message: warning,
+      category: "content-gap",
+      fieldPath: trace.blockType
+    });
   }
 
   if (trace.skipReason) {
-    hints.add(trace.skipReason);
+    addRecoveryHint(hints, {
+      message: trace.skipReason,
+      category: "lexical"
+    });
   }
 
   if (!trace.normalized) {
-    hints.add("Inspect the Lexical payload for this block; normalization was skipped.");
+    addRecoveryHint(hints, {
+      message: "Lexical normalization skipped for this block.",
+      category: "lexical"
+    });
   }
 
   if (trace.operations.some((operation) => operation.toLowerCase().includes("hydrated"))) {
-    hints.add("Verify referenced relationship content supplying fallback values.");
+    addRecoveryHint(hints, {
+      message: "Verify referenced relationship content supplying fallback values.",
+      category: "fallback"
+    });
   }
 
   if (trace.operations.some((operation) => operation.toLowerCase().includes("fallback"))) {
-    hints.add("Revisit marketing fallback fixtures or governance ordering for this block.");
+    addRecoveryHint(hints, {
+      message: "Revisit marketing fallback fixtures or governance ordering for this block.",
+      category: "fallback"
+    });
   }
 
-  return Array.from(hints);
+  return Array.from(hints.values());
 };
 
 export const validateMarketingBlock = (

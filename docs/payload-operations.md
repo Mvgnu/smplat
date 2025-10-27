@@ -36,7 +36,11 @@ This guide consolidates the day-to-day tasks for operating Payload as the primar
 - The cockpit shows a "Stream offline" badge whenever the SSE connection drops. Restart Payload or the frontend, confirm the badge flips to "Live stream", and watch for fresh entries in the live validation feed.
 - If validation responses highlight block errors, use the feed to identify the failing block, update the Payload document, and recheck until the badge returns to "Live clean".
 - Live preview payloads now emit per-block diagnostics including normalization traces, fallback provenance, and fingerprint hashes. Reference the cockpit diagnostics panel for remediation hints before escalating to engineering.
+- Live preview payloads now emit per-block diagnostics including normalization traces, fallback provenance, fingerprint hashes, and categorized recovery hints. The cockpit surfaces remediation playbooks that outline Payload deep links and fixture provenance for each category (`schema`, `content-gap`, `fallback`, `lexical`). Follow the steps before escalating to engineering.
+- Diff overlays highlight regression clusters across captures. Use the heatmap in the diagnostics panel to confirm whether a block is improving (green), holding warnings (amber), or degrading (rose). Consecutive regression streaks increment the `Run` counter; escalate only when the counter remains non-zero after a remediation attempt.
+- The workbench "Regression hotspots" list aggregates clusters across all variants, tagging the variant label, regression count, severity delta, and last-seen timestamp. Prioritize the top hotspots before promoting content or changing fallback ordering.
 - Use the authenticated `/api/marketing-preview/fallbacks` endpoint to reset or reprioritize fallback ordering when fixture data needs to override Payload content. The endpoint mirrors the stream signature requirement and only records aggregate counters so no personal data is logged.
+- Variant selectors in the workbench allow editors to scrub persona, campaign, and feature-flag variations. Drift metrics highlight how each variant deviates from the baseline and record "since last green" snapshots for auditability.
 
 ## Secret rotation
 
