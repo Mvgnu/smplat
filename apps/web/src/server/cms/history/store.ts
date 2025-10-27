@@ -5,10 +5,15 @@ import { fileURLToPath } from "node:url";
 
 import DatabaseConstructor, { type Database } from "better-sqlite3";
 
+import type { MarketingPreviewSnapshotManifest, MarketingPreviewTimelineRouteSummary } from "../preview/types";
 import type {
-  MarketingPreviewSnapshotManifest,
-  MarketingPreviewTimelineRouteSummary
-} from "../preview/types";
+  MarketingPreviewGovernanceStats,
+  MarketingPreviewHistoryAggregates,
+  MarketingPreviewHistoryEntry,
+  MarketingPreviewHistoryQuery,
+  MarketingPreviewHistoryQueryResult,
+  MarketingPreviewHistoryRouteRecord
+} from "./types";
 
 const DATABASE_FILE = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -73,8 +78,13 @@ const openDatabase = (): Database => {
 
 const toBooleanFlag = (value: boolean) => (value ? 1 : 0);
 
-const hash = (value: string): string =>
-  crypto.createHash("sha256").update(value).digest("hex");
+const hash = (value: string): string => crypto.createHash("sha256").update(value).digest("hex");
+
+const clamp = (value: number, minimum: number, maximum: number): number =>
+  Math.max(minimum, Math.min(maximum, value));
+
+const DEFAULT_QUERY_LIMIT = 10;
+const MAX_QUERY_LIMIT = 50;
 
 export const persistSnapshotManifest = (
   manifest: MarketingPreviewSnapshotManifest,
@@ -217,6 +227,191 @@ export const recordGovernanceAction = (
     created_at: action.createdAt ?? new Date().toISOString()
   });
 };
+
+const fetchRoutesForManifest = (manifestId: string, database: Database): MarketingPreviewHistoryRouteRecord[] => {
+  const rows = database
+    .prepare<unknown[]>(
+      `SELECT route, route_hash, diff_detected, has_draft, has_published, section_count, block_kinds
+       FROM snapshot_routes
+       WHERE manifest_id = ?
+       ORDER BY route ASC`
+    )
+    .all(manifestId) as Array<{
+      route: string;
+      route_hash: string;
+      diff_detected: number;
+      has_draft: number;
+      has_published: number;
+      section_count: number;
+      block_kinds: string;
+    }>;
+
+  return rows.map((row) => ({
+    route: row.route,
+    routeHash: row.route_hash,
+    diffDetected: Boolean(row.diff_detected),
+    hasDraft: Boolean(row.has_draft),
+    hasPublished: Boolean(row.has_published),
+    sectionCount: row.section_count,
+    blockKinds: (() => {
+      try {
+        const parsed = JSON.parse(row.block_kinds) as unknown;
+        return Array.isArray(parsed) ? (parsed as string[]) : [];
+      } catch (error) {
+        throw new Error("Failed to parse stored block kinds", { cause: error });
+      }
+    })()
+  }));
+};
+
+const fetchGovernanceStats = (manifestId: string, database: Database): MarketingPreviewGovernanceStats => {
+  const rows = database
+    .prepare<unknown[]>(
+      `SELECT action_kind, COUNT(*) as count, MAX(created_at) as last_created_at
+       FROM governance_actions
+       WHERE manifest_id = ?
+       GROUP BY action_kind`
+    )
+    .all(manifestId) as Array<{ action_kind: string; count: number; last_created_at: string | null }>;
+
+  const actionsByKind: Record<string, number> = {};
+  let total = 0;
+  let lastActionAt: string | null = null;
+
+  for (const row of rows) {
+    actionsByKind[row.action_kind] = row.count;
+    total += row.count;
+    if (row.last_created_at && (!lastActionAt || row.last_created_at > lastActionAt)) {
+      lastActionAt = row.last_created_at;
+    }
+  }
+
+  return {
+    totalActions: total,
+    actionsByKind,
+    lastActionAt
+  };
+};
+
+const parseManifestPayload = (payload: string): MarketingPreviewSnapshotManifest => {
+  try {
+    return JSON.parse(payload) as MarketingPreviewSnapshotManifest;
+  } catch (error) {
+    throw new Error("Failed to parse snapshot manifest payload", { cause: error });
+  }
+};
+
+const toAggregates = (row: {
+  total_routes: number | null;
+  diff_routes: number | null;
+  draft_routes: number | null;
+  published_routes: number | null;
+}): MarketingPreviewHistoryAggregates => ({
+  totalRoutes: row.total_routes ?? 0,
+  diffDetectedRoutes: row.diff_routes ?? 0,
+  draftRoutes: row.draft_routes ?? 0,
+  publishedRoutes: row.published_routes ?? 0
+});
+
+const buildHistoryEntry = (
+  row: {
+    id: string;
+    generated_at: string;
+    label: string | null;
+    payload: string;
+    total_routes: number | null;
+    diff_routes: number | null;
+    draft_routes: number | null;
+    published_routes: number | null;
+  },
+  database: Database
+): MarketingPreviewHistoryEntry => {
+  const routes = fetchRoutesForManifest(row.id, database);
+  const governance = fetchGovernanceStats(row.id, database);
+  return {
+    id: row.id,
+    generatedAt: row.generated_at,
+    label: row.label,
+    manifest: parseManifestPayload(row.payload),
+    routes,
+    aggregates: toAggregates(row),
+    governance
+  };
+};
+
+const buildFilters = (query: MarketingPreviewHistoryQuery) => {
+  const where: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  if (query.route) {
+    params.route = query.route;
+    params.route_hash = hash(query.route);
+    where.push(`EXISTS (SELECT 1 FROM snapshot_routes sr_filter
+      WHERE sr_filter.manifest_id = sm.id
+        AND (sr_filter.route = @route OR sr_filter.route_hash = @route_hash))`);
+  }
+
+  if (query.variant === "draft") {
+    where.push(`EXISTS (SELECT 1 FROM snapshot_routes sr_draft
+      WHERE sr_draft.manifest_id = sm.id AND sr_draft.has_draft = 1${query.route ? " AND (sr_draft.route = @route OR sr_draft.route_hash = @route_hash)" : ""})`);
+  }
+
+  if (query.variant === "published") {
+    where.push(`EXISTS (SELECT 1 FROM snapshot_routes sr_published
+      WHERE sr_published.manifest_id = sm.id AND sr_published.has_published = 1${query.route ? " AND (sr_published.route = @route OR sr_published.route_hash = @route_hash)" : ""})`);
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  return { whereClause, params };
+};
+
+export const querySnapshotHistory = (
+  query: MarketingPreviewHistoryQuery = {}
+): MarketingPreviewHistoryQueryResult => {
+  const database = openDatabase();
+  const limit = clamp(query.limit ?? DEFAULT_QUERY_LIMIT, 1, MAX_QUERY_LIMIT);
+  const offset = Math.max(query.offset ?? 0, 0);
+  const { whereClause, params } = buildFilters(query);
+
+  const rows = database
+    .prepare(
+      `SELECT sm.id, sm.generated_at, sm.label, sm.payload,
+        COUNT(sr.route) as total_routes,
+        SUM(CASE WHEN sr.diff_detected = 1 THEN 1 ELSE 0 END) as diff_routes,
+        SUM(CASE WHEN sr.has_draft = 1 THEN 1 ELSE 0 END) as draft_routes,
+        SUM(CASE WHEN sr.has_published = 1 THEN 1 ELSE 0 END) as published_routes
+      FROM snapshot_manifests sm
+      LEFT JOIN snapshot_routes sr ON sr.manifest_id = sm.id
+      ${whereClause}
+      GROUP BY sm.id
+      ORDER BY datetime(sm.generated_at) DESC
+      LIMIT @limit OFFSET @offset`
+    )
+    .all({ ...params, limit, offset }) as Array<{
+      id: string;
+      generated_at: string;
+      label: string | null;
+      payload: string;
+      total_routes: number | null;
+      diff_routes: number | null;
+      draft_routes: number | null;
+      published_routes: number | null;
+    }>;
+
+  const totalRow = database
+    .prepare(`SELECT COUNT(*) as count FROM snapshot_manifests sm ${whereClause}`)
+    .get(params) as { count: number };
+
+  return {
+    total: totalRow?.count ?? 0,
+    limit,
+    offset,
+    entries: rows.map((row) => buildHistoryEntry(row, database))
+  };
+};
+
+export const createHistoryHash = (value: string): string => hash(value);
 
 export const resetHistoryStore = () => {
   if (db) {

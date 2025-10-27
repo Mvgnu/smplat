@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 import {
   fetchSnapshotHistory,
   persistSnapshotManifest,
+  querySnapshotHistory,
+  recordGovernanceAction,
   resetHistoryStore,
+  createHistoryHash,
   __internal
-} from "../history/store";
+} from "../history";
 import type {
   MarketingPreviewSnapshot,
   MarketingPreviewSnapshotManifest,
@@ -104,5 +107,65 @@ describe("marketing preview history store", () => {
       crypto.createHash("sha256").update(route).digest("hex")
     );
     expect(row.route_hash).not.toBe(route);
+  });
+
+  it("queries history with aggregates and governance metadata", () => {
+    const manifest = createManifest("2024-04-04T00:00:00.000Z", "queryable", "/campaigns");
+    const routes = [
+      createRouteSummary("/campaigns", { diffDetected: true }),
+      createRouteSummary("/blog", { hasDraft: false })
+    ];
+
+    persistSnapshotManifest(manifest, routes, 8);
+
+    recordGovernanceAction({
+      id: crypto.randomUUID(),
+      manifestId: "queryable",
+      actorHash: createHistoryHash("person@example.com"),
+      actionKind: "approve",
+      metadata: { route: "/campaigns" },
+      createdAt: "2024-04-04T00:10:00.000Z"
+    });
+
+    const result = querySnapshotHistory({ limit: 5 });
+
+    expect(result.total).toBeGreaterThanOrEqual(1);
+    const entry = result.entries.find((item) => item.id === "queryable");
+    expect(entry).toBeDefined();
+    expect(entry?.aggregates.totalRoutes).toBe(2);
+    expect(entry?.aggregates.diffDetectedRoutes).toBe(1);
+    expect(entry?.aggregates.draftRoutes).toBe(1);
+    expect(entry?.aggregates.publishedRoutes).toBe(2);
+    expect(entry?.governance.totalActions).toBe(1);
+    expect(entry?.governance.actionsByKind.approve).toBe(1);
+    expect(entry?.governance.lastActionAt).toBe("2024-04-04T00:10:00.000Z");
+  });
+
+  it("applies route and variant filters to query results", () => {
+    const manifestA = createManifest("2024-05-05T00:00:00.000Z", "filter-a", "/alpha");
+    const manifestB = createManifest("2024-05-06T00:00:00.000Z", "filter-b", "/beta");
+
+    persistSnapshotManifest(
+      manifestA,
+      [
+        createRouteSummary("/alpha", { hasDraft: true, hasPublished: false })
+      ],
+      8
+    );
+    persistSnapshotManifest(
+      manifestB,
+      [
+        createRouteSummary("/beta", { hasDraft: false, hasPublished: true })
+      ],
+      8
+    );
+
+    const draftOnly = querySnapshotHistory({ limit: 5, variant: "draft" });
+    expect(draftOnly.entries.some((entry) => entry.id === "filter-a")).toBe(true);
+    expect(draftOnly.entries.some((entry) => entry.id === "filter-b")).toBe(false);
+
+    const betaOnly = querySnapshotHistory({ limit: 5, route: "/beta" });
+    expect(betaOnly.entries).toHaveLength(1);
+    expect(betaOnly.entries[0]?.id).toBe("filter-b");
   });
 });
