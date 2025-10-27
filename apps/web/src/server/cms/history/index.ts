@@ -9,8 +9,10 @@ export {
   querySnapshotHistory,
   recordGovernanceAction,
   recordLivePreviewDelta,
+  recordRehearsalAction,
   recordRemediationAction,
   recordNoteRevision,
+  getRehearsalAction,
   resetHistoryStore,
   __internal
 } from "./store";
@@ -27,6 +29,7 @@ export type {
   MarketingPreviewRecommendation,
   MarketingPreviewRegressionVelocity,
   MarketingPreviewRemediationActionRecord,
+  MarketingPreviewRehearsalActionRecord,
   MarketingPreviewNoteRevisionRecord,
   MarketingPreviewSeverityMomentum,
   MarketingPreviewTimeToGreenForecast
