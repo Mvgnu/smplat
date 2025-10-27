@@ -47,6 +47,7 @@ class NotificationPreference(Base):
     payment_updates = Column(Boolean, nullable=False, server_default="true")
     fulfillment_alerts = Column(Boolean, nullable=False, server_default="true")
     marketing_messages = Column(Boolean, nullable=False, server_default="false")
+    billing_alerts = Column(Boolean, nullable=False, server_default="false")
     last_selected_order_id = Column(UUID(as_uuid=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

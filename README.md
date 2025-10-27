@@ -62,6 +62,12 @@ Full-stack platform for social media service storefronts.
 - Prometheus scrape endpoint: `/api/v1/observability/prometheus` (requires `X-API-Key` with the checkout key) aggregates fulfillment, payments, and catalog counters for exporters.
 - Grafana dashboard (`docs/20-grafana-dashboard.json`) and runbook (`docs/20-observability-dashboards.md`) provide ready-to-import visualizations and alert rule suggestions.
 
+
+### Billing & Campaign Intelligence
+- Billing APIs (`/api/v1/billing/*`) expose invoices, reminders, and export generation gated by `BILLING_ROLLOUT_ENABLED` and `CHECKOUT_API_KEY`.
+- The Next.js client dashboard surfaces a billing center with invoice lists, campaign insights, CSV/PDF exports, and reminder triggers via `/app/(client)/dashboard`.
+- Seed sample invoices with `python tooling/scripts/seed_billing_invoices.py --workspace-id <id>` to test UI flows locally.
+- Notification preferences now include `billingAlerts`; toggling requires the API and web apps to share the same checkout API key.
 ### Storefront buyer flow
 - Product catalog: `/products`
 - Configurable service detail page with cart entry: `/products/[slug]`

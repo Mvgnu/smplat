@@ -25,6 +25,7 @@ model User {
   notifications Notification[] @relation("UserNotifications")
   orders Order[] @relation("UserOrders")
   notificationPreference NotificationPreference? @relation("UserNotificationPreference")
+  invoices Invoice[] @relation("UserInvoices")
 
   @@map("users")
 }
@@ -183,6 +184,7 @@ model NotificationPreference {
   paymentUpdates     Boolean @default(true) @map("payment_updates")
   fulfillmentAlerts  Boolean @default(true) @map("fulfillment_alerts")
   marketingMessages  Boolean @default(false) @map("marketing_messages")
+  billingAlerts      Boolean @default(false) @map("billing_alerts")
   lastSelectedOrderId String? @map("last_selected_order_id")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
@@ -190,6 +192,60 @@ model NotificationPreference {
   user User @relation("UserNotificationPreference", fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("notification_preferences")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  VOID
+  OVERDUE
+}
+
+model Invoice {
+  id            String        @id @default(uuid()) @db.Uuid
+  workspaceId   String        @map("workspace_id")
+  invoiceNumber String        @unique @map("invoice_number")
+  status        InvoiceStatus @default(ISSUED)
+  currency      Currency      @default(EUR)
+  subtotal      Decimal       @default(0) @db.Decimal(12, 2)
+  tax           Decimal       @default(0) @db.Decimal(12, 2)
+  total         Decimal       @default(0) @db.Decimal(12, 2)
+  balanceDue    Decimal       @default(0) @map("balance_due") @db.Decimal(12, 2)
+  issuedAt      DateTime      @default(now()) @map("issued_at")
+  dueAt         DateTime      @map("due_at")
+  paidAt        DateTime?     @map("paid_at")
+  memo          String?
+  metadata      Json?
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  lineItems InvoiceLineItem[]
+  workspace User @relation("UserInvoices", fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("invoices")
+  @@index([workspaceId], map: "idx_invoices_workspace")
+}
+
+model InvoiceLineItem {
+  id                String  @id @default(uuid()) @db.Uuid
+  invoiceId         String  @map("invoice_id")
+  orderId           String? @map("order_id")
+  description       String
+  quantity          Decimal @default(1) @db.Decimal(10, 2)
+  unitAmount        Decimal @map("unit_amount") @db.Decimal(12, 2)
+  totalAmount       Decimal @map("total_amount") @db.Decimal(12, 2)
+  campaignReference String? @map("campaign_reference")
+  metadata          Json?
+  displayOrder      Int     @default(0) @map("display_order")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@map("invoice_line_items")
+  @@index([invoiceId], map: "idx_invoice_line_items_invoice")
 }
 
 model Product {

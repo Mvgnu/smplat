@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Iterable, Sequence
 
 from smplat_api.models.fulfillment import FulfillmentTask
+from smplat_api.models.invoice import Invoice
 from smplat_api.models.order import Order
 from smplat_api.models.payment import Payment
 from smplat_api.models.user import User
@@ -243,6 +244,53 @@ def render_weekly_digest(
     </ul>{pending_section}
     <p>Visit the dashboard for deeper analytics.</p>
     <p>See you next week,<br />The SMPLAT Team</p>
+  </body>
+</html>"""
+
+    return RenderedTemplate(subject=subject, text_body=text_body, html_body=html_body)
+
+
+def render_invoice_overdue(invoice: Invoice, contact_name: str | None) -> RenderedTemplate:
+    """Render an overdue invoice reminder."""
+
+    balance = invoice.balance_due if invoice.balance_due is not None else invoice.total
+    balance_decimal = balance if isinstance(balance, Decimal) else Decimal(balance)
+    currency = invoice.currency.value if hasattr(invoice.currency, "value") else str(invoice.currency)
+    formatted_balance = _format_currency(balance_decimal, currency)
+    due_date = invoice.due_at.strftime("%B %d, %Y") if invoice.due_at else "soon"
+
+    subject = f"Invoice {invoice.invoice_number} is overdue"
+    greeting = f"Hi {contact_name}," if contact_name else "Hi there,"
+
+    text_lines = [
+        greeting,
+        "",
+        f"A quick reminder that invoice {invoice.invoice_number} is overdue.",
+        f"Balance due: {formatted_balance} (originally due {due_date}).",
+        "",
+        "Next steps:",
+        "- Review the invoice in the SMPLAT billing center.",
+        "- Pay online or reach out if you need a revised schedule.",
+        "",
+        "We're here to help if you have questions.",
+        "The SMPLAT Finance Team",
+    ]
+    text_body = "\n".join(text_lines)
+
+    memo_html = f"<p><strong>Memo:</strong> {invoice.memo}</p>" if invoice.memo else ""
+    html_body = f"""<html>
+  <body>
+    <p>{greeting}</p>
+    <p>A quick reminder that invoice <strong>{invoice.invoice_number}</strong> is overdue.</p>
+    <p><strong>Balance due:</strong> {formatted_balance} (originally due {due_date}).</p>
+    {memo_html}
+    <h3>Next steps</h3>
+    <ul>
+      <li>Review the invoice in the SMPLAT billing center.</li>
+      <li>Pay online or reach out if you need a revised schedule.</li>
+    </ul>
+    <p>We're here to help if you have questions.</p>
+    <p>The SMPLAT Finance Team</p>
   </body>
 </html>"""
 

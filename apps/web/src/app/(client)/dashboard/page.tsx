@@ -1,6 +1,8 @@
 import { Metadata } from "next";
 
 import { auth } from "@/server/auth";
+import { BillingCenter } from "@/components/dashboard/billing/BillingCenter";
+import { fetchBillingCenterPayload } from "@/server/billing/invoices";
 import { fetchCatalogSearchInsights } from "@/server/observability/catalog-insights";
 import { fetchClientOrders } from "@/server/orders/client-orders";
 import { fetchOrderProgress } from "@/server/orders/progress";
@@ -49,6 +51,16 @@ export default async function ClientDashboardPage({ searchParams }: DashboardPag
     fetchInstagramAnalytics(userId, 30),
     getOrCreateNotificationPreferences(userId)
   ]);
+
+  const billing = await fetchBillingCenterPayload({
+    workspaceId: userId,
+    orders: orders.map((order) => ({
+      id: order.id,
+      status: order.status,
+      total: order.total
+    })),
+    instagram: instagramAccounts
+  });
 
   let selectedOrderId = searchParams?.orderId?.trim() ?? null;
   if (selectedOrderId && !orders.some((order) => order.id === selectedOrderId)) {
@@ -210,6 +222,13 @@ export default async function ClientDashboardPage({ searchParams }: DashboardPag
         </div>
       </section>
 
+      <BillingCenter
+        invoices={billing.invoices}
+        summary={billing.summary}
+        aging={billing.aging}
+        insights={billing.insights}
+      />
+
       <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-1">
@@ -336,6 +355,13 @@ export default async function ClientDashboardPage({ searchParams }: DashboardPag
               label="Fulfillment anomalies"
               description="Escalate stalled tasks, max retry warnings, and manual intervention requests."
               defaultChecked={preferences.fulfillmentAlerts}
+            />
+            <PreferenceToggle
+              id="billingAlerts"
+              name="billingAlerts"
+              label="Billing alerts"
+              description="Receive reminders for overdue invoices and ledger exports."
+              defaultChecked={preferences.billingAlerts}
             />
             <PreferenceToggle
               id="marketingMessages"

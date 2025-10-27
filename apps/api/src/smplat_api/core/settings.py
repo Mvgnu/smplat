@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +30,21 @@ class Settings(BaseSettings):
 
     # Internal API security
     checkout_api_key: str = ""
+
+    # Billing rollout
+    billing_rollout_stage: Literal["disabled", "pilot", "ga"] = "pilot"
+    billing_rollout_workspaces: list[str] = Field(default_factory=list)
+
+    @field_validator("billing_rollout_workspaces", mode="before")
+    @classmethod
+    def _parse_rollout_list(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, (list, tuple, set)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
 
     # Email / notification settings
     smtp_host: str | None = None
