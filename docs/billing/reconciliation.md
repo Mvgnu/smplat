@@ -4,14 +4,14 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 
 ## Statement Ingestion
 
-- The `StripeStatementIngestionService` pulls Stripe balance transactions for the prior seven days and persists them to `processor_statements`.
-- Transactions are matched to invoices through the Stripe charge metadata (`invoice_id`, `workspace_id`) and stored with normalized gross, fee, and net amounts.
-- Transactions without a resolvable workspace are skipped to prevent orphaned records. When possible, unmatched transactions create discrepancies during reconciliation.
+- The `StripeStatementIngestionService` pulls Stripe balance transactions for the prior seven days, walking Stripe pagination cursors to guarantee idempotent reprocessing.
+- Transactions are matched to invoices through charge metadata (`invoice_id`, `workspace_id`) and stored with normalized gross, fee, and net amounts. Existing statements are updated in-place if Stripe adjusts the payload.
+- Transactions without a resolvable workspace or orphaned removals are preserved in `processor_statement_staging` for manual triage instead of being silently skipped.
 
 ## Reconciliation Runs
 
-- The `BillingLedgerReconciliationWorker` triggers statement ingestion and dispute syncs on each sweep.
-- A reconciliation run is opened (or reused if already running) for every sweep and updated with totals, matches, and discrepancy counts.
+- The `BillingLedgerReconciliationWorker` triggers statement ingestion and dispute syncs on each sweep and captures pagination cursors so subsequent runs continue from the last successful checkpoint.
+- Each sweep opens a run with status `running`. Upon completion the worker records `completed_at`, persists a JSON note summarizing counts (persisted, updated, staged, removed, disputes, cursor), and flips the run status to `completed`. Failures are committed with `status="failed"` and error context for observability.
 - The helper `reconcile_statements` evaluates persisted statements, incrementing `matched_transactions` for invoices with successful linkage and logging discrepancies when invoices are missing.
 
 ## Dispute Automation
@@ -36,6 +36,6 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 
 ## Alerting & Monitoring
 
-- Track `statements_ingested` and `disputes_logged` metrics emitted by the worker to ensure ingestion health.
-- Investigate spikes in `MISSING_INVOICE` discrepancies, which may indicate missing metadata from Stripe charges.
+- Track `statements_ingested`, `statements_updated`, and `disputes_logged` metrics emitted by the worker to ensure ingestion health; monitor staging volume for untriaged processor events.
+- Investigate spikes in `MISSING_INVOICE` discrepancies, which may indicate missing metadata from Stripe charges, and review the staging table for unmatched payouts/refunds.
 - Use the dashboard reconciliation panel to review open items and confirm resolution flows.

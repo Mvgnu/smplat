@@ -6,6 +6,7 @@ from .stripe import (
     StripeCaptureResponse,
     StripeDisputeRecord,
     StripeHostedSession,
+    StripeListPage,
     StripeRefundResponse,
 )
 
@@ -16,4 +17,5 @@ __all__ = [
     "StripeRefundResponse",
     "StripeBalanceTransaction",
     "StripeDisputeRecord",
+    "StripeListPage",
 ]
