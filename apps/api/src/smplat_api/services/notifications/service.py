@@ -16,10 +16,12 @@ from smplat_api.models.order import Order, OrderItem, OrderStatusEnum
 from smplat_api.models.payment import Payment
 from smplat_api.models.user import User
 from smplat_api.models.notification import NotificationPreference
+from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
 
 from .backend import EmailBackend, SMTPEmailBackend, InMemoryEmailBackend
 from .templates import (
     RenderedTemplate,
+    render_invoice_overdue,
     render_fulfillment_completion,
     render_fulfillment_retry,
     render_payment_success,
@@ -51,6 +53,7 @@ class _PreferenceSnapshot:
     payment_updates: bool = True
     fulfillment_alerts: bool = True
     marketing_messages: bool = False
+    billing_alerts: bool = False
 
 
 class NotificationService:
@@ -252,6 +255,33 @@ class NotificationService:
         }
         await self._deliver(contact, template, event_type="fulfillment_completion", metadata=metadata)
 
+    async def send_invoice_overdue(self, invoice: Invoice) -> None:
+        """Send an overdue reminder when billing alerts are enabled."""
+        if self._backend is None:
+            return
+
+        contact = await self._resolve_workspace_contact(invoice.workspace_id)
+        if contact is None:
+            return
+
+        preferences = await self._get_preferences(invoice.workspace_id)
+        if not preferences.billing_alerts:
+            return
+
+        status_value = invoice.status.value if isinstance(invoice.status, InvoiceStatusEnum) else str(invoice.status)
+        if status_value == InvoiceStatusEnum.PAID.value:
+            return
+
+        template = render_invoice_overdue(invoice, contact.display_name)
+        metadata = {
+            "invoice_id": str(invoice.id),
+            "invoice_number": invoice.invoice_number,
+            "workspace_id": str(invoice.workspace_id),
+            "status": status_value,
+            "balance_due": str(invoice.balance_due),
+        }
+        await self._deliver(contact, template, event_type="invoice_overdue", metadata=metadata)
+
     async def send_weekly_digest(
         self,
         user: User,
@@ -315,6 +345,19 @@ class NotificationService:
 
         return _OrderContact(email=user.email, display_name=user.display_name)
 
+    async def _resolve_workspace_contact(self, workspace_id: Optional[UUID]) -> Optional[_OrderContact]:
+        """Resolve the primary workspace contact for billing alerts."""
+        if workspace_id is None:
+            return None
+
+        stmt = select(User).where(User.id == workspace_id)
+        result = await self._db.execute(stmt)
+        user = result.scalar_one_or_none()
+        if not user or not user.email:
+            return None
+
+        return _OrderContact(email=user.email, display_name=user.display_name)
+
     async def _get_preferences(self, user_id: Optional[UUID]) -> _PreferenceSnapshot:
         """Return notification preferences for the provided user."""
         if user_id is None:
@@ -332,6 +375,7 @@ class NotificationService:
             payment_updates=preference.payment_updates,
             fulfillment_alerts=preference.fulfillment_alerts,
             marketing_messages=preference.marketing_messages,
+            billing_alerts=preference.billing_alerts,
         )
 
     async def _deliver(

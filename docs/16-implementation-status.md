@@ -10,6 +10,7 @@ _Last updated: 2025-10-17_
 - Fulfillment TaskProcessor emits metrics/health telemetry and now applies exponential backoff with dead-letter tracking; deployment wiring and alerting remain open.
 - CMS schemas and seeding scripts are prepared; storefront marketing sections now pull from Payload by default and gracefully fall back to Sanity only when explicitly configured.
 - Client-facing dashboard (`/dashboard`) now requires an authenticated session, preloads assigned orders with persisted selection, surfaces fulfillment rollups, Instagram analytics, and catalog telemetry, and exposes notification preferences.
+- Billing center surfaces invoice history with CSV exports, staged rollout guardrails, and campaign intelligence overlays that correlate spend, fulfillment outcomes, and Instagram reach deltas.
 - Weekly digests aggregate order/fulfillment activity via `tooling/scripts/run_weekly_digest.py`, reusing NotificationService templates with marketing preference enforcement.
 
 ## Storefront & Checkout

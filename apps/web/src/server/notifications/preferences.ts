@@ -8,6 +8,7 @@ export type NotificationPreferences = {
   paymentUpdates: boolean;
   fulfillmentAlerts: boolean;
   marketingMessages: boolean;
+  billingAlerts: boolean;
   lastSelectedOrderId: string | null;
 };
 
@@ -16,6 +17,7 @@ const defaultPreferences: NotificationPreferences = {
   paymentUpdates: true,
   fulfillmentAlerts: true,
   marketingMessages: false,
+  billingAlerts: false,
   lastSelectedOrderId: null
 };
 
@@ -88,6 +90,7 @@ function mapPreference(preference: PrismaNotificationPreference): NotificationPr
     paymentUpdates: preference.paymentUpdates,
     fulfillmentAlerts: preference.fulfillmentAlerts,
     marketingMessages: preference.marketingMessages,
+    billingAlerts: preference.billingAlerts,
     lastSelectedOrderId: preference.lastSelectedOrderId
   };
 }

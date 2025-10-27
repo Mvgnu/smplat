@@ -15,12 +15,14 @@ export async function updateNotificationPreferencesAction(formData: FormData) {
   const paymentUpdates = formData.get("paymentUpdates") === "on";
   const fulfillmentAlerts = formData.get("fulfillmentAlerts") === "on";
   const marketingMessages = formData.get("marketingMessages") === "on";
+  const billingAlerts = formData.get("billingAlerts") === "on";
 
   await updateNotificationPreferences(userId, {
     orderUpdates,
     paymentUpdates,
     fulfillmentAlerts,
-    marketingMessages
+    marketingMessages,
+    billingAlerts
   });
 
   revalidatePath("/dashboard");
