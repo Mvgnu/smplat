@@ -78,6 +78,15 @@ class ProcessorStatement(Base):
     invoice = relationship("Invoice", backref="processor_statements")
 
 
+class ProcessorStatementStagingStatus(str, Enum):
+    """Workflow states for staging triage and escalation."""
+
+    PENDING = "pending"
+    TRIAGED = "triaged"
+    RESOLVED = "resolved"
+    REQUEUED = "requeued"
+
+
 class ProcessorStatementStaging(Base):
     """Staging area for processor events that require manual triage."""
 
@@ -89,6 +98,15 @@ class ProcessorStatementStaging(Base):
     reason = Column(String(128), nullable=False)
     payload = Column(JSON, nullable=True)
     workspace_hint = Column(UUID(as_uuid=True), nullable=True, index=True)
+    status = Column(
+        SqlEnum(ProcessorStatementStagingStatus, name="processor_statement_staging_status"),
+        nullable=False,
+        server_default=ProcessorStatementStagingStatus.PENDING.value,
+    )
+    triage_note = Column(Text, nullable=True)
+    last_triaged_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    requeue_count = Column(Integer, nullable=False, server_default="0")
     first_observed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_observed_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
