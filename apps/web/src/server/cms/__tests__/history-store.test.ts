@@ -7,6 +7,9 @@ import {
   persistSnapshotManifest,
   querySnapshotHistory,
   recordGovernanceAction,
+  recordLivePreviewDelta,
+  recordRemediationAction,
+  recordNoteRevision,
   resetHistoryStore,
   createHistoryHash,
   __internal
@@ -139,6 +142,9 @@ describe("marketing preview history store", () => {
     expect(entry?.governance.totalActions).toBe(1);
     expect(entry?.governance.actionsByKind.approve).toBe(1);
     expect(entry?.governance.lastActionAt).toBe("2024-04-04T00:10:00.000Z");
+    expect(entry?.liveDeltas).toEqual([]);
+    expect(entry?.remediations).toEqual([]);
+    expect(entry?.noteRevisions).toEqual([]);
   });
 
   it("applies route and variant filters to query results", () => {
@@ -167,5 +173,116 @@ describe("marketing preview history store", () => {
     const betaOnly = querySnapshotHistory({ limit: 5, route: "/beta" });
     expect(betaOnly.entries).toHaveLength(1);
     expect(betaOnly.entries[0]?.id).toBe("filter-b");
+  });
+
+  it("records live preview deltas with idempotent hashes", () => {
+    const manifest = createManifest("2024-06-06T00:00:00.000Z", "live-delta", "/campaigns");
+    persistSnapshotManifest(manifest, [createRouteSummary("/campaigns")], 8);
+
+    const payload = {
+      route: "/campaigns",
+      slug: "/campaigns",
+      label: "Campaigns",
+      environment: "preview",
+      generatedAt: "2024-06-06T00:05:00.000Z",
+      markup: "<div>campaigns</div>",
+      blockKinds: ["hero"],
+      sectionCount: 1,
+      variant: {
+        key: "variant-baseline",
+        label: "Baseline",
+        persona: null,
+        campaign: null,
+        featureFlag: null
+      },
+      collection: "pages",
+      docId: "campaigns",
+      metrics: null,
+      hero: null,
+      validation: {
+        ok: false,
+        warnings: ["Hero missing CTA"],
+        blocks: [
+          {
+            kind: "hero",
+            valid: false,
+            errors: ["cta"],
+            warnings: [],
+            trace: { lexicalKey: "hero-1" }
+          }
+        ]
+      },
+      diagnostics: { summary: { totalBlocks: 1, invalidBlocks: 1 } }
+    } satisfies Parameters<typeof recordLivePreviewDelta>[0]["payload"];
+
+    recordLivePreviewDelta({
+      manifestGeneratedAt: manifest.generatedAt,
+      generatedAt: payload.generatedAt,
+      route: payload.route,
+      variantKey: payload.variant.key,
+      payload
+    });
+
+    // Duplicate should be ignored.
+    recordLivePreviewDelta({
+      manifestGeneratedAt: manifest.generatedAt,
+      generatedAt: payload.generatedAt,
+      route: payload.route,
+      variantKey: payload.variant.key,
+      payload
+    });
+
+    const result = querySnapshotHistory({ limit: 5, route: "/campaigns" });
+    const entry = result.entries.find((item) => item.id === "live-delta");
+    expect(entry?.liveDeltas).toHaveLength(1);
+    expect(entry?.liveDeltas[0]?.payload.route).toBe("/campaigns");
+    expect(entry?.liveDeltas[0]?.payloadHash).toBeDefined();
+  });
+
+  it("records remediation actions and trims with manifests", () => {
+    const first = createManifest("2024-06-07T00:00:00.000Z", "remed-first", "/campaigns");
+    const second = createManifest("2024-06-08T00:00:00.000Z", "remed-second", "/campaigns");
+
+    persistSnapshotManifest(first, [createRouteSummary("/campaigns")], 1);
+    recordRemediationAction({
+      manifestGeneratedAt: first.generatedAt,
+      route: "/campaigns",
+      action: "reset",
+      fingerprint: null,
+      summary: { totalBlocks: 3, invalidBlocks: 1 },
+      collection: "pages",
+      docId: "campaigns",
+      occurredAt: "2024-06-07T00:05:00.000Z"
+    });
+
+    // Persisting second manifest with limit=1 should trim the first manifest and its artifacts.
+    persistSnapshotManifest(second, [createRouteSummary("/campaigns")], 1);
+
+    const result = querySnapshotHistory({ limit: 5 });
+    const remaining = result.entries.find((item) => item.id === "remed-second");
+    expect(remaining).toBeDefined();
+    expect(remaining?.remediations).toHaveLength(0);
+  });
+
+  it("records note revisions with hashed authors", () => {
+    const manifest = createManifest("2024-06-09T00:00:00.000Z", "notes", "/campaigns");
+    persistSnapshotManifest(manifest, [createRouteSummary("/campaigns")], 8);
+
+    recordNoteRevision({
+      noteId: "note-1",
+      manifestGeneratedAt: manifest.generatedAt,
+      route: "/campaigns",
+      severity: "warning",
+      body: "Check CTA alignment",
+      author: "operator@example.com",
+      recordedAt: "2024-06-09T00:15:00.000Z"
+    });
+
+    const result = querySnapshotHistory({ limit: 5, route: "/campaigns" });
+    const entry = result.entries.find((item) => item.id === "notes");
+    expect(entry?.noteRevisions).toHaveLength(1);
+    const revision = entry?.noteRevisions[0];
+    expect(revision?.authorHash).toBe(createHistoryHash("operator@example.com"));
+    expect(revision?.severity).toBe("warning");
   });
 });

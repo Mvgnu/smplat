@@ -9,7 +9,10 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type {
   MarketingPreviewHistoryAggregates,
   MarketingPreviewGovernanceStats,
-  MarketingPreviewHistoryNoteSummary
+  MarketingPreviewHistoryNoteSummary,
+  MarketingPreviewLiveDeltaRecord,
+  MarketingPreviewRemediationActionRecord,
+  MarketingPreviewNoteRevisionRecord
 } from "@/server/cms/history";
 import type { MarketingPreviewTriageNoteSeverity } from "@/server/cms/preview/notes";
 import type {
@@ -23,12 +26,15 @@ import {
   type MarketingPreviewHistoryEntryResponse
 } from "./historyClient";
 
-const HISTORY_CACHE_KEY = "marketing-preview-history-cache-v1";
+const HISTORY_CACHE_KEY = "marketing-preview-history-cache-v2";
 
 export type MarketingPreviewHistoryTimelineEntry = MarketingPreviewTimelineEntry & {
   aggregates: MarketingPreviewHistoryAggregates;
   governance: MarketingPreviewGovernanceStats;
   notes?: MarketingPreviewHistoryNoteSummary;
+  liveDeltas: MarketingPreviewLiveDeltaRecord[];
+  remediations: MarketingPreviewRemediationActionRecord[];
+  noteRevisions: MarketingPreviewNoteRevisionRecord[];
 };
 
 type HistoryCacheParams = Omit<MarketingPreviewHistoryClientParams, "signal">;
@@ -116,7 +122,10 @@ const convertHistoryEntry = (
     actionsByKind: entry.governance.actionsByKind,
     lastActionAt: entry.governance.lastActionAt ?? null
   },
-  notes: coerceNoteSummary(entry.notes)
+  notes: coerceNoteSummary(entry.notes),
+  liveDeltas: entry.liveDeltas ?? [],
+  remediations: entry.remediations ?? [],
+  noteRevisions: entry.noteRevisions ?? []
 });
 
 const deriveAggregates = (
@@ -154,7 +163,10 @@ const hydrateInitialEntries = (
     ...entry,
     aggregates: deriveAggregates(entry),
     governance: defaultGovernance,
-    notes: undefined
+    notes: undefined,
+    liveDeltas: [],
+    remediations: [],
+    noteRevisions: []
   }));
 
 const readCache = (): HistoryCachePayload | null => {

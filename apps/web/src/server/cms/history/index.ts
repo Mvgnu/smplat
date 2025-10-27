@@ -7,6 +7,9 @@ export {
   persistSnapshotManifest,
   querySnapshotHistory,
   recordGovernanceAction,
+  recordLivePreviewDelta,
+  recordRemediationAction,
+  recordNoteRevision,
   resetHistoryStore,
   __internal
 } from "./store";
@@ -17,5 +20,8 @@ export type {
   MarketingPreviewHistoryNoteSummary,
   MarketingPreviewHistoryQuery,
   MarketingPreviewHistoryQueryResult,
-  MarketingPreviewHistoryRouteRecord
+  MarketingPreviewHistoryRouteRecord,
+  MarketingPreviewLiveDeltaRecord,
+  MarketingPreviewRemediationActionRecord,
+  MarketingPreviewNoteRevisionRecord
 } from "./types";

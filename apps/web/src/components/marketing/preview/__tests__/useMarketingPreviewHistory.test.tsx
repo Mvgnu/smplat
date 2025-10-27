@@ -106,7 +106,10 @@ describe("useMarketingPreviewHistory", () => {
           notes: {
             total: 1,
             severityCounts: { info: 0, warning: 1, blocker: 0 }
-          }
+          },
+          liveDeltas: [],
+          remediations: [],
+          noteRevisions: []
         },
         {
           id: "persisted-0",
@@ -141,7 +144,10 @@ describe("useMarketingPreviewHistory", () => {
           notes: {
             total: 0,
             severityCounts: { info: 0, warning: 0, blocker: 0 }
-          }
+          },
+          liveDeltas: [],
+          remediations: [],
+          noteRevisions: []
         }
       ]
     };
@@ -190,7 +196,10 @@ describe("useMarketingPreviewHistory", () => {
       notes: {
         total: 0,
         severityCounts: { info: 0, warning: 0, blocker: 0 }
-      }
+      },
+      liveDeltas: [],
+      remediations: [],
+      noteRevisions: []
     };
 
     const cachedPayload = {
@@ -205,7 +214,7 @@ describe("useMarketingPreviewHistory", () => {
     };
 
     window.localStorage.setItem(
-      "marketing-preview-history-cache-v1",
+      "marketing-preview-history-cache-v2",
       JSON.stringify(cachedPayload)
     );
 
@@ -226,6 +235,9 @@ describe("useMarketingPreviewHistory", () => {
     expect(result.current.isUsingCache).toBe(true);
     expect(result.current.isOffline).toBe(true);
     expect(global.fetch).toHaveBeenCalled();
+    expect(result.current.entries[0].liveDeltas).toEqual([]);
+    expect(result.current.entries[0].remediations).toEqual([]);
+    expect(result.current.entries[0].noteRevisions).toEqual([]);
   });
 
   test("applies filters and resets pagination", async () => {
@@ -267,7 +279,10 @@ describe("useMarketingPreviewHistory", () => {
           notes: {
             total: 0,
             severityCounts: { info: 0, warning: 0, blocker: 0 }
-          }
+          },
+          liveDeltas: [],
+          remediations: [],
+          noteRevisions: []
         }
       ]
     };

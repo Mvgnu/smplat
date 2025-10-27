@@ -8,6 +8,7 @@ import {
   defaultMarketingMetricsFallback
 } from "@/components/marketing/sections";
 import { normalizeMarketingLexicalContent } from "@/server/cms/lexical";
+import { recordLivePreviewDelta } from "@/server/cms/history";
 import {
   type MarketingContentDocument,
   type PageDocument
@@ -489,6 +490,51 @@ export async function POST(request: Request) {
   };
 
   await broadcast(broadcastPayload);
+
+  try {
+    const normalizedBlocks = broadcastPayload.validation.blocks.map((block) =>
+      JSON.parse(JSON.stringify(block)) as Record<string, unknown>
+    );
+    const diagnostics = JSON.parse(
+      JSON.stringify(broadcastPayload.diagnostics)
+    ) as Record<string, unknown>;
+
+    recordLivePreviewDelta({
+      manifestGeneratedAt: broadcastPayload.generatedAt,
+      generatedAt: broadcastPayload.generatedAt,
+      route: broadcastPayload.route ?? null,
+      variantKey: broadcastPayload.variant.key,
+      payload: {
+        route: broadcastPayload.route ?? null,
+        slug: broadcastPayload.slug ?? null,
+        label: broadcastPayload.label ?? null,
+        environment: broadcastPayload.environment ?? null,
+        generatedAt: broadcastPayload.generatedAt,
+        markup: broadcastPayload.markup,
+        blockKinds: broadcastPayload.blockKinds,
+        sectionCount: broadcastPayload.sectionCount,
+        variant: {
+          key: broadcastPayload.variant.key,
+          label: broadcastPayload.variant.label,
+          persona: broadcastPayload.variant.persona ?? null,
+          campaign: broadcastPayload.variant.campaign ?? null,
+          featureFlag: broadcastPayload.variant.featureFlag ?? null
+        },
+        collection: broadcastPayload.collection ?? null,
+        docId: broadcastPayload.docId ?? null,
+        metrics: broadcastPayload.metrics ?? null,
+        hero: broadcastPayload.hero ?? null,
+        validation: {
+          ok: broadcastPayload.validation.ok,
+          warnings: [...broadcastPayload.validation.warnings],
+          blocks: normalizedBlocks
+        },
+        diagnostics
+      }
+    });
+  } catch (error) {
+    console.error("Failed to persist live preview delta", error);
+  }
 
   return NextResponse.json({
     acknowledged: true,

@@ -246,7 +246,8 @@ export function BlockDiagnosticsPanel({
             fingerprint,
             summary,
             collection: validation?.collection,
-            docId: validation?.docId
+            docId: validation?.docId,
+            generatedAt: entry?.receivedAt ?? validation?.receivedAt ?? null
           })
         });
         if (!response.ok) {
@@ -266,7 +267,7 @@ export function BlockDiagnosticsPanel({
         setPendingAction(null);
       }
     },
-    [route, summary, validation?.collection, validation?.docId]
+    [route, summary, validation?.collection, validation?.docId, entry?.receivedAt, validation?.receivedAt]
   );
 
   const handleCopyFingerprint = useCallback(

@@ -28,9 +28,9 @@ export WEB_URL="https://marketing.example.com"
 
 ## Timeline history persistence
 
-- Marketing preview timeline snapshots and route analytics are stored in `apps/web/.data/marketing-preview-history.sqlite` via the durable history service introduced for cockpit baseline hardening.
-- The history writer enforces retention automatically (default: 24 manifests). To prune manually, delete the SQLite file and rerun the preview validation harness (`pnpm payload:validate`) to repopulate baseline manifests.
-- For recovery drills, back up the `.sqlite` file before maintenance, then restore it alongside the `.data` directory. Synthetic tests (`apps/web/src/server/cms/__tests__/history-store.test.ts`) validate that persistence, trimming, and hashing still behave correctly after recovery.
+- Marketing preview timeline snapshots and route analytics are stored in `apps/web/.data/marketing-preview-history.sqlite` via the durable history service introduced for cockpit baseline hardening. Live preview deltas, fallback remediation attempts, and triage note revisions now land in dedicated tables with SHA-256 idempotency hashes so replay requests remain deterministic.
+- The history writer enforces retention automatically (default: 24 manifests) and trims associated deltas/remediation/note revision rows at the same time. To prune manually, delete the SQLite file and rerun the preview validation harness (`pnpm payload:validate`) to repopulate baseline manifests.
+- For recovery drills, back up the `.sqlite` file before maintenance, then restore it alongside the `.data` directory. Synthetic tests (`apps/web/src/server/cms/__tests__/history-store.test.ts`) validate that persistence, trimming, hashing, and the new artifact ledgers still behave correctly after recovery.
 
 ### History API surface
 
@@ -38,13 +38,13 @@ export WEB_URL="https://marketing.example.com"
   - `route=/landing` restricts results to manifests containing the route (matching via both clear text and the stored route hash).
   - `variant=draft|published` narrows history to manifests with the requested preview state available.
   - `severity=info|warning|blocker` cross-references triage notes to return entries with matching note counts.
-- Responses include aggregate counts (`aggregates.totalRoutes`, `aggregates.diffDetectedRoutes`) plus governance summaries (`governance.totalActions`, `governance.actionsByKind`) for cockpit dashboards. Note summaries (`notes.total`, `notes.severityCounts`) are derived from triage notes so workbench timelines can prioritise high-risk retrospectives.
+- Responses include aggregate counts (`aggregates.totalRoutes`, `aggregates.diffDetectedRoutes`) plus governance summaries (`governance.totalActions`, `governance.actionsByKind`) for cockpit dashboards. Note summaries (`notes.total`, `notes.severityCounts`) are derived from triage notes so workbench timelines can prioritise high-risk retrospectives. The payload also surfaces `liveDeltas`, `remediations`, and `noteRevisions` arrays so cockpit retrospectives can reconstruct intra-manifest activity without rehydrating the SSE stream or fallback endpoints.
 - Default pagination returns the ten newest manifests; increase `limit` (max 25) for broader retrospectives. The API internally hydrates against the full 24-manifest retention window to ensure severity filters remain accurate.
 
 ### Cockpit workbench consumption
 
 - The admin Preview Workbench seeds its live capture with `collectMarketingPreviewSnapshotTimeline` and then delegates historical queries to the `useMarketingPreviewHistory` hook.
-- The hook uses React Query for caching and background revalidation, merges filter state (`route`, `variant`, `severity`, `limit`, `offset`) into the query key, and persists the last successful payload in `localStorage` (`marketing-preview-history-cache-v1`) for offline replay.
+- The hook uses React Query for caching and background revalidation, merges filter state (`route`, `variant`, `severity`, `limit`, `offset`) into the query key, and persists the last successful payload in `localStorage` (`marketing-preview-history-cache-v2`) for offline replay. Cached payloads now include the delta/remediation/note revision ledgers so offline retrospectives retain the same fidelity as live fetches.
 - Timeline filter chips issue server-side queries, and pagination controls walk persisted manifests without losing cache state. Cache entries are invalidated whenever the active manifest ID changes so fresh captures surface automatically.
 - When the browser reports `navigator.onLine === false` or the history request fails, the hook replays the cached payload and surfaces an "Offline cache" badge. Reconnecting triggers an automatic refresh.
 - Diff heatmaps derive from `aggregates.diffDetectedRoutes` while note badges surface `notes.severityCounts`, allowing editors to triage high-risk captures before drilling into the diff view.
@@ -117,3 +117,4 @@ Document successful validation by appending the date, Payload environment URL, a
 ## Change log
 
 - 2025-01-15 — Added automated preview/webhook validation harness (`pnpm payload:validate`).
+- 2025-10-27 — Persist live preview deltas, fallback remediation attempts, and triage note revisions alongside manifests; bumped offline cache schema to v2 for delta-aware replay.
