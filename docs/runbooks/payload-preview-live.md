@@ -55,12 +55,13 @@ export WEB_URL="https://marketing.example.com"
 - When the browser reports `navigator.onLine === false` or the history request fails, the hook replays the cached payload and surfaces an "Offline cache" badge. Reconnecting triggers an automatic refresh.
 - Diff heatmaps derive from `aggregates.diffDetectedRoutes` while note badges surface `notes.severityCounts`, allowing editors to triage high-risk captures before drilling into the diff view.
 - The predictive diagnostics panel surfaces the latest analytics payload, sparkline trendlines, and hashed operator feedback submissions. Offline cache fallback is indicated in the panel header so operators know when forecasts are stale. Feedback entries stay local-only until governance runbooks adopt a durable sink.
+- Rehearsal guardrails now badge timeline entries with verdict states (Passed, Failed, Pending, Stale, Missing) and gate live fallback actions until a fresh, passing rehearsal exists for the selected manifest. The workbench banner lists actionable failure reasons and exposes a copy-to-clipboard rehearsal `curl` command that preloads the latest scenario fingerprint and expected delta payload.
 
 ### Governance ledger API
 
 - `POST /api/marketing-preview/history/governance` records actions such as approvals or resets. Requests must include `x-preview-signature: ${PAYLOAD_LIVE_PREVIEW_SECRET}`; unauthenticated calls are rejected.
-- `POST /api/marketing-preview/fallbacks/simulate` records a rehearsal scenario (`scenarioFingerprint`, `expectedDeltas`, optional `manifestGeneratedAt` and `operatorId`), stores the hashed operator identifier, and responds with the delta between expected and live remediation counts. Use this endpoint to dry-run fallback playbooks without polluting live remediations.
-- `GET /api/marketing-preview/fallbacks/rehearsals/:id` returns a persisted rehearsal record plus the latest live remediation comparison so cockpit surfaces can badge simulations alongside production recoveries.
+- `POST /api/marketing-preview/fallbacks/simulate` records a rehearsal scenario (`scenarioFingerprint`, `expectedDeltas`, optional `manifestGeneratedAt` and `operatorId`), stores the hashed operator identifier, and responds with a structured evaluation (`verdict`, `diff`, `actualDeltas`, `failureReasons`, `comparison`) alongside the expected delta snapshot. Use this endpoint to dry-run fallback playbooks without polluting live remediations.
+- `GET /api/marketing-preview/fallbacks/rehearsals/:id` returns a persisted rehearsal record plus the latest live remediation comparison and computed evaluation so cockpit surfaces can badge simulations alongside production recoveries.
 - Payload shape:
 
   ```jsonc
@@ -128,3 +129,4 @@ Document successful validation by appending the date, Payload environment URL, a
 - 2025-01-15 — Added automated preview/webhook validation harness (`pnpm payload:validate`).
 - 2025-10-27 — Persist live preview deltas, fallback remediation attempts, and triage note revisions alongside manifests; bumped offline cache schema to v2 for delta-aware replay.
 - 2026-02-14 — Added rehearsal action persistence, history `actionMode` filtering, and rehearsal simulation APIs for governance dry-runs.
+- 2026-04-27 — Persisted rehearsal verdict metadata, added failure reason comparisons, and enforced rehearsal-first guardrails within the Preview Workbench UI.

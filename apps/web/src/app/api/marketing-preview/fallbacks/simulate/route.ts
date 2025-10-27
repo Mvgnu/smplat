@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 
-import { querySnapshotHistory, recordRehearsalAction } from "@/server/cms/history";
+import {
+  querySnapshotHistory,
+  recordRehearsalAction,
+  type MarketingPreviewRehearsalComparison,
+  type MarketingPreviewRehearsalFailureReason,
+  type MarketingPreviewRehearsalVerdict,
+  type MarketingPreviewRemediationActionRecord
+} from "@/server/cms/history";
 
 // meta: route: api/marketing-preview/fallbacks/simulate
 // meta: feature: marketing-preview-governance
@@ -40,17 +47,56 @@ const validatePayload = (
 
 const summarizeLiveRemediations = (manifestGeneratedAt?: string | null) => {
   if (!manifestGeneratedAt) {
-    return { manifestFound: false, remediationCount: 0 };
+    return { manifestFound: false, remediations: [] as MarketingPreviewRemediationActionRecord[] };
   }
 
   const history = querySnapshotHistory({ limit: 50, actionMode: "live" });
   const matching = history.entries.find((entry) => entry.generatedAt === manifestGeneratedAt);
 
   if (!matching) {
-    return { manifestFound: false, remediationCount: 0 };
+    return { manifestFound: false, remediations: [] as MarketingPreviewRemediationActionRecord[] };
   }
 
-  return { manifestFound: true, remediationCount: matching.remediations.length };
+  return { manifestFound: true, remediations: matching.remediations };
+};
+
+const evaluateRehearsal = (
+  expectedDeltas: number,
+  summary: ReturnType<typeof summarizeLiveRemediations>
+) => {
+  const actualCount = summary.remediations.length;
+  const diff = actualCount - expectedDeltas;
+  const failureReasons: MarketingPreviewRehearsalFailureReason[] = [];
+
+  if (!summary.manifestFound) {
+    failureReasons.push("manifest_missing");
+  }
+
+  if (actualCount !== expectedDeltas) {
+    failureReasons.push("delta_mismatch");
+    if (actualCount > expectedDeltas) {
+      failureReasons.push("unexpected_remediation");
+    }
+  }
+
+  const verdict: MarketingPreviewRehearsalVerdict = failureReasons.length ? "failed" : "passed";
+
+  const comparison: MarketingPreviewRehearsalComparison = {
+    expected: { deltaCount: expectedDeltas },
+    actual: {
+      manifestFound: summary.manifestFound,
+      remediationCount: actualCount,
+      remediations: summary.remediations.map((remediation) => ({
+        id: remediation.id,
+        route: remediation.route,
+        action: remediation.action,
+        fingerprint: remediation.fingerprint ?? null,
+        recordedAt: remediation.recordedAt
+      }))
+    }
+  };
+
+  return { verdict, diff, actualDeltas: actualCount, failureReasons, comparison };
 };
 
 export async function POST(request: Request) {
@@ -64,15 +110,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid rehearsal payload" }, { status: 400 });
   }
 
+  const summary = summarizeLiveRemediations(payload.manifestGeneratedAt ?? null);
+  const evaluation = evaluateRehearsal(payload.expectedDeltas, summary);
+  const evaluatedAt = new Date().toISOString();
+
   recordRehearsalAction({
     manifestGeneratedAt: payload.manifestGeneratedAt ?? null,
     scenarioFingerprint: payload.scenarioFingerprint,
     expectedDeltas: payload.expectedDeltas,
-    operatorId: payload.operatorId ?? null
+    operatorId: payload.operatorId ?? null,
+    verdict: evaluation.verdict,
+    actualDeltas: evaluation.actualDeltas,
+    diff: evaluation.diff,
+    failureReasons: evaluation.failureReasons,
+    comparison: evaluation.comparison,
+    evaluatedAt
   });
-
-  const { manifestFound, remediationCount } = summarizeLiveRemediations(payload.manifestGeneratedAt ?? null);
-  const diff = remediationCount - payload.expectedDeltas;
 
   return NextResponse.json(
     {
@@ -82,10 +135,12 @@ export async function POST(request: Request) {
         expectedDeltas: payload.expectedDeltas,
         operatorId: payload.operatorId ? "hashed" : null
       },
-      liveOutcomes: {
-        manifestFound,
-        remediationCount,
-        diff
+      evaluation: {
+        verdict: evaluation.verdict,
+        diff: evaluation.diff,
+        actualDeltas: evaluation.actualDeltas,
+        failureReasons: evaluation.failureReasons,
+        comparison: evaluation.comparison
       }
     },
     { status: 201 }

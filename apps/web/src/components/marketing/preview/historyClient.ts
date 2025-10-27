@@ -144,7 +144,32 @@ const historyEntrySchema = z.object({
         expectedDeltas: z.number(),
         operatorHash: z.string().nullish(),
         payloadHash: z.string(),
-        recordedAt: z.string()
+        recordedAt: z.string(),
+        verdict: z.union([z.literal("pending"), z.literal("passed"), z.literal("failed")]),
+        evaluatedAt: z.string().nullish(),
+        actualDeltas: z.number().nullish(),
+        diff: z.number().nullish(),
+        failureReasons: z
+          .array(z.union([z.literal("manifest_missing"), z.literal("delta_mismatch"), z.literal("unexpected_remediation")]))
+          .nullish(),
+        comparison: z
+          .object({
+            expected: z.object({ deltaCount: z.number() }),
+            actual: z.object({
+              manifestFound: z.boolean(),
+              remediationCount: z.number(),
+              remediations: z.array(
+                z.object({
+                  id: z.string(),
+                  route: z.string(),
+                  action: z.union([z.literal("reset"), z.literal("prioritize")]),
+                  fingerprint: z.string().nullish(),
+                  recordedAt: z.string()
+                })
+              )
+            })
+          })
+          .nullish()
       })
     )
     .default([]),
