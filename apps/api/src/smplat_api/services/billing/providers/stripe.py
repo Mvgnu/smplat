@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Final, Iterable, Mapping
+from typing import Any, Final, Generic, Iterable, Mapping, TypeVar
 
 import stripe
 
@@ -76,6 +76,18 @@ class StripeDisputeRecord:
     reason: str | None
     created_at: datetime
     raw: Mapping[str, Any]
+
+
+T = TypeVar("T")
+
+
+@dataclass(slots=True)
+class StripeListPage(Generic[T]):
+    """Pagination wrapper mirroring Stripe list responses."""
+
+    items: list[T]
+    has_more: bool
+    next_cursor: str | None
 
 
 class StripeBillingProvider:
@@ -244,7 +256,8 @@ class StripeBillingProvider:
         created_lte: datetime | None = None,
         types: Iterable[str] | None = None,
         limit: int = 100,
-    ) -> list[StripeBalanceTransaction]:
+        starting_after: str | None = None,
+    ) -> StripeListPage[StripeBalanceTransaction]:
         """Return balance transactions within the specified window."""
 
         params: dict[str, Any] = {"limit": limit}
@@ -258,9 +271,13 @@ class StripeBillingProvider:
         if types:
             params["type"] = list(types)
 
+        if starting_after:
+            params["starting_after"] = starting_after
+
         response = await self._run(stripe.BalanceTransaction.list, **params)
+        data = response.get("data", [])
         transactions: list[StripeBalanceTransaction] = []
-        for item in response.get("data", []):
+        for item in data:
             created = datetime.fromtimestamp(item.get("created", 0), tz=timezone.utc)
             transactions.append(
                 StripeBalanceTransaction(
@@ -275,7 +292,9 @@ class StripeBillingProvider:
                     raw=item,
                 )
             )
-        return transactions
+        has_more = bool(response.get("has_more"))
+        next_cursor = str(data[-1].get("id")) if has_more and data else None
+        return StripeListPage(items=transactions, has_more=has_more, next_cursor=next_cursor)
 
     async def list_disputes(
         self,
@@ -337,4 +356,5 @@ __all__ = [
     "StripeRefundResponse",
     "StripeBalanceTransaction",
     "StripeDisputeRecord",
+    "StripeListPage",
 ]

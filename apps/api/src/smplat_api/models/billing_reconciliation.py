@@ -78,6 +78,25 @@ class ProcessorStatement(Base):
     invoice = relationship("Invoice", backref="processor_statements")
 
 
+class ProcessorStatementStaging(Base):
+    """Staging area for processor events that require manual triage."""
+
+    __tablename__ = "processor_statement_staging"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    transaction_id = Column(String(128), nullable=False, unique=True)
+    processor = Column(String(32), nullable=False)
+    reason = Column(String(128), nullable=False)
+    payload = Column(JSON, nullable=True)
+    workspace_hint = Column(UUID(as_uuid=True), nullable=True, index=True)
+    first_observed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_observed_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # meta: staging-table: processor-statements
+
+
 class BillingReconciliationRun(Base):
     """Represents a reconciliation execution sweep."""
 
