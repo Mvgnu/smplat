@@ -32,6 +32,34 @@ export WEB_URL="https://marketing.example.com"
 - The history writer enforces retention automatically (default: 24 manifests). To prune manually, delete the SQLite file and rerun the preview validation harness (`pnpm payload:validate`) to repopulate baseline manifests.
 - For recovery drills, back up the `.sqlite` file before maintenance, then restore it alongside the `.data` directory. Synthetic tests (`apps/web/src/server/cms/__tests__/history-store.test.ts`) validate that persistence, trimming, and hashing still behave correctly after recovery.
 
+### History API surface
+
+- `GET /api/marketing-preview/history` exposes the persisted manifests with pagination (`limit`, `offset`), route hashing, and optional filters:
+  - `route=/landing` restricts results to manifests containing the route (matching via both clear text and the stored route hash).
+  - `variant=draft|published` narrows history to manifests with the requested preview state available.
+  - `severity=info|warning|blocker` cross-references triage notes to return entries with matching note counts.
+- Responses include aggregate counts (`aggregates.totalRoutes`, `aggregates.diffDetectedRoutes`) plus governance summaries (`governance.totalActions`, `governance.actionsByKind`) for cockpit dashboards. Note summaries (`notes.total`, `notes.severityCounts`) are derived from triage notes so workbench timelines can prioritise high-risk retrospectives.
+- Default pagination returns the ten newest manifests; increase `limit` (max 25) for broader retrospectives. The API internally hydrates against the full 24-manifest retention window to ensure severity filters remain accurate.
+
+### Governance ledger API
+
+- `POST /api/marketing-preview/history/governance` records actions such as approvals or resets. Requests must include `x-preview-signature: ${PAYLOAD_LIVE_PREVIEW_SECRET}`; unauthenticated calls are rejected.
+- Payload shape:
+
+  ```jsonc
+  {
+    "manifestId": "2024-07-01T00:00:00.000Z",
+    "actionKind": "approve",
+    "actorId": "governor@example.com",
+    "metadata": { "route": "/campaigns" },
+    "occurredAt": "2024-07-01T00:05:00.000Z"
+  }
+  ```
+
+  - `actorId` is hashed via SHA-256 (`createHistoryHash`) before storage so cockpit analytics can trend actor behaviour without exposing identifiers.
+  - `metadata` is stored verbatim (JSON) for downstream simulations; encrypt at rest if sensitive context is introduced.
+- Successful writes immediately surface via the history API, enabling cockpit governance panels to show the latest approvals alongside manifest aggregates.
+
 ## Draft preview validation
 
 1. Run the automated validation harness (combines Jest integration + live endpoint smoke tests):
