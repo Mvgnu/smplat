@@ -1,8 +1,19 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+
 import { defineConfig, devices } from '@playwright/test';
+
+const currentDir = path.dirname(fileURLToPath(new URL('.', import.meta.url)));
+const baseUrl = process.env.BASE_URL || 'http://localhost:3004';
+const serverUrl = new URL(baseUrl);
+const webServerPort = serverUrl.port || '3000';
 
 // Default to isolated test dataset unless explicitly overridden
 process.env.SANITY_PROJECT_ID = process.env.SANITY_PROJECT_ID || 'smplat';
 process.env.SANITY_DATASET = process.env.SANITY_DATASET || 'test';
+process.env.MOCK_RECONCILIATION_DASHBOARD_PATH =
+  process.env.MOCK_RECONCILIATION_DASHBOARD_PATH ||
+  path.resolve(currentDir, './tests/fixtures/reconciliation-dashboard.json');
 
 /**
  * @see https://playwright.dev/docs/test-configuration
@@ -22,7 +33,7 @@ export default defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: process.env.BASE_URL || 'http://localhost:3004',
+    baseURL: baseUrl,
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
@@ -69,8 +80,11 @@ export default defineConfig({
   /* Run your local dev server before starting the tests */
   webServer: {
     command: 'npm run dev',
-    url: process.env.BASE_URL || 'http://localhost:3004',
+    url: baseUrl,
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000, // 2 minutes timeout for dev server startup
+    env: {
+      PORT: webServerPort,
+    },
   },
 });
