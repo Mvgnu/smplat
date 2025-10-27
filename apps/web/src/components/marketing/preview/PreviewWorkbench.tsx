@@ -3,7 +3,7 @@
 // meta: component: PreviewWorkbench
 // meta: feature: marketing-preview-cockpit
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import type { FormEvent } from "react";
 
 import type {
@@ -236,6 +236,112 @@ const diffStatusStyles: Record<LiveBlockDiffStatus, string> = {
   steady: "bg-white/10 text-white/60"
 };
 
+const MOMENTUM_THRESHOLD = 0.05;
+
+const formatVelocity = (value: number) => {
+  const magnitude = Math.abs(value);
+  const prefix = value > MOMENTUM_THRESHOLD ? "▲" : value < -MOMENTUM_THRESHOLD ? "▼" : "≈";
+  return `${prefix} ${magnitude.toFixed(1)} routes/hr`;
+};
+
+const formatMomentum = (value: number) => {
+  const prefix = value > MOMENTUM_THRESHOLD ? "+" : value < -MOMENTUM_THRESHOLD ? "" : "≈";
+  if (prefix === "≈") {
+    return `${prefix}0/hr`;
+  }
+  return `${prefix}${Math.abs(value).toFixed(2)}/hr`;
+};
+
+const momentumClass = (value: number) => {
+  if (value > MOMENTUM_THRESHOLD) {
+    return "bg-rose-500/20 text-rose-100";
+  }
+  if (value < -MOMENTUM_THRESHOLD) {
+    return "bg-emerald-500/20 text-emerald-100";
+  }
+  return "bg-white/10 text-white/60";
+};
+
+const formatConfidence = (value: number) => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}% confidence`;
+
+const SPARKLINE_WIDTH = 140;
+const SPARKLINE_HEIGHT = 40;
+
+const buildRegressionSparklinePath = (
+  entries: MarketingPreviewHistoryTimelineEntry[]
+): string | null => {
+  if (entries.length < 2) {
+    return null;
+  }
+  const sorted = [...entries].sort((a, b) => a.generatedAt.localeCompare(b.generatedAt));
+  const values = sorted.map((entry) => entry.aggregates.diffDetectedRoutes);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(max - min, 1);
+
+  return sorted
+    .map((entry, index) => {
+      const x = (index / (sorted.length - 1)) * SPARKLINE_WIDTH;
+      const y =
+        SPARKLINE_HEIGHT -
+        ((entry.aggregates.diffDetectedRoutes - min) / range) * SPARKLINE_HEIGHT;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+};
+
+const buildSeveritySparklinePath = (
+  entries: MarketingPreviewHistoryTimelineEntry[]
+): string | null => {
+  if (entries.length < 2) {
+    return null;
+  }
+  const sorted = [...entries].sort((a, b) => a.generatedAt.localeCompare(b.generatedAt));
+  const values = sorted.map((entry) => {
+    const counts = entry.notes?.severityCounts;
+    if (!counts) {
+      return 0;
+    }
+    return counts.info + counts.warning * 2 + counts.blocker * 3;
+  });
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(max - min, 1);
+
+  return sorted
+    .map((entry, index) => {
+      const x = (index / (sorted.length - 1)) * SPARKLINE_WIDTH;
+      const value = values[index]!;
+      const y = SPARKLINE_HEIGHT - ((value - min) / range) * SPARKLINE_HEIGHT;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+};
+
+type OperatorFeedbackEntry = {
+  id: string | null;
+  body: string;
+  submittedAt: string;
+  hashPreview: string | null;
+};
+
+const hashOperatorIdentifier = async (identifier: string): Promise<string> => {
+  const trimmed = identifier.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (typeof window === "undefined" || !window.crypto?.subtle) {
+    return btoa(trimmed).slice(0, 24);
+  }
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(trimmed);
+  const digest = await window.crypto.subtle.digest("SHA-256", bytes);
+  const view = new Uint8Array(digest);
+  return Array.from(view)
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+};
+
 const connectionBadgeStyles: Record<LivePreviewConnectionState, string> = {
   connecting: "bg-amber-500/20 text-amber-100",
   connected: "bg-emerald-500/20 text-emerald-100",
@@ -313,7 +419,8 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     setSeverityFilter,
     setVariantFilter,
     nextPage: historyNextPage,
-    previousPage: historyPreviousPage
+    previousPage: historyPreviousPage,
+    analytics: historyAnalytics
   } = useMarketingPreviewHistory({ initialEntries: history });
   const {
     timelineEntries,
@@ -333,6 +440,44 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
   const [noteSeverity, setNoteSeverity] = useState<MarketingPreviewTriageNoteSeverity>("info");
   const [error, setError] = useState<string | null>(null);
   const [isSaving, startTransition] = useTransition();
+  const [feedbackBody, setFeedbackBody] = useState("");
+  const [feedbackIdentifier, setFeedbackIdentifier] = useState("");
+  const [feedbackEntries, setFeedbackEntries] = useState<OperatorFeedbackEntry[]>([]);
+  const [feedbackStatus, setFeedbackStatus] = useState<"idle" | "submitting" | "submitted" | "error">("idle");
+
+  const handleFeedbackSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const trimmed = feedbackBody.trim();
+      if (!trimmed) {
+        setFeedbackStatus("error");
+        return;
+      }
+      setFeedbackStatus("submitting");
+      try {
+        const hashed = feedbackIdentifier.trim()
+          ? await hashOperatorIdentifier(feedbackIdentifier)
+          : "";
+        const entry: OperatorFeedbackEntry = {
+          id: hashed || null,
+          body: trimmed,
+          submittedAt: new Date().toISOString(),
+          hashPreview: hashed ? hashed.slice(0, 12) : null
+        };
+        setFeedbackEntries((previous) => [entry, ...previous].slice(0, 5));
+        setFeedbackBody("");
+        setFeedbackIdentifier("");
+        setFeedbackStatus("submitted");
+        if (typeof window !== "undefined") {
+          window.setTimeout(() => setFeedbackStatus("idle"), 2500);
+        }
+      } catch (submissionError) {
+        console.error(submissionError);
+        setFeedbackStatus("error");
+      }
+    },
+    [feedbackBody, feedbackIdentifier]
+  );
 
   useEffect(() => {
     setLocalNotes(notes);
@@ -357,6 +502,30 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
   const historyEntryLookup = useMemo(
     () => new Map(persistedHistoryEntries.map((entry) => [entry.id, entry])),
     [persistedHistoryEntries]
+  );
+  const regressionSparklinePath = useMemo(
+    () => buildRegressionSparklinePath(persistedHistoryEntries),
+    [persistedHistoryEntries]
+  );
+  const severitySparklinePath = useMemo(
+    () => buildSeveritySparklinePath(persistedHistoryEntries),
+    [persistedHistoryEntries]
+  );
+  const topRecommendations = useMemo(
+    () => historyAnalytics.recommendations.slice(0, 3),
+    [historyAnalytics.recommendations]
+  );
+  const severityMomentumTokens = useMemo(
+    () => [
+      { label: "Info", value: historyAnalytics.severityMomentum.info },
+      { label: "Warning", value: historyAnalytics.severityMomentum.warning },
+      { label: "Blocker", value: historyAnalytics.severityMomentum.blocker }
+    ],
+    [
+      historyAnalytics.severityMomentum.blocker,
+      historyAnalytics.severityMomentum.info,
+      historyAnalytics.severityMomentum.warning
+    ]
   );
 
   const routeGroups = useMemo(() => buildRouteGroups(activeEntry ?? undefined), [activeEntry]);
@@ -795,6 +964,186 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
       </aside>
 
       <div className="space-y-6">
+        <section className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 via-white/5 to-black/40 p-6 backdrop-blur">
+          <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Predictive diagnostics</h2>
+              <p className="text-xs text-white/60">
+                Regression forecasts blend persisted deltas, remediation fingerprints, and note momentum for proactive recovery.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.25em] text-white/60">
+              <span
+                className={`rounded-full px-3 py-1 font-semibold ${
+                  isHistoryOffline ? "bg-amber-500/20 text-amber-100" : "bg-emerald-500/20 text-emerald-100"
+                }`}
+              >
+                {isHistoryOffline ? "Offline cache" : "Live analytics"}
+              </span>
+              <span
+                className={`rounded-full px-3 py-1 font-semibold ${
+                  historyUsingCache ? "bg-sky-500/20 text-sky-100" : "bg-white/10 text-white/70"
+                }`}
+              >
+                {historyUsingCache ? "Cache replay" : "Fresh pull"}
+              </span>
+              <span className="rounded-full bg-white/10 px-3 py-1 font-semibold text-white/60">
+                Sample size {historyAnalytics.regressionVelocity.sampleSize}
+              </span>
+            </div>
+          </header>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-white/60">Regression velocity</p>
+              <p className="mt-2 text-xl font-semibold text-white">
+                {formatVelocity(historyAnalytics.regressionVelocity.averagePerHour)}
+              </p>
+              <p className="mt-1 text-xs text-white/50">
+                Current {formatVelocity(historyAnalytics.regressionVelocity.currentPerHour)} · {formatConfidence(historyAnalytics.regressionVelocity.confidence)}
+              </p>
+              {regressionSparklinePath ? (
+                <svg
+                  viewBox={`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`}
+                  className="mt-3 h-16 w-full text-emerald-300"
+                  aria-hidden="true"
+                >
+                  <path d={regressionSparklinePath} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <p className="mt-3 text-[11px] text-white/40">Capture additional manifests to unlock a trendline.</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-white/60">Severity momentum</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {severityMomentumTokens.map(({ label, value }) => (
+                  <span
+                    key={label}
+                    className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] ${momentumClass(value)}`}
+                  >
+                    {label}: {formatMomentum(value)}
+                  </span>
+                ))}
+              </div>
+              {severitySparklinePath ? (
+                <svg
+                  viewBox={`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`}
+                  className="mt-3 h-16 w-full text-rose-200"
+                  aria-hidden="true"
+                >
+                  <path d={severitySparklinePath} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <p className="mt-3 text-[11px] text-white/40">Severity momentum initializes after multiple annotated captures.</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-white/60">Time to green forecast</p>
+              <p className="mt-2 text-xl font-semibold text-white">
+                {historyAnalytics.timeToGreen.forecastHours
+                  ? `${Math.max(historyAnalytics.timeToGreen.forecastHours, 0).toFixed(1)}h`
+                  : "Awaiting signal"}
+              </p>
+              <p className="mt-1 text-xs text-white/50">
+                {historyAnalytics.timeToGreen.forecastAt
+                  ? `Projected ${formatDateTime(historyAnalytics.timeToGreen.forecastAt)}`
+                  : "Accelerate remediations to improve forecast confidence."}
+              </p>
+              <p className="mt-2 text-[11px] text-white/40">
+                {formatConfidence(historyAnalytics.timeToGreen.confidence)} · Slope {historyAnalytics.timeToGreen.slopePerHour?.toFixed(2) ?? "n/a"}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-white/60">Recommendation ledger</p>
+              {topRecommendations.length ? (
+                <ul className="mt-3 space-y-2">
+                  {topRecommendations.map((recommendation) => (
+                    <li key={recommendation.fingerprint} className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/80">
+                      <p className="font-semibold text-white">{recommendation.suggestion}</p>
+                      <p className="mt-1 text-[11px] text-white/50">
+                        {recommendation.occurrences} occurrence{recommendation.occurrences === 1 ? "" : "s"} · Hash {recommendation.fingerprint.slice(0, 12)} · {formatConfidence(recommendation.confidence)}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-sm text-white/60">No recurring remediations detected yet.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-3">
+            <form onSubmit={handleFeedbackSubmit} className="rounded-2xl border border-white/10 bg-black/40 p-4">
+              <p className="text-sm font-semibold text-white">Operator feedback</p>
+              <p className="mt-1 text-xs text-white/60">
+                Share recovery context or upcoming risks. Identifiers are SHA-256 hashed in-browser before logging.
+              </p>
+              <label className="mt-3 block text-[11px] uppercase tracking-[0.2em] text-white/60">
+                Opportunity
+                <textarea
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-black/60 p-3 text-sm text-white focus:border-white/30 focus:outline-none"
+                  rows={3}
+                  value={feedbackBody}
+                  onChange={(event) => setFeedbackBody(event.target.value)}
+                  placeholder="Highlight blockers, ready-to-ship fixes, or additional context"
+                />
+              </label>
+              <label className="mt-3 block text-[11px] uppercase tracking-[0.2em] text-white/60">
+                Optional identifier
+                <input
+                  type="text"
+                  className="mt-1 w-full rounded-full border border-white/10 bg-black/60 px-3 py-2 text-sm text-white focus:border-white/30 focus:outline-none"
+                  value={feedbackIdentifier}
+                  onChange={(event) => setFeedbackIdentifier(event.target.value)}
+                  placeholder="team-handle or email"
+                />
+              </label>
+              <div className="mt-3 flex items-center justify-between">
+                <button
+                  type="submit"
+                  disabled={feedbackStatus === "submitting"}
+                  className="rounded-full border border-white/20 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-white transition hover:border-white/40 disabled:opacity-40"
+                >
+                  {feedbackStatus === "submitting" ? "Submitting" : "Record feedback"}
+                </button>
+                {feedbackStatus === "submitted" ? (
+                  <span className="text-[11px] text-emerald-200">Captured securely</span>
+                ) : feedbackStatus === "error" ? (
+                  <span className="text-[11px] text-rose-200">Add context before submitting</span>
+                ) : null}
+              </div>
+            </form>
+
+            <div className="lg:col-span-2">
+              <p className="text-sm font-semibold text-white">Recent hashed feedback</p>
+              <p className="mt-1 text-xs text-white/60">Visible only in-session for privacy. Use governance notes for durable follow-up.</p>
+              {feedbackEntries.length ? (
+                <ul className="mt-3 space-y-2">
+                  {feedbackEntries.map((entry) => (
+                    <li key={`${entry.submittedAt}-${entry.hashPreview ?? "anon"}`} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.2em] text-white/50">
+                        <span>{entry.hashPreview ? `id:${entry.hashPreview}` : "id:anonymous"}</span>
+                        <span>{formatDateTime(entry.submittedAt)}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-white/70">{entry.body}</p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-sm text-white/60">No cockpit feedback logged this session.</p>
+              )}
+            </div>
+          </div>
+
+          <p className="mt-6 text-[11px] uppercase tracking-[0.2em] text-white/40">
+            Last synced {historyLastUpdatedAt ? formatDateTime(historyLastUpdatedAt) : "with initial payload"}
+          </p>
+        </section>
+
         {validationQueue.length > 0 ? (
           <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
             <div className="flex items-center justify-between gap-4">

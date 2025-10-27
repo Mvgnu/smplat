@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  buildHistoryAnalytics,
   querySnapshotHistory,
   type MarketingPreviewHistoryEntry,
   type MarketingPreviewHistoryQuery
@@ -94,11 +95,13 @@ export async function GET(request: Request) {
 
   const filtered = filterBySeverity(enrichedEntries, severity);
   const paginated = filtered.slice(offset, offset + limit);
+  const analytics = buildHistoryAnalytics(filtered);
 
   return NextResponse.json({
     total: filtered.length,
     limit,
     offset,
-    entries: paginated
+    entries: paginated,
+    analytics
   });
 }

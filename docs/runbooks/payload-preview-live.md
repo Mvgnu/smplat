@@ -39,15 +39,21 @@ export WEB_URL="https://marketing.example.com"
   - `variant=draft|published` narrows history to manifests with the requested preview state available.
   - `severity=info|warning|blocker` cross-references triage notes to return entries with matching note counts.
 - Responses include aggregate counts (`aggregates.totalRoutes`, `aggregates.diffDetectedRoutes`) plus governance summaries (`governance.totalActions`, `governance.actionsByKind`) for cockpit dashboards. Note summaries (`notes.total`, `notes.severityCounts`) are derived from triage notes so workbench timelines can prioritise high-risk retrospectives. The payload also surfaces `liveDeltas`, `remediations`, and `noteRevisions` arrays so cockpit retrospectives can reconstruct intra-manifest activity without rehydrating the SSE stream or fallback endpoints.
+- Every response now carries an `analytics` object that powers predictive diagnostics in the cockpit:
+  - `regressionVelocity` reports average/current diff drift per hour with confidence weighting.
+  - `severityMomentum` tracks rate-of-change for info/warning/blocker notes to forecast operator load.
+  - `timeToGreen` supplies a linear forecast (`forecastAt`, `forecastHours`, `slopePerHour`, `confidence`).
+  - `recommendations` aggregates remediation fingerprints with suggestion text, occurrence counts, route coverage, and scoring confidence.
 - Default pagination returns the ten newest manifests; increase `limit` (max 25) for broader retrospectives. The API internally hydrates against the full 24-manifest retention window to ensure severity filters remain accurate.
 
 ### Cockpit workbench consumption
 
 - The admin Preview Workbench seeds its live capture with `collectMarketingPreviewSnapshotTimeline` and then delegates historical queries to the `useMarketingPreviewHistory` hook.
-- The hook uses React Query for caching and background revalidation, merges filter state (`route`, `variant`, `severity`, `limit`, `offset`) into the query key, and persists the last successful payload in `localStorage` (`marketing-preview-history-cache-v2`) for offline replay. Cached payloads now include the delta/remediation/note revision ledgers so offline retrospectives retain the same fidelity as live fetches.
+- The hook uses React Query for caching and background revalidation, merges filter state (`route`, `variant`, `severity`, `limit`, `offset`) into the query key, and persists the last successful payload in `localStorage` (`marketing-preview-history-cache-v3`) for offline replay. Cached payloads now include the delta/remediation/note revision ledgers so offline retrospectives retain the same fidelity as live fetches.
 - Timeline filter chips issue server-side queries, and pagination controls walk persisted manifests without losing cache state. Cache entries are invalidated whenever the active manifest ID changes so fresh captures surface automatically.
 - When the browser reports `navigator.onLine === false` or the history request fails, the hook replays the cached payload and surfaces an "Offline cache" badge. Reconnecting triggers an automatic refresh.
 - Diff heatmaps derive from `aggregates.diffDetectedRoutes` while note badges surface `notes.severityCounts`, allowing editors to triage high-risk captures before drilling into the diff view.
+- The predictive diagnostics panel surfaces the latest analytics payload, sparkline trendlines, and hashed operator feedback submissions. Offline cache fallback is indicated in the panel header so operators know when forecasts are stale. Feedback entries stay local-only until governance runbooks adopt a durable sink.
 
 ### Governance ledger API
 

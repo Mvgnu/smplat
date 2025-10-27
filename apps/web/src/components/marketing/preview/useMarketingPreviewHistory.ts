@@ -9,10 +9,15 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type {
   MarketingPreviewHistoryAggregates,
   MarketingPreviewGovernanceStats,
+  MarketingPreviewHistoryAnalytics,
   MarketingPreviewHistoryNoteSummary,
   MarketingPreviewLiveDeltaRecord,
+  MarketingPreviewNoteRevisionRecord,
+  MarketingPreviewRecommendation,
+  MarketingPreviewRegressionVelocity,
   MarketingPreviewRemediationActionRecord,
-  MarketingPreviewNoteRevisionRecord
+  MarketingPreviewSeverityMomentum,
+  MarketingPreviewTimeToGreenForecast
 } from "@/server/cms/history";
 import type { MarketingPreviewTriageNoteSeverity } from "@/server/cms/preview/notes";
 import type {
@@ -26,7 +31,7 @@ import {
   type MarketingPreviewHistoryEntryResponse
 } from "./historyClient";
 
-const HISTORY_CACHE_KEY = "marketing-preview-history-cache-v2";
+const HISTORY_CACHE_KEY = "marketing-preview-history-cache-v3";
 
 export type MarketingPreviewHistoryTimelineEntry = MarketingPreviewTimelineEntry & {
   aggregates: MarketingPreviewHistoryAggregates;
@@ -46,6 +51,7 @@ type HistoryCachePayload = {
     total: number;
     limit: number;
     offset: number;
+    analytics: MarketingPreviewHistoryAnalytics;
   };
   cachedAt: string;
 };
@@ -179,6 +185,9 @@ const readCache = (): HistoryCachePayload | null => {
       return null;
     }
     const parsed = JSON.parse(raw) as HistoryCachePayload;
+    if (!parsed?.payload?.analytics) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -202,6 +211,202 @@ const paramsEqual = (a: HistoryCacheParams, b: HistoryCacheParams) =>
   a.route === b.route &&
   a.variant === b.variant &&
   a.severity === b.severity;
+
+const HOURS_IN_MS = 60 * 60 * 1000;
+
+const computeRegressionVelocity = (
+  entries: MarketingPreviewHistoryTimelineEntry[]
+): MarketingPreviewRegressionVelocity => {
+  const sorted = [...entries]
+    .map((entry) => ({ timestamp: Date.parse(entry.generatedAt), diff: entry.aggregates.diffDetectedRoutes }))
+    .filter((entry) => Number.isFinite(entry.timestamp))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (sorted.length < 2) {
+    return { averagePerHour: 0, currentPerHour: 0, sampleSize: sorted.length, confidence: 0 };
+  }
+
+  const velocities: number[] = [];
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const previous = sorted[index - 1]!;
+    const current = sorted[index]!;
+    const elapsed = (current.timestamp - previous.timestamp) / HOURS_IN_MS;
+    if (!Number.isFinite(elapsed) || elapsed <= 0) {
+      continue;
+    }
+    velocities.push((current.diff - previous.diff) / elapsed);
+  }
+
+  if (!velocities.length) {
+    return { averagePerHour: 0, currentPerHour: 0, sampleSize: sorted.length, confidence: 0.1 };
+  }
+
+  const average = velocities.reduce((total, value) => total + value, 0) / velocities.length;
+  const current = velocities[velocities.length - 1] ?? 0;
+  const dispersion = velocities.reduce((total, value) => total + Math.abs(value - average), 0);
+  const stability = velocities.length > 1 ? 1 - Math.min(dispersion / velocities.length / Math.max(Math.abs(average), 1), 1) : 0.5;
+  const confidence = Math.min(1, 0.35 + 0.15 * velocities.length + stability * 0.5);
+
+  return { averagePerHour: average, currentPerHour: current, sampleSize: sorted.length, confidence };
+};
+
+const computeSeverityMomentum = (
+  entries: MarketingPreviewHistoryTimelineEntry[]
+): MarketingPreviewSeverityMomentum => {
+  const sorted = [...entries]
+    .map((entry) => ({
+      timestamp: Date.parse(entry.generatedAt),
+      counts: entry.notes?.severityCounts ?? { info: 0, warning: 0, blocker: 0 }
+    }))
+    .filter((entry) => Number.isFinite(entry.timestamp))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (sorted.length < 2) {
+    return { info: 0, warning: 0, blocker: 0, overall: 0, sampleSize: sorted.length };
+  }
+
+  const totals = { info: [] as number[], warning: [] as number[], blocker: [] as number[] };
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const previous = sorted[index - 1]!;
+    const current = sorted[index]!;
+    const elapsed = (current.timestamp - previous.timestamp) / HOURS_IN_MS;
+    if (!Number.isFinite(elapsed) || elapsed <= 0) {
+      continue;
+    }
+    totals.info.push((current.counts.info - previous.counts.info) / elapsed);
+    totals.warning.push((current.counts.warning - previous.counts.warning) / elapsed);
+    totals.blocker.push((current.counts.blocker - previous.counts.blocker) / elapsed);
+  }
+
+  const average = (values: number[]) => (values.length ? values.reduce((total, value) => total + value, 0) / values.length : 0);
+
+  const info = average(totals.info);
+  const warning = average(totals.warning);
+  const blocker = average(totals.blocker);
+  const overall = (info + warning * 1.5 + blocker * 2.25) / 3.5;
+
+  return { info, warning, blocker, overall, sampleSize: sorted.length };
+};
+
+const computeTimeToGreen = (
+  entries: MarketingPreviewHistoryTimelineEntry[]
+): MarketingPreviewTimeToGreenForecast => {
+  const points = [...entries]
+    .map((entry) => ({ timestamp: Date.parse(entry.generatedAt), diff: entry.aggregates.diffDetectedRoutes }))
+    .filter((entry) => Number.isFinite(entry.timestamp))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (points.length < 2) {
+    return { forecastAt: null, forecastHours: null, slopePerHour: null, confidence: 0, sampleSize: points.length };
+  }
+
+  const base = points[0]!.timestamp;
+  const xs = points.map((point) => (point.timestamp - base) / HOURS_IN_MS);
+  const ys = points.map((point) => point.diff);
+  const meanX = xs.reduce((total, value) => total + value, 0) / xs.length;
+  const meanY = ys.reduce((total, value) => total + value, 0) / ys.length;
+
+  let numerator = 0;
+  let denominator = 0;
+  let totalSquared = 0;
+
+  for (let index = 0; index < xs.length; index += 1) {
+    const dx = xs[index]! - meanX;
+    const dy = ys[index]! - meanY;
+    numerator += dx * dy;
+    denominator += dx * dx;
+    totalSquared += dy * dy;
+  }
+
+  if (denominator === 0) {
+    return { forecastAt: null, forecastHours: null, slopePerHour: null, confidence: 0, sampleSize: points.length };
+  }
+
+  const slope = numerator / denominator;
+  const intercept = meanY - slope * meanX;
+
+  if (slope >= 0) {
+    return { forecastAt: null, forecastHours: null, slopePerHour: slope, confidence: 0.1, sampleSize: points.length };
+  }
+
+  const hoursToZero = -intercept / slope;
+  const forecastTimestamp = base + hoursToZero * HOURS_IN_MS;
+  const latest = points[points.length - 1]!.timestamp;
+  const forecastAt = forecastTimestamp > latest ? new Date(forecastTimestamp).toISOString() : null;
+  const ssr = points.reduce((total, point, index) => {
+    const expected = slope * xs[index]! + intercept;
+    const residual = point.diff - expected;
+    return total + residual * residual;
+  }, 0);
+  const sst = totalSquared;
+  const confidence = sst === 0 ? 0 : Math.max(0, Math.min(1, 1 - ssr / sst));
+
+  return {
+    forecastAt,
+    forecastHours: forecastAt ? hoursToZero : null,
+    slopePerHour: slope,
+    confidence,
+    sampleSize: points.length
+  };
+};
+
+const scoreRecommendations = (
+  entries: MarketingPreviewHistoryTimelineEntry[]
+): MarketingPreviewRecommendation[] => {
+  const ledger = new Map<string, MarketingPreviewRecommendation>();
+
+  const record = (fingerprint: string, occurrence: { recordedAt: string | null; routes: string[] }) => {
+    const existing = ledger.get(fingerprint);
+    const routes = new Set(existing?.affectedRoutes ?? []);
+    for (const route of occurrence.routes) {
+      routes.add(route);
+    }
+    const occurrences = (existing?.occurrences ?? 0) + 1;
+    const confidence = Math.min(0.95, 0.35 + Math.log10(occurrences + 1));
+    const lastSeenAt = occurrence.recordedAt ?? existing?.lastSeenAt ?? null;
+    const suggestion = existing?.suggestion ?? "Review remediation history and align with closest playbook";
+
+    ledger.set(fingerprint, {
+      fingerprint,
+      suggestion,
+      occurrences,
+      confidence,
+      lastSeenAt,
+      affectedRoutes: Array.from(routes)
+    });
+  };
+
+  for (const entry of entries) {
+    const routes = entry.routes.map((route) => route.route);
+    for (const remediation of entry.remediations) {
+      if (!remediation.fingerprint) {
+        continue;
+      }
+      record(remediation.fingerprint, { recordedAt: remediation.recordedAt ?? null, routes });
+    }
+  }
+
+  const ranked = Array.from(ledger.values());
+  ranked.sort((a, b) => {
+    if (b.occurrences === a.occurrences) {
+      return (b.lastSeenAt ?? "").localeCompare(a.lastSeenAt ?? "");
+    }
+    return b.occurrences - a.occurrences;
+  });
+
+  return ranked;
+};
+
+const buildLocalAnalytics = (
+  entries: MarketingPreviewHistoryTimelineEntry[]
+): MarketingPreviewHistoryAnalytics => ({
+  regressionVelocity: computeRegressionVelocity(entries),
+  severityMomentum: computeSeverityMomentum(entries),
+  timeToGreen: computeTimeToGreen(entries),
+  recommendations: scoreRecommendations(entries)
+});
 
 type UseMarketingPreviewHistoryOptions = {
   initialEntries: MarketingPreviewTimelineEntry[];
@@ -228,6 +433,7 @@ type UseMarketingPreviewHistoryResult = {
   nextPage: () => void;
   previousPage: () => void;
   resetPagination: () => void;
+  analytics: MarketingPreviewHistoryAnalytics;
 };
 
 export const useMarketingPreviewHistory = ({
@@ -276,6 +482,7 @@ export const useMarketingPreviewHistory = ({
     () => hydrateInitialEntries(initialEntries),
     [initialEntries]
   );
+  const initialAnalytics = useMemo(() => buildLocalAnalytics(initialHistory), [initialHistory]);
 
   const query = useQuery({
     queryKey: ["marketing-preview-history", params],
@@ -296,7 +503,8 @@ export const useMarketingPreviewHistory = ({
       entries,
       total: query.data.total,
       limit: query.data.limit,
-      offset: query.data.offset
+      offset: query.data.offset,
+      analytics: query.data.analytics
     };
   }, [query.data]);
 
@@ -329,6 +537,7 @@ export const useMarketingPreviewHistory = ({
 
   const entries = activePayload?.entries ?? initialHistory;
   const total = activePayload?.total ?? initialHistory.length;
+  const analytics = activePayload?.analytics ?? initialAnalytics;
 
   const availableRoutes = useMemo(() => {
     const source = activePayload?.entries ?? cache?.payload.entries ?? initialHistory;
@@ -414,6 +623,7 @@ export const useMarketingPreviewHistory = ({
     setVariantFilter,
     nextPage,
     previousPage,
-    resetPagination
+    resetPagination,
+    analytics
   };
 };

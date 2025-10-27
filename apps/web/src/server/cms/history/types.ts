@@ -100,6 +100,45 @@ export type MarketingPreviewHistoryAggregates = {
   publishedRoutes: number;
 };
 
+export type MarketingPreviewRegressionVelocity = {
+  averagePerHour: number;
+  currentPerHour: number;
+  sampleSize: number;
+  confidence: number;
+};
+
+export type MarketingPreviewSeverityMomentum = {
+  info: number;
+  warning: number;
+  blocker: number;
+  overall: number;
+  sampleSize: number;
+};
+
+export type MarketingPreviewTimeToGreenForecast = {
+  forecastAt: string | null;
+  forecastHours: number | null;
+  slopePerHour: number | null;
+  confidence: number;
+  sampleSize: number;
+};
+
+export type MarketingPreviewRecommendation = {
+  fingerprint: string;
+  suggestion: string;
+  occurrences: number;
+  confidence: number;
+  lastSeenAt: string | null;
+  affectedRoutes: string[];
+};
+
+export type MarketingPreviewHistoryAnalytics = {
+  regressionVelocity: MarketingPreviewRegressionVelocity;
+  severityMomentum: MarketingPreviewSeverityMomentum;
+  timeToGreen: MarketingPreviewTimeToGreenForecast;
+  recommendations: MarketingPreviewRecommendation[];
+};
+
 export type MarketingPreviewGovernanceStats = {
   totalActions: number;
   actionsByKind: Record<string, number>;
@@ -130,4 +169,5 @@ export type MarketingPreviewHistoryQueryResult = {
   limit: number;
   offset: number;
   entries: MarketingPreviewHistoryEntry[];
+  analytics: MarketingPreviewHistoryAnalytics;
 };
