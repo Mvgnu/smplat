@@ -195,6 +195,7 @@ async def list_runs(
 async def list_discrepancies(
     *,
     status_filter: BillingDiscrepancyStatus | None = Query(None, alias="status"),
+    type_filter: BillingDiscrepancyType | None = Query(None, alias="type"),
     session: AsyncSession = Depends(get_session),
 ) -> list[BillingDiscrepancyResponse]:
     """List discrepancies filtered by status."""
@@ -202,6 +203,8 @@ async def list_discrepancies(
     stmt = select(BillingDiscrepancy)
     if status_filter:
         stmt = stmt.where(BillingDiscrepancy.status == status_filter)
+    if type_filter:
+        stmt = stmt.where(BillingDiscrepancy.discrepancy_type == type_filter)
 
     result = await session.execute(stmt.order_by(BillingDiscrepancy.created_at.desc()))
     items = result.scalars().all()

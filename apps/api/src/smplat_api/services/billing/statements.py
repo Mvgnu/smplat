@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Iterable, Mapping
 from uuid import UUID
 
 from sqlalchemy import select
@@ -160,7 +160,7 @@ class StripeStatementIngestionService:
                     processor="stripe",
                     transaction_id=tx.transaction_id,
                     charge_id=tx.source_id,
-                    transaction_type=self._map_transaction_type(tx.type),
+                    transaction_type=self._map_transaction_type(tx),
                     currency=tx.currency,
                     gross_amount=tx.amount,
                     fee_amount=tx.fee,
@@ -290,15 +290,21 @@ class StripeStatementIngestionService:
         if raw_metadata:
             metadata_sources.append(raw_metadata)
 
-        if transaction.source_id:
+        normalized_type = transaction.type.lower()
+
+        charge_lookup_id = transaction.source_id
+        if charge_lookup_id is None and normalized_type in {"refund", "application_fee", "application_fee_refund"}:
+            charge_lookup_id = self._extract_charge_reference(transaction.raw)
+
+        if charge_lookup_id:
             invoice_result = await self._session.execute(
-                select(Invoice).where(Invoice.processor_charge_id == transaction.source_id)
+                select(Invoice).where(Invoice.processor_charge_id == charge_lookup_id)
             )
             invoice = invoice_result.scalar_one_or_none()
             if invoice:
                 workspace_id = invoice.workspace_id
             else:
-                charge_metadata = await self._fetch_charge_metadata(transaction.source_id)
+                charge_metadata = await self._fetch_charge_metadata(charge_lookup_id)
                 if charge_metadata:
                     metadata_sources.append(charge_metadata)
 
@@ -328,6 +334,28 @@ class StripeStatementIngestionService:
 
         return invoice, workspace_id, workspace_hint
 
+    @staticmethod
+    def _extract_charge_reference(raw: object) -> str | None:
+        if not isinstance(raw, Mapping):
+            return None
+
+        candidate_keys = [
+            "charge",
+            "source_transaction",
+            "source",
+            "payment_intent",
+            "balance_transaction",
+        ]
+        for key in candidate_keys:
+            value = raw.get(key)
+            if isinstance(value, str) and value:
+                return value
+            if isinstance(value, Mapping):
+                nested_id = value.get("id")
+                if isinstance(nested_id, str) and nested_id:
+                    return nested_id
+        return None
+
     def _apply_transaction_updates(
         self,
         statement: ProcessorStatement,
@@ -346,7 +374,7 @@ class StripeStatementIngestionService:
             statement.workspace_id = workspace_id
             changed = True
 
-        mapped_type = self._map_transaction_type(transaction.type)
+        mapped_type = self._map_transaction_type(transaction)
         if statement.transaction_type != mapped_type:
             statement.transaction_type = mapped_type
             changed = True
@@ -542,19 +570,38 @@ class StripeStatementIngestionService:
         return {}
 
     @staticmethod
-    def _map_transaction_type(transaction_type: str) -> ProcessorStatementTransactionType:
-        normalized = transaction_type.lower()
-        mapping: dict[str, ProcessorStatementTransactionType] = {
-            "charge": ProcessorStatementTransactionType.CHARGE,
-            "payment": ProcessorStatementTransactionType.CHARGE,
-            "payment_intent": ProcessorStatementTransactionType.CHARGE,
-            "refund": ProcessorStatementTransactionType.REFUND,
-            "application_fee": ProcessorStatementTransactionType.FEE,
-            "fee": ProcessorStatementTransactionType.FEE,
-            "payout": ProcessorStatementTransactionType.PAYOUT,
-            "adjustment": ProcessorStatementTransactionType.ADJUSTMENT,
-        }
-        return mapping.get(normalized, ProcessorStatementTransactionType.ADJUSTMENT)
+    def _map_transaction_type(
+        transaction: StripeBalanceTransaction,
+    ) -> ProcessorStatementTransactionType:
+        normalized = transaction.type.lower()
+        raw = dict(transaction.raw) if isinstance(transaction.raw, Mapping) else {}
+
+        if normalized in {"charge", "payment", "payment_intent"}:
+            return ProcessorStatementTransactionType.CHARGE
+
+        if normalized in {"refund", "application_fee_refund"}:
+            raw_type = str(raw.get("type", "")).lower() if isinstance(raw, dict) else ""
+            description = str(raw.get("description", "")).lower() if isinstance(raw, dict) else ""
+            if raw.get("reversed") is True or raw_type in {"refund_reversal", "reversal"} or "reversal" in description:
+                return ProcessorStatementTransactionType.REFUND_REVERSAL
+            return ProcessorStatementTransactionType.REFUND
+
+        if normalized in {"application_fee", "fee"}:
+            raw_type = str(raw.get("type", "")).lower() if isinstance(raw, dict) else ""
+            if raw_type in {"adjustment", "fee_adjustment"}:
+                return ProcessorStatementTransactionType.FEE_ADJUSTMENT
+            return ProcessorStatementTransactionType.FEE
+
+        if normalized == "payout":
+            status = str(raw.get("status", "")).lower() if isinstance(raw, dict) else ""
+            if status in {"pending", "in_transit"}:
+                return ProcessorStatementTransactionType.PAYOUT_DELAY
+            return ProcessorStatementTransactionType.PAYOUT
+
+        if normalized == "adjustment":
+            return ProcessorStatementTransactionType.ADJUSTMENT
+
+        return ProcessorStatementTransactionType.ADJUSTMENT
 
 
 async def reconcile_statements(
@@ -571,20 +618,46 @@ async def reconcile_statements(
     for statement in statement_list:
         if statement.invoice_id:
             matched += 1
-        else:
-            discrepancies.append(
-                BillingDiscrepancy(
-                    run_id=run.id,
-                    invoice_id=None,
-                    processor_statement_id=statement.id,
-                    transaction_id=statement.transaction_id,
-                    discrepancy_type=BillingDiscrepancyType.MISSING_INVOICE,
-                    status=BillingDiscrepancyStatus.OPEN,
-                    amount_delta=statement.gross_amount,
-                    summary=f"Statement {statement.transaction_id} missing invoice linkage",
-                    resolution_note=None,
+            if statement.transaction_type in {
+                ProcessorStatementTransactionType.FEE_ADJUSTMENT,
+                ProcessorStatementTransactionType.PAYOUT_DELAY,
+                ProcessorStatementTransactionType.REFUND_REVERSAL,
+            }:
+                discrepancies.append(
+                    BillingDiscrepancy(
+                        run_id=run.id,
+                        invoice_id=statement.invoice_id,
+                        processor_statement_id=statement.id,
+                        transaction_id=statement.transaction_id,
+                        discrepancy_type=_map_discrepancy_type(statement.transaction_type),
+                        status=BillingDiscrepancyStatus.OPEN,
+                        amount_delta=statement.net_amount,
+                        summary=_summarize_discrepancy(statement),
+                        resolution_note=None,
+                    )
                 )
+            continue
+
+        discrepancy_type = _map_discrepancy_type(statement.transaction_type)
+        if discrepancy_type is None:
+            discrepancy_type = BillingDiscrepancyType.MISSING_INVOICE
+            summary = f"Statement {statement.transaction_id} missing invoice linkage"
+        else:
+            summary = _summarize_discrepancy(statement)
+
+        discrepancies.append(
+            BillingDiscrepancy(
+                run_id=run.id,
+                invoice_id=None,
+                processor_statement_id=statement.id,
+                transaction_id=statement.transaction_id,
+                discrepancy_type=discrepancy_type,
+                status=BillingDiscrepancyStatus.OPEN,
+                amount_delta=statement.net_amount or statement.gross_amount,
+                summary=summary,
+                resolution_note=None,
             )
+        )
 
     run.total_transactions += len(statement_list)
     run.matched_transactions += matched
@@ -595,3 +668,32 @@ async def reconcile_statements(
 
     await session.flush()
     return run
+
+
+def _map_discrepancy_type(
+    transaction_type: ProcessorStatementTransactionType,
+) -> BillingDiscrepancyType | None:
+    mapping: dict[ProcessorStatementTransactionType, BillingDiscrepancyType] = {
+        ProcessorStatementTransactionType.REFUND: BillingDiscrepancyType.UNAPPLIED_REFUND,
+        ProcessorStatementTransactionType.FEE: BillingDiscrepancyType.UNTRACKED_FEE,
+        ProcessorStatementTransactionType.FEE_ADJUSTMENT: BillingDiscrepancyType.FEE_ADJUSTMENT,
+        ProcessorStatementTransactionType.PAYOUT_DELAY: BillingDiscrepancyType.PAYOUT_DELAY,
+        ProcessorStatementTransactionType.REFUND_REVERSAL: BillingDiscrepancyType.REFUND_REVERSAL,
+    }
+    return mapping.get(transaction_type)
+
+
+def _summarize_discrepancy(statement: ProcessorStatement) -> str:
+    amount = statement.net_amount or statement.gross_amount
+    formatted_amount = f"{amount}" if amount is not None else "unknown amount"
+    if statement.transaction_type == ProcessorStatementTransactionType.PAYOUT_DELAY:
+        return f"Payout {statement.transaction_id} delayed for {formatted_amount}"
+    if statement.transaction_type == ProcessorStatementTransactionType.FEE_ADJUSTMENT:
+        return f"Fee adjustment {statement.transaction_id} requires review"
+    if statement.transaction_type == ProcessorStatementTransactionType.REFUND_REVERSAL:
+        return f"Refund reversal {statement.transaction_id} requires operator confirmation"
+    if statement.transaction_type == ProcessorStatementTransactionType.REFUND:
+        return f"Refund {statement.transaction_id} not linked to invoice"
+    if statement.transaction_type == ProcessorStatementTransactionType.FEE:
+        return f"Fee {statement.transaction_id} not tracked against an invoice"
+    return f"Statement {statement.transaction_id} missing invoice linkage"

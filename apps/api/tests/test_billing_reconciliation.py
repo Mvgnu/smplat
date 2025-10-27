@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from smplat_api.core.settings import settings
 from smplat_api.models.billing_reconciliation import (
+    BillingDiscrepancy,
     BillingDiscrepancyStatus,
     BillingDiscrepancyType,
     BillingReconciliationRun,
@@ -212,6 +213,172 @@ async def test_sync_balance_transactions_marks_removed_transactions(session_fact
         assert staged_row.transaction_id == "txn_removed"
         assert staged_row.status == ProcessorStatementStagingStatus.PENDING
 
+
+@pytest.mark.asyncio
+async def test_reconcile_payout_delay_creates_discrepancy(session_factory):
+    async with session_factory() as session:
+        workspace_id = uuid4()
+        user = User(id=workspace_id, email="payouts@example.com", role=UserRoleEnum.FINANCE)
+        session.add(user)
+        await session.flush()
+
+        observed_at = datetime.now(timezone.utc)
+        transactions = [
+            StripeBalanceTransaction(
+                transaction_id="txn_payout_delay",
+                type="payout",
+                amount=Decimal("125.00"),
+                currency="USD",
+                fee=Decimal("0"),
+                net=Decimal("125.00"),
+                created_at=observed_at,
+                updated_at=observed_at,
+                source_id=None,
+                raw={
+                    "id": "txn_payout_delay",
+                    "status": "pending",
+                    "metadata": {"workspace_id": str(workspace_id)},
+                },
+            )
+        ]
+        provider = StubStatementProvider(transactions, [], {})
+
+        service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
+        result = await service.sync_balance_transactions(workspace_id=workspace_id)
+
+        assert result.persisted
+        statement = result.persisted[0]
+        assert statement.transaction_type == ProcessorStatementTransactionType.PAYOUT_DELAY
+        assert statement.workspace_id == workspace_id
+
+        run = await service.ensure_run()
+        await reconcile_statements(session, statements=result.statements_for_reconciliation, run=run)
+
+        discrepancies = await session.execute(select(BillingDiscrepancy))
+        discrepancy = discrepancies.scalars().one()
+        assert discrepancy.discrepancy_type == BillingDiscrepancyType.PAYOUT_DELAY
+        assert "Payout" in (discrepancy.summary or "")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_fee_adjustment_flags_discrepancy(session_factory):
+    async with session_factory() as session:
+        workspace_id = uuid4()
+        user = User(id=workspace_id, email="fees@example.com", role=UserRoleEnum.FINANCE)
+        invoice = Invoice(
+            workspace_id=workspace_id,
+            invoice_number="INV-FEE-1",
+            status=InvoiceStatusEnum.ISSUED,
+            currency=CurrencyEnum.USD,
+            subtotal=Decimal("200.00"),
+            tax=Decimal("0"),
+            total=Decimal("200.00"),
+            balance_due=Decimal("200.00"),
+            processor_charge_id="ch_fee_1",
+            due_at=datetime.now(timezone.utc),
+        )
+        session.add_all([user, invoice])
+        await session.flush()
+
+        observed_at = datetime.now(timezone.utc)
+        transactions = [
+            StripeBalanceTransaction(
+                transaction_id="txn_fee_adjustment",
+                type="application_fee",
+                amount=Decimal("-10.00"),
+                currency="USD",
+                fee=Decimal("0"),
+                net=Decimal("-10.00"),
+                created_at=observed_at,
+                updated_at=observed_at,
+                source_id="ch_fee_1",
+                raw={
+                    "id": "txn_fee_adjustment",
+                    "type": "fee_adjustment",
+                    "metadata": {
+                        "workspace_id": str(workspace_id),
+                        "invoice_id": str(invoice.id),
+                    },
+                },
+            )
+        ]
+        provider = StubStatementProvider(transactions, [], {})
+
+        service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
+        result = await service.sync_balance_transactions(workspace_id=workspace_id)
+
+        assert result.persisted
+        statement = result.persisted[0]
+        assert statement.transaction_type == ProcessorStatementTransactionType.FEE_ADJUSTMENT
+        assert statement.invoice_id == invoice.id
+
+        run = await service.ensure_run()
+        await reconcile_statements(session, statements=result.statements_for_reconciliation, run=run)
+
+        discrepancies = await session.execute(select(BillingDiscrepancy))
+        discrepancy = discrepancies.scalars().one()
+        assert discrepancy.discrepancy_type == BillingDiscrepancyType.FEE_ADJUSTMENT
+        assert discrepancy.invoice_id == invoice.id
+
+
+@pytest.mark.asyncio
+async def test_reconcile_refund_reversal_tracks_discrepancy(session_factory):
+    async with session_factory() as session:
+        workspace_id = uuid4()
+        user = User(id=workspace_id, email="refunds@example.com", role=UserRoleEnum.FINANCE)
+        invoice = Invoice(
+            workspace_id=workspace_id,
+            invoice_number="INV-REF-1",
+            status=InvoiceStatusEnum.PAID,
+            currency=CurrencyEnum.USD,
+            subtotal=Decimal("300.00"),
+            tax=Decimal("0"),
+            total=Decimal("300.00"),
+            balance_due=Decimal("0"),
+            processor_charge_id="ch_ref_1",
+            due_at=datetime.now(timezone.utc),
+        )
+        session.add_all([user, invoice])
+        await session.flush()
+
+        observed_at = datetime.now(timezone.utc)
+        transactions = [
+            StripeBalanceTransaction(
+                transaction_id="txn_refund_reversal",
+                type="refund",
+                amount=Decimal("-300.00"),
+                currency="USD",
+                fee=Decimal("0"),
+                net=Decimal("-300.00"),
+                created_at=observed_at,
+                updated_at=observed_at,
+                source_id="ch_ref_1",
+                raw={
+                    "id": "txn_refund_reversal",
+                    "type": "refund_reversal",
+                    "metadata": {
+                        "workspace_id": str(workspace_id),
+                        "invoice_id": str(invoice.id),
+                    },
+                },
+            )
+        ]
+        provider = StubStatementProvider(transactions, [], {})
+
+        service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
+        result = await service.sync_balance_transactions(workspace_id=workspace_id)
+
+        assert result.persisted
+        statement = result.persisted[0]
+        assert statement.transaction_type == ProcessorStatementTransactionType.REFUND_REVERSAL
+
+        run = await service.ensure_run()
+        await reconcile_statements(session, statements=result.statements_for_reconciliation, run=run)
+
+        discrepancies = await session.execute(select(BillingDiscrepancy))
+        discrepancy = discrepancies.scalars().one()
+        assert discrepancy.discrepancy_type == BillingDiscrepancyType.REFUND_REVERSAL
+        assert discrepancy.invoice_id == invoice.id
 
 @pytest.mark.asyncio
 async def test_sync_disputes_creates_discrepancy(session_factory):
@@ -433,6 +600,46 @@ async def test_list_runs_includes_metrics_and_staging_backlog(app_with_db):
         assert body["runs"][0]["metrics"]["staged"] == 1
         assert body["runs"][0]["metrics"]["status"] == "completed"
         assert body["runs"][0]["metrics"]["cursor"] == "txn_cursor"
+    finally:
+        settings.checkout_api_key = previous_key
+
+
+@pytest.mark.asyncio
+async def test_list_discrepancies_supports_type_filter(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "ops-key"
+
+    try:
+        async with session_factory() as session:
+            run = BillingReconciliationRun(status="completed")
+            session.add(run)
+            await session.flush()
+
+            base_discrepancy = BillingDiscrepancy(
+                run_id=run.id,
+                discrepancy_type=BillingDiscrepancyType.MISSING_INVOICE,
+                status=BillingDiscrepancyStatus.OPEN,
+            )
+            fee_discrepancy = BillingDiscrepancy(
+                run_id=run.id,
+                discrepancy_type=BillingDiscrepancyType.FEE_ADJUSTMENT,
+                status=BillingDiscrepancyStatus.OPEN,
+            )
+            session.add_all([base_discrepancy, fee_discrepancy])
+            await session.commit()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/billing/reconciliation/discrepancies",
+                params={"type": BillingDiscrepancyType.FEE_ADJUSTMENT.value},
+                headers={"X-API-Key": "ops-key"},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload) == 1
+        assert payload[0]["discrepancyType"] == BillingDiscrepancyType.FEE_ADJUSTMENT.value
     finally:
         settings.checkout_api_key = previous_key
 
