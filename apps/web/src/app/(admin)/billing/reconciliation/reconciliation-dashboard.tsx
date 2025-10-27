@@ -35,6 +35,12 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 
 const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
+const toTitleCase = (value: string) =>
+  value
+    .split("_")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+
 type DashboardProps = {
   dashboard: ReconciliationDashboard;
 };
@@ -47,6 +53,7 @@ export function ReconciliationDashboardView({ dashboard }: DashboardProps) {
   const router = useRouter();
   const [runFilter, setRunFilter] = useState<string>("all");
   const [discrepancyFilter, setDiscrepancyFilter] = useState<string>("all");
+  const [discrepancyTypeFilter, setDiscrepancyTypeFilter] = useState<string>("all");
   const [stagingFilter, setStagingFilter] = useState<string>("pending");
   const [notes, setNotes] = useState<StagingNotes>({});
   const [actionState, setActionState] = useState<ActionState>({});
@@ -57,6 +64,13 @@ export function ReconciliationDashboardView({ dashboard }: DashboardProps) {
     return ["all", ...Array.from(statuses)];
   }, [dashboard.discrepancies]);
 
+  const availableDiscrepancyTypes = useMemo(() => {
+    const typeSet = new Set(
+      dashboard.discrepancies.map((item) => item.discrepancyType.toLowerCase()),
+    );
+    return ["all", ...Array.from(typeSet)];
+  }, [dashboard.discrepancies]);
+
   const filteredRuns = useMemo(() => {
     if (runFilter === "all") {
       return dashboard.runs;
@@ -65,13 +79,15 @@ export function ReconciliationDashboardView({ dashboard }: DashboardProps) {
   }, [dashboard.runs, runFilter]);
 
   const filteredDiscrepancies = useMemo(() => {
-    if (discrepancyFilter === "all") {
-      return dashboard.discrepancies;
-    }
-    return dashboard.discrepancies.filter(
-      (item) => item.status.toLowerCase() === discrepancyFilter.toLowerCase(),
-    );
-  }, [dashboard.discrepancies, discrepancyFilter]);
+    return dashboard.discrepancies.filter((item) => {
+      const statusMatches =
+        discrepancyFilter === "all" || item.status.toLowerCase() === discrepancyFilter.toLowerCase();
+      const typeMatches =
+        discrepancyTypeFilter === "all" ||
+        item.discrepancyType.toLowerCase() === discrepancyTypeFilter.toLowerCase();
+      return statusMatches && typeMatches;
+    });
+  }, [dashboard.discrepancies, discrepancyFilter, discrepancyTypeFilter]);
 
   const filteredStaging = useMemo(() => {
     if (stagingFilter === "all") {
@@ -336,20 +352,38 @@ export function ReconciliationDashboardView({ dashboard }: DashboardProps) {
       <section className="space-y-4" data-testid="reconciliation-discrepancies">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <h2 className="text-lg font-semibold">Discrepancy log</h2>
-          <label className="flex items-center gap-2 text-sm text-white/70">
-            <span>Status filter</span>
-            <select
-              className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-white"
-              value={discrepancyFilter}
-              onChange={(event) => setDiscrepancyFilter(event.target.value)}
-            >
-              {availableDiscrepancyStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status.charAt(0).toUpperCase() + status.slice(1)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <label className="flex items-center gap-2 text-sm text-white/70">
+              <span>Status filter</span>
+              <select
+                className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-white"
+                value={discrepancyFilter}
+                onChange={(event) => setDiscrepancyFilter(event.target.value)}
+                data-testid="discrepancy-status-filter"
+              >
+                {availableDiscrepancyStatuses.map((status) => (
+                  <option key={status} value={status}>
+                    {toTitleCase(status)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-white/70">
+              <span>Type filter</span>
+              <select
+                className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-white"
+                value={discrepancyTypeFilter}
+                onChange={(event) => setDiscrepancyTypeFilter(event.target.value)}
+                data-testid="discrepancy-type-filter"
+              >
+                {availableDiscrepancyTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {toTitleCase(type)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
 
         <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/30">

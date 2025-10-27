@@ -32,6 +32,9 @@ class ProcessorStatementTransactionType(str, Enum):
     FEE = "fee"
     PAYOUT = "payout"
     ADJUSTMENT = "adjustment"
+    FEE_ADJUSTMENT = "fee_adjustment"
+    REFUND_REVERSAL = "refund_reversal"
+    PAYOUT_DELAY = "payout_delay"
 
 
 class BillingDiscrepancyType(str, Enum):
@@ -42,6 +45,9 @@ class BillingDiscrepancyType(str, Enum):
     UNAPPLIED_REFUND = "unapplied_refund"
     UNTRACKED_FEE = "untracked_fee"
     UNKNOWN = "unknown"
+    FEE_ADJUSTMENT = "fee_adjustment"
+    REFUND_REVERSAL = "refund_reversal"
+    PAYOUT_DELAY = "payout_delay"
 
 
 class BillingDiscrepancyStatus(str, Enum):

@@ -17,6 +17,7 @@ test.describe('Billing Reconciliation Dashboard', () => {
     await expect(page.locator('[data-testid="reconciliation-run-history"]')).toContainText('Run history');
     await expect(page.locator('[data-testid="reconciliation-run-history"]')).toContainText('failed');
     await expect(page.locator('[data-testid="reconciliation-discrepancies"]')).toContainText('Discrepancy log');
+    await expect(page.locator('[data-testid="discrepancy-type-filter"]')).toBeVisible();
   });
 
   test('allows triaging and requeueing staged entries', async ({ page }) => {
