@@ -17,7 +17,12 @@ import type {
 import {
   useLivePreview,
   type LivePreviewConnectionState,
-  type LiveValidationEntry
+  type LiveValidationEntry,
+  type LivePreviewVariantDescriptor,
+  type RouteDiagnosticsAggregatedState,
+  type RouteDiagnosticsVariantState,
+  type LiveBlockDiffStatus,
+  type LiveRegressionHotspot
 } from "./useLivePreview";
 import { BlockDiagnosticsPanel } from "./BlockDiagnosticsPanel";
 
@@ -148,6 +153,29 @@ const blockStatusLabels = {
   error: "Errors"
 };
 
+const diffStatusOrder: LiveBlockDiffStatus[] = [
+  "regressed",
+  "improved",
+  "added",
+  "removed"
+];
+
+const diffStatusLabels: Record<LiveBlockDiffStatus, string> = {
+  added: "Added",
+  removed: "Removed",
+  regressed: "Regressed",
+  improved: "Improved",
+  steady: "Steady"
+};
+
+const diffStatusStyles: Record<LiveBlockDiffStatus, string> = {
+  added: "bg-sky-500/20 text-sky-100",
+  removed: "bg-slate-500/20 text-white/70",
+  regressed: "bg-rose-500/20 text-rose-100",
+  improved: "bg-emerald-500/20 text-emerald-100",
+  steady: "bg-white/10 text-white/60"
+};
+
 const connectionBadgeStyles: Record<LivePreviewConnectionState, string> = {
   connecting: "bg-amber-500/20 text-amber-100",
   connected: "bg-emerald-500/20 text-emerald-100",
@@ -213,7 +241,9 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     validationQueue,
     clearValidationQueue,
     routeValidation,
-    routeDiagnostics
+    routeDiagnostics,
+    variants: variantCatalog,
+    baselineVariantKey
   } = useLivePreview({ current, history });
   const [selectedEntryId, setSelectedEntryId] = useState(timelineEntries[0]?.id ?? "");
   const [viewMode, setViewMode] = useState<ViewMode>("diff");
@@ -246,6 +276,7 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
 
   const routeGroups = useMemo(() => buildRouteGroups(activeEntry ?? undefined), [activeEntry]);
   const [selectedRoute, setSelectedRoute] = useState(routeGroups[0]?.route ?? "");
+  const [selectedVariantKey, setSelectedVariantKey] = useState(baselineVariantKey);
 
   useEffect(() => {
     if (!routeGroups.length) {
@@ -264,6 +295,16 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     setViewMode("diff");
   }, [selectedEntryId]);
 
+  useEffect(() => {
+    setSelectedVariantKey((currentKey) => {
+      const availableKeys = variantCatalog.map((variant) => variant.key);
+      if (availableKeys.includes(currentKey)) {
+        return currentKey;
+      }
+      return baselineVariantKey;
+    });
+  }, [variantCatalog, baselineVariantKey]);
+
   const activeGroup = useMemo(() => {
     if (!routeGroups.length) {
       return undefined;
@@ -279,9 +320,83 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
   const hasDifferences = diffLines.some((line) => line.kind !== "same");
   const snapshotForView = viewMode === "draft" ? activeGroup?.draft : activeGroup?.published;
   const activeValidation = activeGroup ? routeValidation[activeGroup.route] : undefined;
-  const diagnosticsLedger = activeGroup ? routeDiagnostics[activeGroup.route] : undefined;
-  const activeDiagnostics = diagnosticsLedger?.latest;
-  const diagnosticsHistory = diagnosticsLedger?.history ?? [];
+  const routeDiagnosticsState = useMemo(
+    () => (activeGroup ? routeDiagnostics[activeGroup.route] : undefined),
+    [activeGroup, routeDiagnostics]
+  );
+  const routeVariantKeys = useMemo(
+    () => routeDiagnosticsState?.aggregated.variantKeys ?? [],
+    [routeDiagnosticsState]
+  );
+  const routeVariantKeySignature = useMemo(
+    () => routeVariantKeys.join("|"),
+    [routeVariantKeys]
+  );
+
+  useEffect(() => {
+    if (!routeDiagnosticsState) {
+      return;
+    }
+    setSelectedVariantKey((currentKey) => {
+      if (routeVariantKeys.includes(currentKey)) {
+        return currentKey;
+      }
+      return routeDiagnosticsState.aggregated.baselineKey ?? baselineVariantKey;
+    });
+  }, [
+    routeDiagnosticsState,
+    routeVariantKeySignature,
+    routeDiagnosticsState?.aggregated.baselineKey,
+    baselineVariantKey,
+    routeVariantKeys
+  ]);
+
+  const effectiveVariantKey = routeVariantKeys.includes(selectedVariantKey)
+    ? selectedVariantKey
+    : routeDiagnosticsState?.aggregated.baselineKey ?? baselineVariantKey;
+  const activeVariantDiagnostics = effectiveVariantKey
+    ? routeDiagnosticsState?.variants[effectiveVariantKey]
+    : undefined;
+  const activeDiagnostics = activeVariantDiagnostics?.latest;
+  const diagnosticsHistory = activeVariantDiagnostics?.history ?? [];
+  const variantDescriptor = activeVariantDiagnostics?.descriptor ??
+    variantCatalog.find((variant) => variant.key === effectiveVariantKey);
+  const aggregatedDiagnostics = routeDiagnosticsState?.aggregated;
+  const sinceLastGreen = activeVariantDiagnostics?.sinceLastGreen;
+  const diffSummary = activeVariantDiagnostics?.diffSummary;
+  const routeVariantOptions = useMemo(() => {
+    if (!routeDiagnosticsState) {
+      return [];
+    }
+    return routeVariantKeys
+      .map((key) => routeDiagnosticsState.variants[key]?.descriptor ??
+        variantCatalog.find((variant) => variant.key === key))
+      .filter((descriptor): descriptor is LivePreviewVariantDescriptor => Boolean(descriptor));
+  }, [routeDiagnosticsState, routeVariantKeys, variantCatalog]);
+  const variantDrift = effectiveVariantKey
+    ? aggregatedDiagnostics?.driftByVariant[effectiveVariantKey]
+    : undefined;
+  const variantDiffTotals: Record<LiveBlockDiffStatus, number> = diffSummary ?? {
+    added: 0,
+    removed: 0,
+    regressed: 0,
+    improved: 0,
+    steady: 0
+  };
+  const regressionHotspots = useMemo(() => {
+    const variantsByKey = routeDiagnosticsState?.variants ?? {};
+    return (aggregatedDiagnostics?.regressionHotspots ?? []).map<
+      LiveRegressionHotspot & { variantLabel: string }
+    >((hotspot) => {
+      const descriptor =
+        variantsByKey[hotspot.variantKey]?.descriptor ??
+        variantCatalog.find((variant) => variant.key === hotspot.variantKey);
+      return {
+        ...hotspot,
+        variantLabel: descriptor?.label ?? hotspot.variantKey
+      };
+    });
+  }, [aggregatedDiagnostics?.regressionHotspots, routeDiagnosticsState?.variants, variantCatalog]);
   const activeValidationBadge = determineValidationBadge(connectionState, activeValidation);
 
   const noteCounts = useMemo(() => {
@@ -531,9 +646,109 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                       </button>
                     ))}
                   </div>
+
+                  <div className="flex flex-col gap-2 text-right text-[11px] uppercase tracking-[0.2em] text-white/60">
+                    <label className="flex flex-col gap-1 text-[10px] uppercase tracking-[0.25em] text-white/50">
+                      Variant ledger
+                      <select
+                        className="rounded-full border border-white/20 bg-black/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-white focus:border-white/40 focus:outline-none"
+                        value={effectiveVariantKey ?? "variant-baseline"}
+                        onChange={(event) => setSelectedVariantKey(event.target.value)}
+                      >
+                        {routeVariantOptions.length > 0
+                          ? routeVariantOptions.map((variant) => (
+                              <option key={variant.key} value={variant.key} className="text-black">
+                                {variant.label}
+                              </option>
+                            ))
+                          : variantCatalog.map((variant) => (
+                              <option key={variant.key} value={variant.key} className="text-black">
+                                {variant.label}
+                              </option>
+                            ))}
+                      </select>
+                    </label>
+                    <div className="flex flex-wrap justify-end gap-2 text-[10px]">
+                      <span className="rounded-full bg-rose-500/20 px-3 py-1 font-semibold text-rose-100">
+                        Δ invalid {variantDrift?.invalidDelta ?? 0}
+                      </span>
+                      <span className="rounded-full bg-amber-500/20 px-3 py-1 font-semibold text-amber-100">
+                        Δ warnings {variantDrift?.warningDelta ?? 0}
+                      </span>
+                    </div>
+                    {sinceLastGreen ? (
+                      <span className="text-[10px] text-white/50">
+                        {sinceLastGreen.steps === 0
+                          ? "Variant is green"
+                          : `Last green ${sinceLastGreen.steps} capture${sinceLastGreen.steps === 1 ? "" : "s"} ago`}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
+            </div>
+          </header>
+
+            <section className="rounded-3xl border border-white/10 bg-black/30 p-6 backdrop-blur">
+              <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Diff intelligence</h3>
+                  <p className="text-xs text-white/60">
+                    Tracking {variantDescriptor?.label ?? "Baseline"} against the latest ledger snapshot.
+                  </p>
+                </div>
+                <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">
+                  {aggregatedDiagnostics?.variantKeys.length ?? 0} variant stream
+                  {aggregatedDiagnostics && aggregatedDiagnostics.variantKeys.length === 1 ? "" : "s"}
+                </span>
+              </header>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {diffStatusOrder.map((status) => (
+                  <div
+                    key={status}
+                    className={`rounded-2xl border border-white/10 px-4 py-3 text-sm ${diffStatusStyles[status]}`}
+                  >
+                    <p className="text-xs uppercase tracking-[0.2em] text-white/60">
+                      {diffStatusLabels[status]}
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold text-white">
+                      {variantDiffTotals[status] ?? 0}
+                    </p>
+                  </div>
+                ))}
               </div>
-            </header>
+
+              {regressionHotspots.length ? (
+                <div className="mt-4 space-y-2">
+                  <h4 className="text-xs uppercase tracking-[0.3em] text-white/50">Regression hotspots</h4>
+                  <ul className="space-y-2 text-xs text-white/70">
+                    {regressionHotspots.slice(0, 6).map((hotspot) => (
+                      <li
+                        key={`${hotspot.blockKey}-${hotspot.variantKey}`}
+                        className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <span className="font-semibold text-white">{hotspot.blockKind ?? "Block"}</span>
+                            <span className="ml-2 text-white/50">{hotspot.blockKey}</span>
+                          </div>
+                          <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-rose-100">
+                            {hotspot.variantLabel}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-white/50">
+                          <span>Regressions {hotspot.regressionCount}</span>
+                          <span>
+                            Δ severity {hotspot.severity - (hotspot.previousSeverity ?? 0)}
+                          </span>
+                          <span>{new Date(hotspot.lastSeenAt).toLocaleString()}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </section>
 
             {activeValidation ? (
               <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
@@ -591,13 +806,24 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                               ))}
                             </ul>
                           ) : null}
-                          {block.recoveryHints.length > 0 ? (
-                            <ul className="mt-2 space-y-1 text-xs text-sky-100">
-                              {block.recoveryHints.map((hint, hintIndex) => (
-                                <li key={`${activeValidation.id}-${blockKey}-hint-${hintIndex}`}>• {hint}</li>
-                              ))}
-                            </ul>
+                  {block.recoveryHints.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-xs text-sky-100">
+                      {block.recoveryHints.map((hint, hintIndex) => (
+                        <li
+                          key={`${activeValidation.id}-${blockKey}-hint-${hintIndex}`}
+                          className="flex flex-wrap items-center gap-2"
+                        >
+                          <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-sky-100">
+                            {hint.category}
+                          </span>
+                          <span>{hint.message}</span>
+                          {hint.fieldPath ? (
+                            <span className="text-sky-200/70">({hint.fieldPath})</span>
                           ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                           {block.trace.operations.length > 0 ? (
                             <ul className="mt-2 space-y-1 text-[10px] text-white/50">
                               {block.trace.operations.map((operation, operationIndex) => (
@@ -629,6 +855,10 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                 entry={activeDiagnostics}
                 history={diagnosticsHistory}
                 validation={activeValidation}
+                variantState={activeVariantDiagnostics}
+                aggregated={aggregatedDiagnostics}
+                availableVariants={variantCatalog}
+                selectedVariantKey={effectiveVariantKey ?? baselineVariantKey}
               />
             ) : null}
 

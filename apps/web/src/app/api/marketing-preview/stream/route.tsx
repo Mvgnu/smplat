@@ -14,7 +14,8 @@ import {
 } from "@/server/cms/types";
 import {
   validateMarketingBlock,
-  type MarketingBlockValidationResult
+  type MarketingBlockValidationResult,
+  type MarketingBlockRecoveryHint
 } from "@/server/cms/validation";
 
 // meta: route: api/marketing-preview/stream
@@ -52,6 +53,21 @@ type LivePreviewPayload = {
   title?: string | null;
   hero?: PageDocument["hero"] | null;
   lexical?: LivePreviewSectionInput[];
+  variant?: {
+    persona?: string | null;
+    campaign?: string | null;
+    featureFlag?: string | null;
+    id?: string | null;
+    label?: string | null;
+  } | null;
+};
+
+type LivePreviewVariant = {
+  key: string;
+  persona?: string | null;
+  campaign?: string | null;
+  featureFlag?: string | null;
+  label: string;
 };
 
 type LivePreviewBroadcast = {
@@ -67,6 +83,7 @@ type LivePreviewBroadcast = {
   markup: string;
   blockKinds: string[];
   sectionCount: number;
+  variant: LivePreviewVariant;
   hero?: PageDocument["hero"];
   metrics?: PageDocument["content"][number]["metrics"];
   validation: {
@@ -79,7 +96,7 @@ type LivePreviewBroadcast = {
       errors: string[];
       warnings: string[];
       fingerprint?: string;
-      recoveryHints: string[];
+      recoveryHints: MarketingBlockRecoveryHint[];
       fallback?: MarketingBlockValidationResult["fallback"];
       trace: MarketingBlockValidationResult["trace"];
     }>;
@@ -104,7 +121,7 @@ type LivePreviewBroadcast = {
       errors: string[];
       warnings: string[];
       fingerprint?: string;
-      recoveryHints: string[];
+      recoveryHints: MarketingBlockRecoveryHint[];
       fallback?: MarketingBlockValidationResult["fallback"];
       trace: MarketingBlockValidationResult["trace"];
     }>;
@@ -121,6 +138,31 @@ const toNonEmptyString = (value: unknown): string | undefined => {
     return value;
   }
   return undefined;
+};
+
+const toVariantDescriptor = (payload: LivePreviewPayload): LivePreviewVariant => {
+  const persona = toNonEmptyString(payload.variant?.persona) ?? null;
+  const campaign = toNonEmptyString(payload.variant?.campaign) ?? null;
+  const featureFlag = toNonEmptyString(payload.variant?.featureFlag) ?? null;
+  const id = toNonEmptyString(payload.variant?.id);
+  const label =
+    payload.variant?.label ??
+    [persona ?? "Baseline", campaign ?? null, featureFlag ?? null]
+      .filter((segment) => segment && segment !== "Baseline")
+      .join(" · ") || "Baseline";
+  const keySeed = [persona ?? "base", campaign ?? "default", featureFlag ?? "flag", id ?? ""].join(":");
+  let hash = 5381;
+  for (let index = 0; index < keySeed.length; index += 1) {
+    hash = (hash * 33) ^ keySeed.charCodeAt(index);
+  }
+  const key = `variant-${(hash >>> 0).toString(16)}`;
+  return {
+    key,
+    persona,
+    campaign,
+    featureFlag,
+    label
+  };
 };
 
 const resolveRoute = (payload: LivePreviewPayload): string | null => {
@@ -397,6 +439,7 @@ export async function POST(request: Request) {
   const normalizationWarnings: string[] = [];
   const sectionDiagnostics: SectionDiagnostics[] = [];
   const sections: PageDocument["content"] = [];
+  const variant = toVariantDescriptor(body);
 
   lexicalSections.forEach((section, index) => {
     const rendered = toSectionFromLexical(
@@ -438,6 +481,7 @@ export async function POST(request: Request) {
     markup,
     blockKinds,
     sectionCount: sections.length,
+    variant,
     hero: body.hero ?? undefined,
     metrics: resolveMetricsSummary(sections),
     validation: validationSummary,
@@ -446,5 +490,10 @@ export async function POST(request: Request) {
 
   await broadcast(broadcastPayload);
 
-  return NextResponse.json({ acknowledged: true, validation: validationSummary, diagnostics });
+  return NextResponse.json({
+    acknowledged: true,
+    validation: validationSummary,
+    diagnostics,
+    variant
+  });
 }
