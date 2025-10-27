@@ -30,6 +30,9 @@ export type {
   MarketingPreviewRegressionVelocity,
   MarketingPreviewRemediationActionRecord,
   MarketingPreviewRehearsalActionRecord,
+  MarketingPreviewRehearsalComparison,
+  MarketingPreviewRehearsalFailureReason,
+  MarketingPreviewRehearsalVerdict,
   MarketingPreviewNoteRevisionRecord,
   MarketingPreviewSeverityMomentum,
   MarketingPreviewTimeToGreenForecast

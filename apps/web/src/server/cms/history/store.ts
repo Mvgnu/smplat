@@ -19,7 +19,10 @@ import type {
   MarketingPreviewLiveDeltaRecord,
   MarketingPreviewNoteRevisionRecord,
   MarketingPreviewRemediationActionRecord,
-  MarketingPreviewRehearsalActionRecord
+  MarketingPreviewRehearsalActionRecord,
+  MarketingPreviewRehearsalComparison,
+  MarketingPreviewRehearsalFailureReason,
+  MarketingPreviewRehearsalVerdict
 } from "./types";
 
 const DATABASE_FILE = path.resolve(
@@ -32,6 +35,25 @@ let db: Database | null = null;
 
 const ensureDirectory = () => {
   fs.mkdirSync(path.dirname(DATABASE_FILE), { recursive: true });
+};
+
+const ensureColumn = (database: Database, table: string, column: string, definition: string) => {
+  const columns = database
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as Array<{ name: string }>;
+  const exists = columns.some((entry) => entry.name === column);
+  if (!exists) {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${definition};`);
+  }
+};
+
+const ensureRehearsalSchema = (database: Database) => {
+  ensureColumn(database, "rehearsal_actions", "verdict", "TEXT NOT NULL DEFAULT 'pending'");
+  ensureColumn(database, "rehearsal_actions", "actual_deltas", "INTEGER");
+  ensureColumn(database, "rehearsal_actions", "diff", "INTEGER");
+  ensureColumn(database, "rehearsal_actions", "failure_reasons", "TEXT");
+  ensureColumn(database, "rehearsal_actions", "comparison_payload", "TEXT");
+  ensureColumn(database, "rehearsal_actions", "evaluated_at", "TEXT");
 };
 
 const openDatabase = (): Database => {
@@ -106,7 +128,13 @@ const openDatabase = (): Database => {
       expected_deltas INTEGER NOT NULL,
       operator_hash TEXT,
       payload_hash TEXT NOT NULL UNIQUE,
-      recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+      recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      verdict TEXT NOT NULL DEFAULT 'pending',
+      actual_deltas INTEGER,
+      diff INTEGER,
+      failure_reasons TEXT,
+      comparison_payload TEXT,
+      evaluated_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS note_revisions (
@@ -129,6 +157,8 @@ const openDatabase = (): Database => {
     CREATE INDEX IF NOT EXISTS idx_rehearsal_actions_manifest_generated_at ON rehearsal_actions(manifest_generated_at);
     CREATE INDEX IF NOT EXISTS idx_note_revisions_manifest_generated_at ON note_revisions(manifest_generated_at);
   `);
+
+  ensureRehearsalSchema(db);
 
   return db;
 };
@@ -188,6 +218,12 @@ type RecordRehearsalActionInput = {
   expectedDeltas: number;
   operatorId?: string | null;
   recordedAt?: string;
+  verdict?: MarketingPreviewRehearsalVerdict;
+  actualDeltas?: number | null;
+  diff?: number | null;
+  failureReasons?: MarketingPreviewRehearsalFailureReason[] | null;
+  comparison?: MarketingPreviewRehearsalComparison | null;
+  evaluatedAt?: string | null;
 };
 
 type RecordNoteRevisionInput = {
@@ -443,6 +479,14 @@ export const recordRehearsalAction = (input: RecordRehearsalActionInput) => {
   };
   const payloadHash = hash(encodeJson(payloadSeed, "rehearsal payload seed"));
   const recordedAt = input.recordedAt ?? new Date().toISOString();
+  const evaluatedAt = input.evaluatedAt ?? recordedAt;
+  const verdict: MarketingPreviewRehearsalVerdict = input.verdict ?? "pending";
+  const failureReasonsPayload = input.failureReasons
+    ? encodeJson(input.failureReasons, "rehearsal failure reasons")
+    : null;
+  const comparisonPayload = input.comparison
+    ? encodeJson(input.comparison, "rehearsal comparison payload")
+    : null;
 
   const insert = database.prepare(`
     INSERT INTO rehearsal_actions (
@@ -452,10 +496,41 @@ export const recordRehearsalAction = (input: RecordRehearsalActionInput) => {
       expected_deltas,
       operator_hash,
       payload_hash,
-      recorded_at
+      recorded_at,
+      verdict,
+      actual_deltas,
+      diff,
+      failure_reasons,
+      comparison_payload,
+      evaluated_at
     )
-    VALUES (@id, @manifest_generated_at, @scenario_fingerprint, @expected_deltas, @operator_hash, @payload_hash, @recorded_at)
-    ON CONFLICT(payload_hash) DO NOTHING;
+    VALUES (
+      @id,
+      @manifest_generated_at,
+      @scenario_fingerprint,
+      @expected_deltas,
+      @operator_hash,
+      @payload_hash,
+      @recorded_at,
+      @verdict,
+      @actual_deltas,
+      @diff,
+      @failure_reasons,
+      @comparison_payload,
+      @evaluated_at
+    )
+    ON CONFLICT(payload_hash) DO UPDATE SET
+      manifest_generated_at = excluded.manifest_generated_at,
+      scenario_fingerprint = excluded.scenario_fingerprint,
+      expected_deltas = excluded.expected_deltas,
+      operator_hash = excluded.operator_hash,
+      recorded_at = excluded.recorded_at,
+      verdict = COALESCE(excluded.verdict, rehearsal_actions.verdict),
+      actual_deltas = COALESCE(excluded.actual_deltas, rehearsal_actions.actual_deltas),
+      diff = COALESCE(excluded.diff, rehearsal_actions.diff),
+      failure_reasons = COALESCE(excluded.failure_reasons, rehearsal_actions.failure_reasons),
+      comparison_payload = COALESCE(excluded.comparison_payload, rehearsal_actions.comparison_payload),
+      evaluated_at = COALESCE(excluded.evaluated_at, rehearsal_actions.evaluated_at);
   `);
 
   insert.run({
@@ -465,7 +540,13 @@ export const recordRehearsalAction = (input: RecordRehearsalActionInput) => {
     expected_deltas: input.expectedDeltas,
     operator_hash: operatorHash,
     payload_hash: payloadHash,
-    recorded_at: recordedAt
+    recorded_at: recordedAt,
+    verdict,
+    actual_deltas: input.actualDeltas ?? null,
+    diff: input.diff ?? null,
+    failure_reasons: failureReasonsPayload,
+    comparison_payload: comparisonPayload,
+    evaluated_at: evaluatedAt
   });
 };
 
@@ -473,7 +554,8 @@ export const getRehearsalAction = (id: string): MarketingPreviewRehearsalActionR
   const database = openDatabase();
   const row = database
     .prepare<unknown[]>(
-      `SELECT id, manifest_generated_at, scenario_fingerprint, expected_deltas, operator_hash, payload_hash, recorded_at
+      `SELECT id, manifest_generated_at, scenario_fingerprint, expected_deltas, operator_hash, payload_hash, recorded_at,
+        verdict, actual_deltas, diff, failure_reasons, comparison_payload, evaluated_at
        FROM rehearsal_actions
        WHERE id = ?`
     )
@@ -486,6 +568,12 @@ export const getRehearsalAction = (id: string): MarketingPreviewRehearsalActionR
         operator_hash: string | null;
         payload_hash: string;
         recorded_at: string;
+        verdict: string | null;
+        actual_deltas: number | null;
+        diff: number | null;
+        failure_reasons: string | null;
+        comparison_payload: string | null;
+        evaluated_at: string | null;
       }
     | undefined;
 
@@ -500,7 +588,23 @@ export const getRehearsalAction = (id: string): MarketingPreviewRehearsalActionR
     expectedDeltas: row.expected_deltas,
     operatorHash: row.operator_hash,
     payloadHash: row.payload_hash,
-    recordedAt: row.recorded_at
+    recordedAt: row.recorded_at,
+    verdict: (row.verdict as MarketingPreviewRehearsalVerdict | null) ?? "pending",
+    actualDeltas: row.actual_deltas,
+    diff: row.diff,
+    failureReasons: row.failure_reasons
+      ? decodeJson<MarketingPreviewRehearsalFailureReason[]>(
+          row.failure_reasons,
+          "rehearsal failure reasons"
+        )
+      : null,
+    comparison: row.comparison_payload
+      ? decodeJson<MarketingPreviewRehearsalComparison>(
+          row.comparison_payload,
+          "rehearsal comparison"
+        )
+      : null,
+    evaluatedAt: row.evaluated_at
   };
 };
 
@@ -706,7 +810,8 @@ const fetchRehearsalActions = (
 
   const rows = database
     .prepare<unknown[]>(
-      `SELECT id, manifest_generated_at, scenario_fingerprint, expected_deltas, operator_hash, payload_hash, recorded_at
+      `SELECT id, manifest_generated_at, scenario_fingerprint, expected_deltas, operator_hash, payload_hash, recorded_at,
+        verdict, actual_deltas, diff, failure_reasons, comparison_payload, evaluated_at
        FROM rehearsal_actions
        WHERE manifest_generated_at = ?
        ORDER BY datetime(recorded_at) DESC`
@@ -719,6 +824,12 @@ const fetchRehearsalActions = (
       operator_hash: string | null;
       payload_hash: string;
       recorded_at: string;
+      verdict: string | null;
+      actual_deltas: number | null;
+      diff: number | null;
+      failure_reasons: string | null;
+      comparison_payload: string | null;
+      evaluated_at: string | null;
     }>;
 
   return rows.map((row) => ({
@@ -728,7 +839,23 @@ const fetchRehearsalActions = (
     expectedDeltas: row.expected_deltas,
     operatorHash: row.operator_hash,
     payloadHash: row.payload_hash,
-    recordedAt: row.recorded_at
+    recordedAt: row.recorded_at,
+    verdict: (row.verdict as MarketingPreviewRehearsalVerdict | null) ?? "pending",
+    actualDeltas: row.actual_deltas,
+    diff: row.diff,
+    failureReasons: row.failure_reasons
+      ? decodeJson<MarketingPreviewRehearsalFailureReason[]>(
+          row.failure_reasons,
+          "rehearsal failure reasons"
+        )
+      : null,
+    comparison: row.comparison_payload
+      ? decodeJson<MarketingPreviewRehearsalComparison>(
+          row.comparison_payload,
+          "rehearsal comparison"
+        )
+      : null,
+    evaluatedAt: row.evaluated_at
   }));
 };
 

@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 
-import { getRehearsalAction, querySnapshotHistory } from "@/server/cms/history";
+import {
+  getRehearsalAction,
+  querySnapshotHistory,
+  type MarketingPreviewRehearsalComparison,
+  type MarketingPreviewRehearsalFailureReason,
+  type MarketingPreviewRehearsalVerdict,
+  type MarketingPreviewRemediationActionRecord
+} from "@/server/cms/history";
 
 // meta: route: api/marketing-preview/fallbacks/rehearsals/[id]
 // meta: feature: marketing-preview-governance
@@ -15,19 +22,58 @@ const authenticate = (request: Request) => {
   return signature === LIVE_PREVIEW_SECRET;
 };
 
-const evaluateLiveOutcomes = (manifestGeneratedAt?: string | null) => {
+const summarizeLiveOutcomes = (manifestGeneratedAt?: string | null) => {
   if (!manifestGeneratedAt) {
-    return { manifestFound: false, remediationCount: 0 };
+    return { manifestFound: false, remediations: [] as MarketingPreviewRemediationActionRecord[] };
   }
 
   const history = querySnapshotHistory({ limit: 50, actionMode: "live" });
   const matching = history.entries.find((entry) => entry.generatedAt === manifestGeneratedAt);
 
   if (!matching) {
-    return { manifestFound: false, remediationCount: 0 };
+    return { manifestFound: false, remediations: [] as MarketingPreviewRemediationActionRecord[] };
   }
 
-  return { manifestFound: true, remediationCount: matching.remediations.length };
+  return { manifestFound: true, remediations: matching.remediations };
+};
+
+const evaluateRehearsal = (
+  expectedDeltas: number,
+  summary: ReturnType<typeof summarizeLiveOutcomes>
+) => {
+  const actualCount = summary.remediations.length;
+  const diff = actualCount - expectedDeltas;
+  const failureReasons: MarketingPreviewRehearsalFailureReason[] = [];
+
+  if (!summary.manifestFound) {
+    failureReasons.push("manifest_missing");
+  }
+
+  if (actualCount !== expectedDeltas) {
+    failureReasons.push("delta_mismatch");
+    if (actualCount > expectedDeltas) {
+      failureReasons.push("unexpected_remediation");
+    }
+  }
+
+  const verdict: MarketingPreviewRehearsalVerdict = failureReasons.length ? "failed" : "passed";
+
+  const comparison: MarketingPreviewRehearsalComparison = {
+    expected: { deltaCount: expectedDeltas },
+    actual: {
+      manifestFound: summary.manifestFound,
+      remediationCount: actualCount,
+      remediations: summary.remediations.map((remediation) => ({
+        id: remediation.id,
+        route: remediation.route,
+        action: remediation.action,
+        fingerprint: remediation.fingerprint ?? null,
+        recordedAt: remediation.recordedAt
+      }))
+    }
+  };
+
+  return { verdict, diff, actualDeltas: actualCount, failureReasons, comparison };
 };
 
 export async function GET(request: Request, context: { params: { id: string } }) {
@@ -41,15 +87,11 @@ export async function GET(request: Request, context: { params: { id: string } })
     return NextResponse.json({ error: "Rehearsal not found" }, { status: 404 });
   }
 
-  const { manifestFound, remediationCount } = evaluateLiveOutcomes(rehearsal.manifestGeneratedAt ?? null);
-  const diff = remediationCount - rehearsal.expectedDeltas;
+  const summary = summarizeLiveOutcomes(rehearsal.manifestGeneratedAt ?? null);
+  const evaluation = evaluateRehearsal(rehearsal.expectedDeltas, summary);
 
   return NextResponse.json({
     rehearsal,
-    liveOutcomes: {
-      manifestFound,
-      remediationCount,
-      diff
-    }
+    liveEvaluation: evaluation
   });
 }

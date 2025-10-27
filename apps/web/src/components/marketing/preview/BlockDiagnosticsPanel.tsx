@@ -109,6 +109,8 @@ type BlockDiagnosticsPanelProps = {
   aggregated?: RouteDiagnosticsAggregatedState;
   availableVariants?: LivePreviewVariantDescriptor[];
   selectedVariantKey?: string;
+  remediationLocked?: boolean;
+  remediationGuardReasons?: string[];
 };
 
 type ActionStatus = { kind: "success" | "error"; message: string } | null;
@@ -139,7 +141,9 @@ export function BlockDiagnosticsPanel({
   variantState,
   aggregated,
   availableVariants = [],
-  selectedVariantKey
+  selectedVariantKey,
+  remediationLocked = false,
+  remediationGuardReasons = []
 }: BlockDiagnosticsPanelProps) {
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [actionStatus, setActionStatus] = useState<ActionStatus>(null);
@@ -496,11 +500,19 @@ export function BlockDiagnosticsPanel({
           type="button"
           onClick={() => handleFallbackAction("reset", undefined, "reset")}
           className="rounded-full border border-white/20 px-3 py-1 uppercase tracking-[0.2em] text-white/70 transition hover:border-white/40 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/40"
-          disabled={pendingAction !== null}
+          disabled={pendingAction !== null || remediationLocked}
         >
           {pendingAction === "reset" ? "Resetting…" : "Reset fallbacks"}
         </button>
       </div>
+
+      {remediationLocked && remediationGuardReasons.length ? (
+        <ul className="mt-2 space-y-1 text-xs text-rose-100">
+          {remediationGuardReasons.map((reason, index) => (
+            <li key={`remediation-guard-${index}`}>• {reason}</li>
+          ))}
+        </ul>
+      ) : null}
 
       {normalizationWarnings.length > 0 ? (
         <div className="mt-6 space-y-2">
@@ -591,15 +603,15 @@ export function BlockDiagnosticsPanel({
                     {block.trace.skipReason ? <span>Skipped</span> : null}
                   </div>
                   {showPromote ? (
-                    <button
-                      type="button"
-                      onClick={() => handleFallbackAction("prioritize", block.fingerprint, actionKey)}
-                      className="mt-3 rounded-full border border-white/20 px-3 py-1 text-xs uppercase tracking-[0.2em] text-white/70 transition hover:border-white/40 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/40"
-                      disabled={pendingAction !== null}
-                    >
-                      {pendingAction === actionKey ? "Updating…" : "Promote fallback"}
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => handleFallbackAction("prioritize", block.fingerprint, actionKey)}
+                    className="mt-3 rounded-full border border-white/20 px-3 py-1 text-xs uppercase tracking-[0.2em] text-white/70 transition hover:border-white/40 hover:text-white disabled:cursor-not-allowed disabled:border-white/10 disabled:text-white/40"
+                    disabled={pendingAction !== null || remediationLocked}
+                  >
+                    {pendingAction === actionKey ? "Updating…" : "Promote fallback"}
+                  </button>
+                ) : null}
                   {block.fingerprint ? (
                     <button
                       type="button"

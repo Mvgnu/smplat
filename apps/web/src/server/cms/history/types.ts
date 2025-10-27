@@ -64,6 +64,30 @@ export type MarketingPreviewRemediationActionRecord = {
   payloadHash: string;
 };
 
+export type MarketingPreviewRehearsalVerdict = "pending" | "passed" | "failed";
+
+export type MarketingPreviewRehearsalFailureReason =
+  | "manifest_missing"
+  | "delta_mismatch"
+  | "unexpected_remediation";
+
+export type MarketingPreviewRehearsalComparison = {
+  expected: {
+    deltaCount: number;
+  };
+  actual: {
+    manifestFound: boolean;
+    remediationCount: number;
+    remediations: Array<{
+      id: string;
+      route: string;
+      action: MarketingPreviewRemediationActionRecord["action"];
+      fingerprint?: string | null;
+      recordedAt: string;
+    }>;
+  };
+};
+
 export type MarketingPreviewRehearsalActionRecord = {
   id: string;
   manifestGeneratedAt?: string | null;
@@ -72,6 +96,12 @@ export type MarketingPreviewRehearsalActionRecord = {
   operatorHash?: string | null;
   payloadHash: string;
   recordedAt: string;
+  verdict: MarketingPreviewRehearsalVerdict;
+  evaluatedAt?: string | null;
+  actualDeltas?: number | null;
+  diff?: number | null;
+  failureReasons?: MarketingPreviewRehearsalFailureReason[] | null;
+  comparison?: MarketingPreviewRehearsalComparison | null;
 };
 
 export type MarketingPreviewNoteRevisionRecord = {

@@ -29,6 +29,7 @@ import {
   useMarketingPreviewHistory,
   type MarketingPreviewHistoryTimelineEntry
 } from "./useMarketingPreviewHistory";
+import { evaluateRehearsalGuard, type RehearsalGuardState } from "./rehearsalGuards";
 import { BlockDiagnosticsPanel } from "./BlockDiagnosticsPanel";
 
 const formatDateTime = (timestamp: string) => {
@@ -92,6 +93,8 @@ const summarizeMetrics = (snapshot?: MarketingPreviewSnapshot) => {
 
   return label ? `${label} — ${valueSummary}` : valueSummary;
 };
+
+const escapeSingleQuotes = (value: string) => value.replace(/'/g, "'\\''");
 
 type DiffLine = {
   kind: "same" | "added" | "removed" | "changed";
@@ -164,6 +167,22 @@ const actionModeOptions: Array<{ label: string; value?: "live" | "rehearsal" | "
   { label: "Live fallbacks", value: "live" },
   { label: "Rehearsals", value: "rehearsal" }
 ];
+
+const rehearsalBadgeStyles: Record<RehearsalGuardState, string> = {
+  passed: "bg-emerald-500/20 text-emerald-100",
+  failed: "bg-rose-500/20 text-rose-100",
+  pending: "bg-amber-500/20 text-amber-100",
+  stale: "bg-slate-500/30 text-white/70",
+  missing: "bg-slate-500/30 text-white/60"
+};
+
+const rehearsalBadgeLabels: Record<RehearsalGuardState, string> = {
+  passed: "Rehearsal passed",
+  failed: "Rehearsal failed",
+  pending: "Rehearsal pending",
+  stale: "Rehearsal stale",
+  missing: "Rehearsal missing"
+};
 
 const hasHistoryMetadata = (
   entry: MarketingPreviewTimelineEntry
@@ -451,6 +470,9 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
   const [feedbackIdentifier, setFeedbackIdentifier] = useState("");
   const [feedbackEntries, setFeedbackEntries] = useState<OperatorFeedbackEntry[]>([]);
   const [feedbackStatus, setFeedbackStatus] = useState<"idle" | "submitting" | "submitted" | "error">("idle");
+  const [rehearsalCommandStatus, setRehearsalCommandStatus] = useState<"idle" | "copied" | "error">(
+    "idle"
+  );
 
   const handleFeedbackSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
@@ -486,6 +508,39 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     [feedbackBody, feedbackIdentifier]
   );
 
+  const handleCopyRehearsalCommand = useCallback(async () => {
+    if (!activeRehearsalGuard.latest) {
+      return;
+    }
+
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      setRehearsalCommandStatus("error");
+      return;
+    }
+
+    const payload = {
+      manifestGeneratedAt:
+        activeRehearsalGuard.latest.manifestGeneratedAt ?? activeEntry?.generatedAt ?? null,
+      scenarioFingerprint: activeRehearsalGuard.latest.scenarioFingerprint,
+      expectedDeltas: activeRehearsalGuard.latest.expectedDeltas,
+      operatorId: null
+    };
+    const origin = typeof window !== "undefined" ? window.location.origin : "https://preview.local";
+    const serialized = JSON.stringify(payload);
+    const command = `curl -X POST "${origin}/api/marketing-preview/fallbacks/simulate" \\
+  -H "Content-Type: application/json" \\
+  -H "x-preview-signature: $PAYLOAD_LIVE_PREVIEW_SECRET" \\
+  -d '${escapeSingleQuotes(serialized)}'`;
+
+    try {
+      await navigator.clipboard.writeText(command);
+      setRehearsalCommandStatus("copied");
+    } catch (copyError) {
+      console.error(copyError);
+      setRehearsalCommandStatus("error");
+    }
+  }, [activeEntry?.generatedAt, activeRehearsalGuard.latest]);
+
   useEffect(() => {
     setLocalNotes(notes);
   }, [notes]);
@@ -509,6 +564,14 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
   const historyEntryLookup = useMemo(
     () => new Map(persistedHistoryEntries.map((entry) => [entry.id, entry])),
     [persistedHistoryEntries]
+  );
+  const activeHistoryMetadata = activeEntry ? historyEntryLookup.get(activeEntry.id) : undefined;
+  const activeRehearsalGuard = useMemo(
+    () =>
+      activeEntry
+        ? evaluateRehearsalGuard(activeHistoryMetadata?.rehearsals ?? [], activeEntry.generatedAt)
+        : evaluateRehearsalGuard([], new Date(0).toISOString()),
+    [activeEntry, activeHistoryMetadata?.rehearsals]
   );
   const regressionSparklinePath = useMemo(
     () => buildRegressionSparklinePath(persistedHistoryEntries),
@@ -535,6 +598,22 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     ]
   );
 
+  const latestRehearsal = activeRehearsalGuard.latest;
+  const latestEvaluationLabel = latestRehearsal
+    ? formatDateTime(latestRehearsal.evaluatedAt ?? latestRehearsal.recordedAt)
+    : null;
+  const latestDiff =
+    typeof latestRehearsal?.diff === "number" && !Number.isNaN(latestRehearsal.diff)
+      ? latestRehearsal.diff
+      : null;
+  const copyCommandLabel =
+    rehearsalCommandStatus === "copied"
+      ? "Command copied"
+      : rehearsalCommandStatus === "error"
+        ? "Copy failed"
+        : "Copy rehearsal command";
+  const canRemediate = activeRehearsalGuard.allowed;
+
   const routeGroups = useMemo(() => buildRouteGroups(activeEntry ?? undefined), [activeEntry]);
   const [selectedRoute, setSelectedRoute] = useState(
     historyFilters.route ?? routeGroups[0]?.route ?? ""
@@ -556,6 +635,10 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
       return routeGroups[0]?.route ?? "";
     });
   }, [historyFilters.route, routeGroups]);
+
+  useEffect(() => {
+    setRehearsalCommandStatus("idle");
+  }, [activeRehearsalGuard.latest?.id]);
 
   useEffect(() => {
     setViewMode("diff");
@@ -885,6 +968,12 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                   const noteSummary = metadata?.notes;
                   const rehearsalCount = metadata?.rehearsals?.length ?? 0;
                   const remediationCount = metadata?.remediations?.length ?? 0;
+                  const rehearsalGuard = evaluateRehearsalGuard(
+                    metadata?.rehearsals ?? [],
+                    entry.generatedAt
+                  );
+                  const showActionBadges =
+                    rehearsalCount > 0 || remediationCount > 0 || rehearsalGuard.state !== "passed";
                   const diffPercent = aggregates.totalRoutes
                     ? Math.round((aggregates.diffDetectedRoutes / aggregates.totalRoutes) * 100)
                     : 0;
@@ -905,13 +994,16 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                       <p className="mt-1 text-xs text-white/60">
                         {diffPercent}% diff coverage · {aggregates.totalRoutes} routes · {noteSummary?.total ?? 0} notes
                       </p>
-                      {(rehearsalCount > 0 || remediationCount > 0) && (
+                      {showActionBadges && (
                         <div className="mt-2 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.2em] text-white/60">
-                          {rehearsalCount > 0 ? (
-                            <span className="inline-flex items-center gap-2 rounded-full bg-sky-500/20 px-3 py-1 text-sky-100">
-                              Rehearsals {rehearsalCount}
-                            </span>
-                          ) : null}
+                          <span className="inline-flex items-center gap-2 rounded-full bg-sky-500/20 px-3 py-1 text-sky-100">
+                            Rehearsals {rehearsalCount}
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-2 rounded-full px-3 py-1 ${rehearsalBadgeStyles[rehearsalGuard.state]}`}
+                          >
+                            {rehearsalBadgeLabels[rehearsalGuard.state]}
+                          </span>
                           {remediationCount > 0 ? (
                             <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/20 px-3 py-1 text-emerald-100">
                               Live fallbacks {remediationCount}
@@ -1488,6 +1580,58 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
               </section>
             ) : null}
 
+            <section
+              className={`rounded-3xl border p-4 text-white/80 ${
+                canRemediate
+                  ? "border-emerald-500/30 bg-emerald-500/10"
+                  : "border-rose-500/40 bg-rose-500/10"
+              }`}
+            >
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    {rehearsalBadgeLabels[activeRehearsalGuard.state]}
+                  </p>
+                  <p className="mt-1 text-xs text-white/70">
+                    {latestEvaluationLabel
+                      ? `Evaluated ${latestEvaluationLabel}. `
+                      : "Latest rehearsal evaluation pending. "}
+                    {typeof latestDiff === "number" && latestDiff !== 0
+                      ? `Δ live ${latestDiff > 0 ? `+${latestDiff}` : latestDiff}. `
+                      : ""}
+                    {canRemediate
+                      ? "Live remediation actions are unlocked."
+                      : "Live remediation actions remain gated until the rehearsal succeeds."}
+                  </p>
+                  {!canRemediate && activeRehearsalGuard.reasons.length ? (
+                    <ul className="mt-2 space-y-1 text-xs text-white/70">
+                      {activeRehearsalGuard.reasons.map((reason, index) => (
+                        <li key={`rehearsal-guard-reason-${index}`}>• {reason}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+                {latestRehearsal ? (
+                  <button
+                    type="button"
+                    onClick={handleCopyRehearsalCommand}
+                    className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.2em] transition ${
+                      rehearsalCommandStatus === "copied"
+                        ? "border-emerald-300/40 text-emerald-100"
+                        : "border-white/40 bg-black/20 text-white hover:border-white/60 hover:text-white"
+                    }`}
+                  >
+                    {copyCommandLabel}
+                  </button>
+                ) : null}
+              </div>
+              {rehearsalCommandStatus === "error" ? (
+                <p className="mt-2 text-[11px] text-rose-200">
+                  Unable to copy rehearsal command. Follow the payload playbook to trigger a new rehearsal.
+                </p>
+              ) : null}
+            </section>
+
             {activeGroup ? (
               <BlockDiagnosticsPanel
                 route={activeGroup.route}
@@ -1498,6 +1642,8 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
                 aggregated={aggregatedDiagnostics}
                 availableVariants={variantCatalog}
                 selectedVariantKey={effectiveVariantKey ?? baselineVariantKey}
+                remediationLocked={!canRemediate}
+                remediationGuardReasons={activeRehearsalGuard.reasons}
               />
             ) : null}
 
