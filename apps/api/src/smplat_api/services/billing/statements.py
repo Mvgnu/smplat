@@ -17,6 +17,7 @@ from smplat_api.models.billing_reconciliation import (
     BillingReconciliationRun,
     ProcessorStatement,
     ProcessorStatementStaging,
+    ProcessorStatementStagingStatus,
     ProcessorStatementTransactionType,
 )
 from smplat_api.models.invoice import Invoice
@@ -342,6 +343,14 @@ class StripeStatementIngestionService:
             staging.payload = payload
             staging.workspace_hint = workspace_hint
             staging.last_observed_at = now
+            if staging.status in (
+                ProcessorStatementStagingStatus.RESOLVED,
+                ProcessorStatementStagingStatus.TRIAGED,
+            ):
+                staging.status = ProcessorStatementStagingStatus.PENDING
+                staging.triage_note = None
+                staging.last_triaged_at = None
+                staging.resolved_at = None
             return staging
 
         staging = ProcessorStatementStaging(
@@ -350,6 +359,11 @@ class StripeStatementIngestionService:
             reason=reason,
             payload=payload,
             workspace_hint=workspace_hint,
+            status=ProcessorStatementStagingStatus.PENDING,
+            triage_note=None,
+            last_triaged_at=None,
+            resolved_at=None,
+            requeue_count=0,
             first_observed_at=now,
             last_observed_at=now,
         )
@@ -380,6 +394,14 @@ class StripeStatementIngestionService:
             staging.payload = payload
             staging.workspace_hint = statement.workspace_id
             staging.last_observed_at = now
+            if staging.status in (
+                ProcessorStatementStagingStatus.RESOLVED,
+                ProcessorStatementStagingStatus.TRIAGED,
+            ):
+                staging.status = ProcessorStatementStagingStatus.PENDING
+                staging.triage_note = None
+                staging.last_triaged_at = None
+                staging.resolved_at = None
             return staging
 
         staging = ProcessorStatementStaging(
@@ -388,6 +410,11 @@ class StripeStatementIngestionService:
             reason="processor_missing",
             payload=payload,
             workspace_hint=statement.workspace_id,
+            status=ProcessorStatementStagingStatus.PENDING,
+            triage_note=None,
+            last_triaged_at=None,
+            resolved_at=None,
+            requeue_count=0,
             first_observed_at=now,
             last_observed_at=now,
         )

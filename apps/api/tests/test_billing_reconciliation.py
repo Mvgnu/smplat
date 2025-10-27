@@ -8,14 +8,17 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import select
 
+from smplat_api.core.settings import settings
 from smplat_api.models.billing_reconciliation import (
     BillingDiscrepancyStatus,
     BillingDiscrepancyType,
     BillingReconciliationRun,
     ProcessorStatement,
     ProcessorStatementStaging,
+    ProcessorStatementStagingStatus,
     ProcessorStatementTransactionType,
 )
 from smplat_api.models.customer_profile import CurrencyEnum
@@ -149,9 +152,12 @@ async def test_sync_balance_transactions_stages_orphans(session_factory):
         assert len(result.staged) == 1
         staging = result.staged[0]
         assert staging.reason.startswith("unresolved_workspace")
+        assert staging.status == ProcessorStatementStagingStatus.PENDING
 
         staged_rows = await session.execute(select(ProcessorStatementStaging))
-        assert staged_rows.scalar_one().transaction_id == "txn_orphan"
+        staged_row = staged_rows.scalar_one()
+        assert staged_row.transaction_id == "txn_orphan"
+        assert staged_row.status == ProcessorStatementStagingStatus.PENDING
 
 
 @pytest.mark.asyncio
@@ -199,6 +205,7 @@ async def test_sync_balance_transactions_marks_removed_transactions(session_fact
         staged_row = staged_lookup.scalar_one()
         assert staged_row.reason == "processor_missing"
         assert staged_row.transaction_id == "txn_removed"
+        assert staged_row.status == ProcessorStatementStagingStatus.PENDING
 
 
 @pytest.mark.asyncio
@@ -350,3 +357,110 @@ async def test_worker_run_once_marks_failure(session_factory, monkeypatch: pytes
         notes = json.loads(run.notes or "{}")
         assert notes.get("status") == "failed"
         assert "error" in notes
+
+
+@pytest.mark.asyncio
+async def test_list_runs_includes_metrics_and_staging_backlog(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "ops-key"
+
+    try:
+        async with session_factory() as session:
+            run = BillingReconciliationRun(
+                status="completed",
+                total_transactions=5,
+                matched_transactions=4,
+                discrepancy_count=1,
+                notes=json.dumps(
+                    {
+                        "status": "completed",
+                        "persisted": 3,
+                        "updated": 1,
+                        "staged": 1,
+                        "removed": 0,
+                        "disputes": 0,
+                        "cursor": "txn_cursor",
+                    }
+                ),
+            )
+            staging = ProcessorStatementStaging(
+                transaction_id="txn_api",
+                processor="stripe",
+                reason="unresolved_workspace:charge",
+                payload={"id": "txn_api"},
+                status=ProcessorStatementStagingStatus.PENDING,
+                requeue_count=0,
+            )
+            session.add_all([run, staging])
+            await session.commit()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/billing/reconciliation/runs",
+                headers={"X-API-Key": "ops-key"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["stagingBacklog"] == 1
+        assert body["runs"][0]["metrics"]["staged"] == 1
+        assert body["runs"][0]["metrics"]["status"] == "completed"
+        assert body["runs"][0]["metrics"]["cursor"] == "txn_cursor"
+    finally:
+        settings.checkout_api_key = previous_key
+
+
+@pytest.mark.asyncio
+async def test_staging_triage_and_requeue_flow(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "triage-key"
+
+    try:
+        async with session_factory() as session:
+            staging = ProcessorStatementStaging(
+                transaction_id="txn_triage",
+                processor="stripe",
+                reason="unresolved_workspace:payout",
+                payload={"id": "txn_triage"},
+                status=ProcessorStatementStagingStatus.PENDING,
+                requeue_count=0,
+            )
+            session.add(staging)
+            await session.commit()
+            staging_id = staging.id
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            triage_response = await client.post(
+                f"/api/v1/billing/reconciliation/staging/{staging_id}/triage",
+                headers={"X-API-Key": "triage-key"},
+                json={"status": "triaged", "triageNote": "Investigating workspace metadata"},
+            )
+            assert triage_response.status_code == 200
+            triage_body = triage_response.json()
+            assert triage_body["status"] == "triaged"
+            assert triage_body["triageNote"] == "Investigating workspace metadata"
+            assert triage_body["resolvedAt"] is None
+
+            requeue_response = await client.post(
+                f"/api/v1/billing/reconciliation/staging/{staging_id}/requeue",
+                headers={"X-API-Key": "triage-key"},
+                json={"triageNote": "Retry sync"},
+            )
+            assert requeue_response.status_code == 200
+            requeue_body = requeue_response.json()
+            assert requeue_body["status"] == "requeued"
+            assert requeue_body["triageNote"] == "Retry sync"
+            assert requeue_body["requeueCount"] == 1
+
+        async with session_factory() as session:
+            refreshed_result = await session.execute(select(ProcessorStatementStaging))
+            refreshed = refreshed_result.scalar_one()
+            assert refreshed.status == ProcessorStatementStagingStatus.REQUEUED
+            assert refreshed.requeue_count == 1
+            assert refreshed.triage_note == "Retry sync"
+            assert refreshed.last_triaged_at is not None
+            assert refreshed.resolved_at is None
+    finally:
+        settings.checkout_api_key = previous_key

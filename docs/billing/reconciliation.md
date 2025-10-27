@@ -22,10 +22,14 @@ This document outlines the workflow for ingesting Stripe statements, processing 
 ## API Endpoints
 
 - `GET /api/v1/billing/reconciliation/runs`: Lists recent reconciliation runs alongside open discrepancies.
+-   The response contains a `metrics` object per run parsed from worker notes (persisted, updated, staged, removed, disputes, cursor, error) and a `stagingBacklog` aggregate covering pending and requeued staging rows.
 - `GET /api/v1/billing/reconciliation/discrepancies`: Returns discrepancies filtered by status.
 - `POST /api/v1/billing/reconciliation/discrepancies/{id}/acknowledge`: Marks a discrepancy as acknowledged.
 - `POST /api/v1/billing/reconciliation/discrepancies/{id}/resolve`: Resolves a discrepancy and records resolution notes.
 - `POST /api/v1/billing/reconciliation/discrepancies/{id}/requeue`: Reopens a discrepancy for further investigation.
+- `GET /api/v1/billing/reconciliation/staging`: Enumerates staged processor events awaiting manual triage with optional status filtering (`pending`, `triaged`, `resolved`, `requeued`).
+- `POST /api/v1/billing/reconciliation/staging/{id}/triage`: Records triage outcomes and notes while updating staging status, automatically marking resolution timestamps when the entry is resolved.
+- `POST /api/v1/billing/reconciliation/staging/{id}/requeue`: Flags a staged entry for reprocessing, increments its requeue counter, and clears prior resolution metadata.
 - `GET /api/v1/billing/reconciliation/statements`: Returns discrepancies linked to processor statements for focused review.
 
 ## Run Cadence & SLAs
