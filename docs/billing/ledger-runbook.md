@@ -41,3 +41,11 @@ summarizes the operational flow and touch points for the payment ledger.
 - Replace the synthetic gateway logic with a real provider client once credentials are available.
 - Enrich the reconciliation worker with processor statement ingestion to validate captured totals.
 - Persist granular adjustment reason codes to support finance audits.
+
+
+## Processor event ledger integration
+
+- Alembic revision `20251026_15` provisions the `processor_events` ledger capturing provider IDs, payload hashes, workspace hints, and replay metadata. Run migrations before enabling the new webhook flow.
+- Stripe webhooks are now persisted before invoice mutations. The API enforces idempotency through ledger lookups and returns `{ "status": "duplicate" }` when the event already exists.
+- Replay orchestration uses `ProcessorEventReplayWorker` and `/api/v1/billing/replays` endpoints. Operators can trigger reprocessing after resolving upstream issues without re-sending webhooks.
+- Failed replays keep `replayRequested` flagged with descriptive `lastReplayError` values. Monitor these when triaging incidents.
