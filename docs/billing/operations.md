@@ -44,6 +44,24 @@ section documents the core operating procedures for finance and platform operato
 5. **Escalate** – If retries continue to fail, capture context in the billing problem tracker and escalate
    to the payments engineering rotation.
 
+## Admin replay console walkthrough
+
+The `/admin/billing/reconciliation/replays` surface exposes replay orchestration controls without requiring
+API tooling. Operators should:
+
+1. **Filter context** – Select the processor provider and replay status from the filter controls. Use the
+   correlation search box for invoice IDs or partial correlation IDs.
+2. **Inspect history** – Expand the **Last error** accordion in each row to review the most recent
+   `lastReplayError` payload, replay attempts, and request timestamps.
+3. **Trigger replay** – Choose **Trigger replay** to queue another attempt. The UI optimistically updates
+   status badges and shows confirmation.
+4. **Handle guardrails** – If a 409 response appears (`Replay limit reached`), use the surfaced **Force replay**
+   button after validating the payload. Force replays call the FastAPI endpoint with `force=true`.
+5. **Verify** – Confirm the operator console reflects updated attempts or eventual success. Refreshing the
+   page fetches live data from `/api/v1/billing/replays`.
+
+Screenshots and walkthroughs are maintained in the admin README to align with evolving UI patterns.
+
 ## Documentation hygiene
 
 - Update this runbook whenever new processors, replay guardrails, or operator tools ship.

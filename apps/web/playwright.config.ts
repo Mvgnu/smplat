@@ -14,6 +14,9 @@ process.env.SANITY_DATASET = process.env.SANITY_DATASET || 'test';
 process.env.MOCK_RECONCILIATION_DASHBOARD_PATH =
   process.env.MOCK_RECONCILIATION_DASHBOARD_PATH ||
   path.resolve(currentDir, './tests/fixtures/reconciliation-dashboard.json');
+process.env.MOCK_PROCESSOR_REPLAYS_PATH =
+  process.env.MOCK_PROCESSOR_REPLAYS_PATH ||
+  path.resolve(currentDir, './tests/fixtures/replay-events.json');
 
 /**
  * @see https://playwright.dev/docs/test-configuration

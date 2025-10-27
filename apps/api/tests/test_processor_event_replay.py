@@ -13,7 +13,7 @@ from smplat_api.models.processor_event import (
     record_processor_event,
 )
 from smplat_api.models.webhook_event import WebhookProviderEnum
-from smplat_api.workers.processor_events import ProcessorEventReplayWorker
+from smplat_api.workers.processor_events import ProcessorEventReplayWorker, ReplayLimitExceededError
 
 
 @pytest.mark.asyncio
@@ -144,3 +144,69 @@ async def test_replay_endpoint_marks_event_for_processing(app_with_db, monkeypat
         refreshed = await session.get(ProcessorEvent, event_id)
         assert refreshed is not None
         assert refreshed.replay_requested is True
+
+
+@pytest.mark.asyncio
+async def test_force_replay_guardrail_returns_conflict(app_with_db, monkeypatch):
+    app, session_factory = app_with_db
+
+    async with session_factory() as session:
+        workspace_id = uuid4()
+        invoice = Invoice(
+            workspace_id=workspace_id,
+            invoice_number="INV-7001",
+            status=InvoiceStatusEnum.ISSUED,
+            currency=CurrencyEnum.EUR,
+            subtotal=Decimal("0"),
+            tax=Decimal("0"),
+            total=Decimal("0"),
+            balance_due=Decimal("0"),
+            due_at=datetime.now(timezone.utc),
+        )
+        session.add(invoice)
+        await session.flush()
+        payload = {
+            "id": "evt_force_conflict",
+            "type": "payment_intent.succeeded",
+            "data": {
+                "object": {
+                    "id": "pi_force_conflict",
+                    "metadata": {"invoice_id": str(invoice.id)},
+                    "customer": "cus_force",
+                    "charges": {"data": [{"id": "ch_force", "amount_captured": 1000, "created": 1}]},
+                }
+            },
+        }
+        recorded = await record_processor_event(
+            session,
+            provider=WebhookProviderEnum.STRIPE,
+            external_id="evt_force_conflict",
+            payload_hash="hash",
+            payload=payload,
+            correlation_id=str(invoice.id),
+            workspace_id=workspace_id,
+            invoice_id=invoice.id,
+        )
+        await session.commit()
+        event_id = recorded.event.id
+
+    class GuardrailWorker:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def process_pending(self, **_kwargs) -> int:  # pragma: no cover - unused
+            return 0
+
+        async def replay_event(self, *_args, **_kwargs):
+            raise ReplayLimitExceededError("Replay limit reached")
+
+    monkeypatch.setattr("smplat_api.api.v1.endpoints.billing_replay.ProcessorEventReplayWorker", GuardrailWorker)
+
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/billing/replays/{event_id}/trigger",
+            json={"force": True},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Replay limit reached"

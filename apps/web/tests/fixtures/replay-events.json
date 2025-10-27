@@ -1,0 +1,32 @@
+[
+  {
+    "id": "evt-1",
+    "provider": "stripe",
+    "externalId": "evt_test_1",
+    "correlationId": "inv_test_1",
+    "workspaceId": "ws_test",
+    "invoiceId": "inv_test_1",
+    "replayRequested": true,
+    "replayRequestedAt": "2024-01-01T00:00:00.000Z",
+    "replayAttempts": 2,
+    "replayedAt": null,
+    "lastReplayError": "Invoice INV-1001 missing",
+    "receivedAt": "2024-01-01T00:00:00.000Z",
+    "createdAt": "2024-01-01T00:00:00.000Z"
+  },
+  {
+    "id": "evt-2",
+    "provider": "stripe",
+    "externalId": "evt_test_2",
+    "correlationId": null,
+    "workspaceId": "ws_test",
+    "invoiceId": null,
+    "replayRequested": false,
+    "replayRequestedAt": null,
+    "replayAttempts": 0,
+    "replayedAt": "2024-01-02T00:00:00.000Z",
+    "lastReplayError": null,
+    "receivedAt": "2024-01-01T05:00:00.000Z",
+    "createdAt": "2024-01-01T05:00:00.000Z"
+  }
+]
