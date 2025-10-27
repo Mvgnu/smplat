@@ -15,6 +15,7 @@ from smplat_api.models.billing_reconciliation import (
     BillingDiscrepancyStatus,
     BillingDiscrepancyType,
     BillingReconciliationRun,
+    BillingSyncCursor,
     ProcessorStatement,
     ProcessorStatementStaging,
     ProcessorStatementStagingStatus,
@@ -63,6 +64,7 @@ class StripeStatementIngestionService:
     async def sync_balance_transactions(
         self,
         *,
+        workspace_id: UUID,
         created_gte: datetime | None = None,
         created_lte: datetime | None = None,
         limit: int = 100,
@@ -75,8 +77,18 @@ class StripeStatementIngestionService:
         staged: list[ProcessorStatementStaging] = []
         removed: list[ProcessorStatement] = []
         next_cursor: str | None = None
+        latest_processed: StripeBalanceTransaction | None = None
+        cursor_dirty = False
 
-        existing_stmt_query = select(ProcessorStatement)
+        workspace_cursor = await self._get_or_create_cursor(
+            workspace_id=workspace_id,
+            object_type="balance_transaction",
+        )
+        cursor_token = starting_after or workspace_cursor.cursor_token
+
+        existing_stmt_query = select(ProcessorStatement).where(
+            ProcessorStatement.workspace_id == workspace_id
+        )
         if created_gte is not None:
             existing_stmt_query = existing_stmt_query.where(ProcessorStatement.occurred_at >= created_gte)
         if created_lte is not None:
@@ -85,7 +97,7 @@ class StripeStatementIngestionService:
         existing_stmt_result = await self._session.execute(existing_stmt_query)
         existing_map = {stmt.transaction_id: stmt for stmt in existing_stmt_result.scalars().all()}
 
-        cursor = starting_after
+        cursor = cursor_token
         while True:
             page = await self._provider.list_balance_transactions(
                 created_gte=created_gte,
@@ -101,8 +113,8 @@ class StripeStatementIngestionService:
             next_cursor = page.next_cursor
             for tx in transactions:
                 existing = existing_map.pop(tx.transaction_id, None)
-                invoice, workspace_id, workspace_hint = await self._resolve_invoice_and_workspace(tx)
-                if workspace_id is None:
+                resolved_invoice, resolved_workspace_id, workspace_hint = await self._resolve_invoice_and_workspace(tx)
+                if resolved_workspace_id is None:
                     staged.append(
                         await self._stage_orphaned_transaction(
                             tx,
@@ -112,14 +124,39 @@ class StripeStatementIngestionService:
                     )
                     continue
 
+                if resolved_workspace_id != workspace_cursor.workspace_id:
+                    staged.append(
+                        await self._stage_orphaned_transaction(
+                            tx,
+                            reason=f"workspace_mismatch:{tx.type}",
+                            workspace_hint=workspace_hint or resolved_workspace_id,
+                        )
+                    )
+                    continue
+
+                tx_updated_at = self._normalize_timestamp(tx.updated_at)
+                cursor_updated_at = self._normalize_timestamp(
+                    workspace_cursor.last_transaction_updated_at
+                )
+                if cursor_updated_at and tx_updated_at and tx_updated_at <= cursor_updated_at:
+                    if tx.transaction_id == workspace_cursor.last_transaction_id:
+                        continue
+                    if tx_updated_at < cursor_updated_at:
+                        continue
+
                 if existing:
-                    if self._apply_transaction_updates(existing, tx, invoice):
+                    if self._apply_transaction_updates(existing, tx, resolved_invoice, resolved_workspace_id):
                         updated.append(existing)
+                    if (
+                        latest_processed is None
+                        or tx_updated_at >= self._normalize_timestamp(latest_processed.updated_at)
+                    ):
+                        latest_processed = tx
                     continue
 
                 statement = ProcessorStatement(
-                    workspace_id=workspace_id,
-                    invoice_id=invoice.id if invoice else None,
+                    workspace_id=resolved_workspace_id,
+                    invoice_id=resolved_invoice.id if resolved_invoice else None,
                     processor="stripe",
                     transaction_id=tx.transaction_id,
                     charge_id=tx.source_id,
@@ -133,6 +170,11 @@ class StripeStatementIngestionService:
                 )
                 self._session.add(statement)
                 persisted.append(statement)
+                if (
+                    latest_processed is None
+                    or tx_updated_at >= self._normalize_timestamp(latest_processed.updated_at)
+                ):
+                    latest_processed = tx
 
             if not page.has_more or not page.next_cursor:
                 break
@@ -143,7 +185,19 @@ class StripeStatementIngestionService:
                 removed.append(missing_statement)
                 staged.append(await self._stage_removed_statement(missing_statement))
 
-        if any([persisted, updated, staged]):
+        if latest_processed:
+            workspace_cursor.last_transaction_id = latest_processed.transaction_id
+            workspace_cursor.last_transaction_occurred_at = latest_processed.created_at
+            workspace_cursor.last_transaction_updated_at = self._normalize_timestamp(
+                latest_processed.updated_at
+            )
+            workspace_cursor.cursor_token = next_cursor or latest_processed.transaction_id
+            cursor_dirty = True
+        elif next_cursor and next_cursor != workspace_cursor.cursor_token:
+            workspace_cursor.cursor_token = next_cursor
+            cursor_dirty = True
+
+        if any([persisted, updated, staged, cursor_dirty]):
             await self._session.flush()
 
         return StatementSyncResult(
@@ -320,6 +374,45 @@ class StripeStatementIngestionService:
             statement.data = incoming_payload
             changed = True
         return changed
+
+    async def _get_or_create_cursor(
+        self, *, workspace_id: UUID, object_type: str
+    ) -> BillingSyncCursor:
+        """Fetch or initialize the durable sync cursor for a workspace scope."""
+
+        result = await self._session.execute(
+            select(BillingSyncCursor).where(
+                BillingSyncCursor.workspace_id == workspace_id,
+                BillingSyncCursor.processor == "stripe",
+                BillingSyncCursor.object_type == object_type,
+            )
+        )
+        cursor = result.scalar_one_or_none()
+        if cursor:
+            return cursor
+
+        cursor = BillingSyncCursor(
+            workspace_id=workspace_id,
+            processor="stripe",
+            object_type=object_type,
+            cursor_token=None,
+            last_transaction_id=None,
+            last_transaction_occurred_at=None,
+            last_transaction_updated_at=None,
+        )
+        self._session.add(cursor)
+        await self._session.flush()
+        return cursor
+
+    @staticmethod
+    def _normalize_timestamp(value: datetime | None) -> datetime | None:
+        """Normalize timestamps to UTC-aware datetimes for safe comparisons."""
+
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     async def _stage_orphaned_transaction(
         self,

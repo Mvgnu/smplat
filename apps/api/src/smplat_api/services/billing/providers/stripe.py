@@ -60,6 +60,7 @@ class StripeBalanceTransaction:
     fee: Decimal
     net: Decimal
     created_at: datetime
+    updated_at: datetime
     source_id: str | None
     raw: Mapping[str, Any]
 
@@ -278,7 +279,19 @@ class StripeBillingProvider:
         data = response.get("data", [])
         transactions: list[StripeBalanceTransaction] = []
         for item in data:
-            created = datetime.fromtimestamp(item.get("created", 0), tz=timezone.utc)
+            created_ts = int(item.get("created", 0))
+            created = datetime.fromtimestamp(created_ts, tz=timezone.utc)
+            available_ts = item.get("available_on")
+            updated_ts = created_ts
+            if isinstance(available_ts, (int, float)) and available_ts > updated_ts:
+                updated_ts = int(available_ts)
+            status_transitions = item.get("status_transitions")
+            if isinstance(status_transitions, dict):
+                for transition_key in ("available", "finalized", "posted", "updated"):
+                    candidate = status_transitions.get(transition_key)
+                    if isinstance(candidate, (int, float)) and candidate > updated_ts:
+                        updated_ts = int(candidate)
+            updated = datetime.fromtimestamp(updated_ts, tz=timezone.utc)
             transactions.append(
                 StripeBalanceTransaction(
                     transaction_id=str(item.get("id")),
@@ -288,6 +301,7 @@ class StripeBillingProvider:
                     fee=self._from_cents(int(item.get("fee", 0))),
                     net=self._from_cents(int(item.get("net", 0))),
                     created_at=created,
+                    updated_at=updated,
                     source_id=str(item.get("source")) if item.get("source") else None,
                     raw=item,
                 )
