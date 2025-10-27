@@ -54,6 +54,9 @@ class InvoiceResponse(BaseModel):
     balance_due: float
     payment_intent_id: Optional[str] = Field(default=None, alias="paymentIntentId")
     external_processor_id: Optional[str] = Field(default=None, alias="externalProcessorId")
+    processor_customer_id: Optional[str] = Field(default=None, alias="processorCustomerId")
+    processor_charge_id: Optional[str] = Field(default=None, alias="processorChargeId")
+    last_payment_error: Optional[str] = Field(default=None, alias="lastPaymentError")
     settlement_at: Optional[str] = Field(default=None, alias="settlementAt")
     adjustments_total: float = Field(default=0, alias="adjustmentsTotal")
     adjustments: Optional[List[Dict[str, object]]] = None
@@ -93,6 +96,18 @@ class AgingBuckets(BaseModel):
     model_config = {
         "populate_by_name": True,
     }
+
+
+
+
+class HostedCheckoutResponse(BaseModel):
+    """Hosted checkout session payload."""
+
+    session_id: str = Field(alias="sessionId")
+    checkout_url: str = Field(alias="checkoutUrl")
+    expires_at: str = Field(alias="expiresAt")
+
+    model_config = {"populate_by_name": True}
 
 
 class InvoiceListResponse(BaseModel):
@@ -197,6 +212,9 @@ def _normalize_invoice(invoice: Invoice) -> InvoiceResponse:
         balance_due=_coerce_decimal(invoice.balance_due),
         payment_intent_id=getattr(invoice, "payment_intent_id", None),
         external_processor_id=getattr(invoice, "external_processor_id", None),
+        processor_customer_id=getattr(invoice, "processor_customer_id", None),
+        processor_charge_id=getattr(invoice, "processor_charge_id", None),
+        last_payment_error=getattr(invoice, "last_payment_error", None),
         settlement_at=settlement_at.isoformat() if settlement_at else None,
         adjustments_total=adjustments_total,
         adjustments=adjustments,
@@ -364,6 +382,50 @@ async def export_invoice(
     filename = f"invoice-{invoice.invoice_number}.csv"
     headers = {"Content-Disposition": f"attachment; filename={filename}"}
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+
+
+@router.post(
+    "/invoices/{invoice_id}/checkout",
+    response_model=HostedCheckoutResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def create_invoice_checkout_session(
+    invoice_id: UUID,
+    workspace_id: UUID = Query(..., description="Workspace identifier"),
+    db: AsyncSession = Depends(get_session),
+) -> HostedCheckoutResponse:
+    """Create a hosted payment session for the invoice."""
+
+    _ensure_rollout(workspace_id)
+
+    stmt = (
+        select(Invoice)
+        .options(selectinload(Invoice.line_items))
+        .where(Invoice.id == invoice_id, Invoice.workspace_id == workspace_id)
+    )
+    result = await db.execute(stmt)
+    invoice = result.scalar_one_or_none()
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+
+    gateway = BillingGatewayClient(db)
+    success_url = f"{settings.frontend_url}/billing/success?invoiceId={invoice_id}"
+    cancel_url = f"{settings.frontend_url}/billing/cancel?invoiceId={invoice_id}"
+    try:
+        session = await gateway.create_hosted_session(
+            invoice, success_url=success_url, cancel_url=cancel_url
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await db.commit()
+    await db.refresh(invoice)
+    return HostedCheckoutResponse(
+        session_id=session.session_id,
+        checkout_url=session.url,
+        expires_at=session.expires_at.isoformat(),
+    )
 
 
 @router.post(
