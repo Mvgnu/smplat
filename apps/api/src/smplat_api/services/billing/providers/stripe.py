@@ -1,4 +1,4 @@
-"""Stripe payment processor integration for billing operations."""
+"""Stripe provider abstractions for billing operations."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Final, Mapping
+from typing import Any, Final, Iterable, Mapping
 
 import stripe
 
@@ -49,6 +49,35 @@ class StripeHostedSession:
     expires_at: datetime
 
 
+@dataclass(slots=True)
+class StripeBalanceTransaction:
+    """Normalized balance transaction data used for statements."""
+
+    transaction_id: str
+    type: str
+    amount: Decimal
+    currency: str
+    fee: Decimal
+    net: Decimal
+    created_at: datetime
+    source_id: str | None
+    raw: Mapping[str, Any]
+
+
+@dataclass(slots=True)
+class StripeDisputeRecord:
+    """Normalized dispute payload returned from Stripe."""
+
+    dispute_id: str
+    charge_id: str | None
+    status: str
+    amount: Decimal
+    currency: str
+    reason: str | None
+    created_at: datetime
+    raw: Mapping[str, Any]
+
+
 class StripeBillingProvider:
     """Thin asynchronous wrapper around the official Stripe SDK."""
 
@@ -79,6 +108,12 @@ class StripeBillingProvider:
 
         quantized = amount.quantize(Decimal("0.01"))
         return int((quantized * 100).to_integral_value())
+
+    @staticmethod
+    def _from_cents(amount: int) -> Decimal:
+        """Convert Stripe integer cents into Decimal amounts."""
+
+        return Decimal(amount) / Decimal(100)
 
     async def create_checkout_session(
         self,
@@ -202,6 +237,92 @@ class StripeBillingProvider:
             refunded_at=refunded_at,
         )
 
+    async def list_balance_transactions(
+        self,
+        *,
+        created_gte: datetime | None = None,
+        created_lte: datetime | None = None,
+        types: Iterable[str] | None = None,
+        limit: int = 100,
+    ) -> list[StripeBalanceTransaction]:
+        """Return balance transactions within the specified window."""
+
+        params: dict[str, Any] = {"limit": limit}
+        if created_gte or created_lte:
+            created_filter: dict[str, int] = {}
+            if created_gte:
+                created_filter["gte"] = int(created_gte.timestamp())
+            if created_lte:
+                created_filter["lte"] = int(created_lte.timestamp())
+            params["created"] = created_filter
+        if types:
+            params["type"] = list(types)
+
+        response = await self._run(stripe.BalanceTransaction.list, **params)
+        transactions: list[StripeBalanceTransaction] = []
+        for item in response.get("data", []):
+            created = datetime.fromtimestamp(item.get("created", 0), tz=timezone.utc)
+            transactions.append(
+                StripeBalanceTransaction(
+                    transaction_id=str(item.get("id")),
+                    type=str(item.get("type", "unknown")),
+                    amount=self._from_cents(int(item.get("amount", 0))),
+                    currency=str(item.get("currency", "USD")).upper(),
+                    fee=self._from_cents(int(item.get("fee", 0))),
+                    net=self._from_cents(int(item.get("net", 0))),
+                    created_at=created,
+                    source_id=str(item.get("source")) if item.get("source") else None,
+                    raw=item,
+                )
+            )
+        return transactions
+
+    async def list_disputes(
+        self,
+        *,
+        created_gte: datetime | None = None,
+        created_lte: datetime | None = None,
+        limit: int = 100,
+    ) -> list[StripeDisputeRecord]:
+        """Fetch dispute records for the given window."""
+
+        params: dict[str, Any] = {"limit": limit}
+        if created_gte or created_lte:
+            created_filter: dict[str, int] = {}
+            if created_gte:
+                created_filter["gte"] = int(created_gte.timestamp())
+            if created_lte:
+                created_filter["lte"] = int(created_lte.timestamp())
+            params["created"] = created_filter
+
+        response = await self._run(stripe.Dispute.list, **params)
+        disputes: list[StripeDisputeRecord] = []
+        for item in response.get("data", []):
+            created = datetime.fromtimestamp(item.get("created", 0), tz=timezone.utc)
+            amount = self._from_cents(int(item.get("amount", 0)))
+            currency = str(item.get("currency", "USD")).upper()
+            disputes.append(
+                StripeDisputeRecord(
+                    dispute_id=str(item.get("id")),
+                    charge_id=str(item.get("charge")) if item.get("charge") else None,
+                    status=str(item.get("status", "unknown")),
+                    amount=amount,
+                    currency=currency,
+                    reason=str(item.get("reason")) if item.get("reason") else None,
+                    created_at=created,
+                    raw=item,
+                )
+            )
+        return disputes
+
+    async def retrieve_charge(self, charge_id: str) -> Mapping[str, Any]:
+        """Retrieve a charge object from Stripe."""
+
+        if not charge_id:
+            raise ValueError("charge_id is required")
+        charge = await self._run(stripe.Charge.retrieve, charge_id)
+        return charge
+
     @property
     def webhook_secret(self) -> str | None:
         """Expose configured webhook signing secret."""
@@ -214,4 +335,6 @@ __all__ = [
     "StripeCaptureResponse",
     "StripeHostedSession",
     "StripeRefundResponse",
+    "StripeBalanceTransaction",
+    "StripeDisputeRecord",
 ]
