@@ -93,6 +93,14 @@ class TrustMetricResponse(BaseModel):
         default=None,
         description="Structured forecast payload for metrics that project future outcomes.",
     )
+    alerts: list[str] = Field(
+        default_factory=list,
+        description="Alert codes highlighting delivery risk or data limitations.",
+    )
+    fallback_copy: str | None = Field(
+        default=None,
+        description="Narrative fallback copy when live data is unavailable or degraded.",
+    )
 
 
 class TrustMetricForecastWindow(BaseModel):
@@ -242,6 +250,18 @@ async def resolve_trust_experience(
                 ),
                 unsupported_guard=_derive_unsupported_guard(item),
                 forecast=(TrustMetricForecast(**item.forecast) if item.forecast else None),
+                alerts=(
+                    [str(code) for code in item.metadata.get("forecast_alerts", [])]
+                    if isinstance(item.metadata, dict)
+                    and isinstance(item.metadata.get("forecast_alerts"), list)
+                    else []
+                ),
+                fallback_copy=(
+                    item.metadata.get("fallback_copy")
+                    if isinstance(item.metadata, dict)
+                    and isinstance(item.metadata.get("fallback_copy"), str)
+                    else None
+                ),
             )
             for item in resolved
         ],

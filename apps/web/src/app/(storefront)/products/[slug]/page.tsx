@@ -2,7 +2,9 @@ import { Metadata } from "next";
 import Link from "next/link";
 import type { ResolvingMetadata } from "next";
 
+import { getCheckoutTrustExperience } from "@/server/cms/trust";
 import { getPageBySlug } from "@/server/cms/loaders";
+import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import type { PageDocument } from "@/server/cms/types";
 import { ProductDetail } from "@/types/product";
 
@@ -12,7 +14,19 @@ import {
   marketingFallbacks,
   type MarketingContent,
   type GalleryItem,
+  type Metric,
+  type Review,
+  type Bundle,
 } from "../marketing-content";
+
+const trustAlertDescriptions: Record<string, string> = {
+  sla_breach_risk: "Projected clearance exceeds the guaranteed delivery SLA.",
+  sla_watch: "Operators are tracking elevated backlog depth.",
+  limited_history: "Forecast is calibrating from a limited completion sample.",
+  forecast_unavailable: "Forecast temporarily offline – showing fallback narrative.",
+  no_staffing_capacity: "No upcoming staffing capacity windows are scheduled.",
+  partial_support: "Only a subset of SKUs currently have staffed coverage.",
+};
 
 const apiBase =
   process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -159,6 +173,91 @@ function mergeMarketingContent(fallback: MarketingContent, page: PageDocument | 
   };
 }
 
+function integrateTrustSignals(
+  marketing: MarketingContent,
+  trust: CheckoutTrustExperience | null | undefined,
+): MarketingContent {
+  if (!trust) {
+    return marketing;
+  }
+
+  const metrics = [...marketing.metrics];
+  trust.performanceSnapshots.forEach((snapshot) => {
+    const label = snapshot.label?.trim();
+    if (!label) {
+      return;
+    }
+
+    const metric = snapshot.metric as CheckoutMetricVerification | undefined;
+    const resolvedValue =
+      metric?.formattedValue ?? snapshot.value ?? snapshot.fallbackValue ?? null;
+    if (!resolvedValue) {
+      return;
+    }
+
+    const fallbackCaption = metric?.fallbackCopy ?? undefined;
+    const alertCaption = metric?.alerts
+      ?.map((code) => (typeof code === "string" ? trustAlertDescriptions[code] ?? null : null))
+      .find((message) => Boolean(message)) ?? null;
+    const caption = fallbackCaption ?? snapshot.caption ?? metric?.provenanceNote ?? alertCaption ?? undefined;
+
+    const replacement = { label, value: resolvedValue, caption } satisfies Metric;
+    const existingIndex = metrics.findIndex((item) => item.label === label);
+    if (existingIndex >= 0) {
+      metrics[existingIndex] = replacement;
+    } else {
+      metrics.push(replacement);
+    }
+  });
+
+  const reviews = [...marketing.reviews];
+  trust.testimonials.forEach((testimonial) => {
+    if (!testimonial.quote?.trim()) {
+      return;
+    }
+    const id = testimonial.id ?? testimonial.author ?? `testimonial-${reviews.length + 1}`;
+    const replacement = {
+      id,
+      author: testimonial.author ?? "Client",
+      role: testimonial.role ?? undefined,
+      rating: 5,
+      highlight: testimonial.quote,
+    } satisfies Review;
+    const index = reviews.findIndex((review) => review.id === id);
+    if (index >= 0) {
+      reviews[index] = replacement;
+    } else {
+      reviews.push(replacement);
+    }
+  });
+
+  const bundles = [...marketing.bundles];
+  trust.bundleOffers.forEach((bundle) => {
+    if (!bundle.slug?.trim()) {
+      return;
+    }
+    const replacement = {
+      slug: bundle.slug,
+      title: bundle.title,
+      description: bundle.description,
+      savings: bundle.savings ?? undefined,
+    } satisfies Bundle;
+    const index = bundles.findIndex((item) => item.slug === bundle.slug);
+    if (index >= 0) {
+      bundles[index] = replacement;
+    } else {
+      bundles.push(replacement);
+    }
+  });
+
+  return {
+    ...marketing,
+    metrics,
+    reviews,
+    bundles,
+  };
+}
+
 async function fetchProduct(slug: string): Promise<ProductDetail | null> {
   try {
     const response = await fetch(`${apiBase}/api/v1/products/${slug}`, {
@@ -200,7 +299,8 @@ export async function generateMetadata(
   const cmsSlug = `product-${product.slug}`;
   const page = await getPageBySlug(cmsSlug);
   const fallback = marketingFallbacks[product.slug] ?? defaultMarketing;
-  const marketing = mergeMarketingContent(fallback, page);
+  const trustExperience = await getCheckoutTrustExperience();
+  const marketing = integrateTrustSignals(mergeMarketingContent(fallback, page), trustExperience);
 
   return {
     title: `${product.title} | SMPLAT`,
@@ -245,7 +345,8 @@ export default async function ProductDetailPage({ params }: PageProps) {
   const cmsSlug = `product-${product.slug}`;
   const page = await getPageBySlug(cmsSlug);
   const fallback = marketingFallbacks[product.slug] ?? defaultMarketing;
-  const marketing = mergeMarketingContent(fallback, page);
+  const trustExperience = await getCheckoutTrustExperience();
+  const marketing = integrateTrustSignals(mergeMarketingContent(fallback, page), trustExperience);
 
   return <ProductDetailClient product={product} marketing={marketing} />;
 }

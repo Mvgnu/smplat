@@ -834,6 +834,43 @@ class FulfillmentMetricsService:
             else:
                 formatted = f"{value:.0f}m"
 
+        overall_alerts: list[str] = []
+
+        if value is None:
+            overall_alerts.append("forecast_unavailable")
+        elif value >= 240:
+            overall_alerts.append("sla_breach_risk")
+        elif value >= 120:
+            overall_alerts.append("sla_watch")
+
+        if len(overall_durations) < 5:
+            overall_alerts.append("limited_history")
+
+        unsupported_codes = [
+            details.get("unsupported_reason")
+            for details in sku_metadata.values()
+            if isinstance(details, dict)
+        ]
+
+        if unsupported_codes and all(code == "no_staffing_capacity" for code in unsupported_codes if code):
+            overall_alerts.append("no_staffing_capacity")
+        elif unsupported_codes and any(code for code in unsupported_codes):
+            overall_alerts.append("partial_support")
+
+        normalized_alerts = list(dict.fromkeys(code for code in overall_alerts if code))
+
+        fallback_copy = None
+        if "no_staffing_capacity" in normalized_alerts:
+            fallback_copy = "Operators are restaffing pods – backlog forecast temporarily unavailable."
+        elif "limited_history" in normalized_alerts:
+            fallback_copy = "Forecast calibrating from recent completions – showing guarantee copy."
+        elif "sla_breach_risk" in normalized_alerts:
+            fallback_copy = "Projected clearance exceeds SLA guardrail – reinforcing backlog messaging."
+        elif "sla_watch" in normalized_alerts:
+            fallback_copy = "Elevated backlog detected – concierge is monitoring delivery commitments."
+        elif "forecast_unavailable" in normalized_alerts:
+            fallback_copy = "No recent completions available – displaying fallback assurance copy."
+
         snapshot = MetricSnapshot(
             metric_id="fulfillment_delivery_sla_forecast",
             value=value,
@@ -846,6 +883,8 @@ class FulfillmentMetricsService:
                 "sku_breakdown": sku_metadata,
                 "observed_tasks": len(overall_durations),
                 "observed_window_days": 30,
+                "forecast_alerts": normalized_alerts,
+                "fallback_copy": fallback_copy,
             },
             forecast={
                 "generated_at": now.isoformat(),

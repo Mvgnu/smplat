@@ -8,6 +8,22 @@ import { cartTotalSelector, useCartStore } from "@/store/cart";
 import { marketingFallbacks } from "../products/marketing-content";
 import { AlertTriangle, BadgeCheck, Clock, ShieldCheck, Users } from "lucide-react";
 
+const alertDescriptions: Record<string, string> = {
+  sla_breach_risk: "Projected clearance exceeds the guaranteed delivery SLA.",
+  sla_watch: "Operators are tracking elevated backlog depth.",
+  limited_history: "Forecast is calibrating from a limited completion sample.",
+  forecast_unavailable: "Forecast temporarily offline – showing fallback narrative.",
+  no_staffing_capacity: "No upcoming staffing capacity windows are scheduled.",
+  partial_support: "Only a subset of SKUs currently have staffed coverage.",
+};
+
+const unsupportedGuardNarratives: Record<string, string> = {
+  all_skus_unsupported:
+    "All staffing pods are offline for this bundle – concierge is reinforcing guarantee messaging.",
+  partial_sku_support:
+    "Some bundles are temporarily unsupported – fallback assurances highlighted for impacted SKUs.",
+};
+
 function formatCurrency(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -65,6 +81,16 @@ function metricTooltip(metric: CheckoutMetricVerification): string {
   if (metric.verificationState === "preview") {
     segments.push("Operator preview value");
   }
+  const alerts = metric.alerts?.filter((code): code is string => typeof code === "string");
+  if (alerts && alerts.length > 0) {
+    alerts.forEach((code) => {
+      const description = alertDescriptions[code] ?? `Alert: ${code}`;
+      segments.push(description);
+    });
+  }
+  if (metric.fallbackCopy) {
+    segments.push(metric.fallbackCopy);
+  }
   return segments.join(" • ");
 }
 
@@ -104,22 +130,27 @@ function metricNote(metric?: CheckoutMetricVerification): string | null {
     return null;
   }
 
+  const alertMessage = metric.alerts?.map((code) => alertDescriptions[code] ?? null).find((message) => message) ?? null;
+  const guardMessage = metric.fallbackCopy
+    ?? (metric.unsupportedGuard ? unsupportedGuardNarratives[metric.unsupportedGuard] ?? null : null);
+
   switch (metric.verificationState) {
     case "fresh":
-      return metric.provenanceNote ?? null;
+      return metric.provenanceNote ?? guardMessage ?? alertMessage ?? null;
     case "preview":
       return metric.provenanceNote
         ? `${metric.provenanceNote} • Preview data`
         : "Preview data supplied by operators.";
     case "stale":
-      return metric.provenanceNote
-        ? `${metric.provenanceNote} • Refresh scheduled`
-        : "Refresh scheduled – showing last computed value.";
+      if (metric.provenanceNote) {
+        return alertMessage ? `${metric.provenanceNote} • ${alertMessage}` : metric.provenanceNote;
+      }
+      return alertMessage ?? "Refresh scheduled – showing last computed value.";
     case "missing":
     case "unsupported":
-      return "Live metric unavailable – showing fallback narrative.";
+      return guardMessage ?? alertMessage ?? "Live metric unavailable – showing fallback narrative.";
     default:
-      return metric.provenanceNote ?? null;
+      return metric.provenanceNote ?? guardMessage ?? alertMessage ?? null;
   }
 }
 
