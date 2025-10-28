@@ -19,6 +19,7 @@ import {
   type SavedConfiguration
 } from "@/store/saved-configurations";
 import type { ProductDetail, ProductOptionGroup } from "@/types/product";
+import type { CatalogBundleRecommendation } from "@smplat/types";
 import type { MarketingContent } from "../marketing-content";
 
 type ConfigSelection = {
@@ -46,6 +47,8 @@ type SelectedAddOnDetail = {
 type ProductDetailClientProps = {
   product: ProductDetail;
   marketing: MarketingContent;
+  recommendations: CatalogBundleRecommendation[];
+  recommendationFallback?: string | null;
 };
 
 function formatCurrency(amount: number, currency: string): string {
@@ -63,6 +66,23 @@ function formatCurrencyDelta(amount: number, currency: string): string {
     return formatted;
   }
   return amount > 0 ? `+${formatted}` : `-${formatted}`;
+}
+
+function formatPercentage(value: number | null | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "–";
+  }
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatQueueDepth(count: number): string {
+  if (count <= 0) {
+    return "Clear";
+  }
+  if (count <= 5) {
+    return `${count} queued`;
+  }
+  return `${count}+ queued`;
 }
 
 function mapOptionGroups(groups: ProductOptionGroup[]): ConfiguratorOptionGroup[] {
@@ -758,7 +778,84 @@ export function ProductDetailClient({ product, marketing }: ProductDetailClientP
         </section>
       ) : null}
 
-      {marketing.bundles.length > 0 ? (
+            {recommendations.length > 0 ? (
+        <section className="rounded-3xl border border-white/10 bg-gradient-to-br from-emerald-500/10 to-white/5 p-8 backdrop-blur">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-white">Dynamic bundle experiments</h2>
+              <p className="text-sm text-white/60">
+                Recommendations balance CMS priorities with live acceptance telemetry and operator readiness.
+              </p>
+            </div>
+            <span className="rounded-full border border-emerald-400/60 px-3 py-1 text-xs uppercase tracking-wide text-emerald-200/80">
+              {recommendations[0]?.provenance.cacheLayer.toUpperCase()}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {recommendations.map((bundle) => (
+              <article key={bundle.slug} className="rounded-2xl border border-white/15 bg-black/30 p-5 text-sm text-white/80">
+                <div className="flex flex-col gap-1 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-base font-semibold text-white">{bundle.title}</p>
+                    {bundle.savingsCopy ? (
+                      <span className="mt-1 inline-flex rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-200">
+                        {bundle.savingsCopy}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className="text-xs font-semibold uppercase tracking-wide text-white/60">
+                    Score {bundle.score.toFixed(1)}
+                  </span>
+                </div>
+                {bundle.description ? <p className="mt-2 text-xs text-white/60">{bundle.description}</p> : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {bundle.components.map((component) => (
+                    <Link
+                      key={component}
+                      href={`/products/${component}`}
+                      className="inline-flex items-center rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white hover:text-white"
+                    >
+                      {component.replace(/-/g, " ")}
+                    </Link>
+                  ))}
+                </div>
+                <dl className="mt-4 grid gap-4 text-xs text-white/60 md:grid-cols-3">
+                  <div>
+                    <dt className="uppercase tracking-wide">Acceptance</dt>
+                    <dd className="text-white">{formatPercentage(bundle.acceptanceRate)}</dd>
+                  </div>
+                  <div>
+                    <dt className="uppercase tracking-wide">Queue depth</dt>
+                    <dd className="text-white">{formatQueueDepth(bundle.queueDepth)}</dd>
+                  </div>
+                  <div>
+                    <dt className="uppercase tracking-wide">CMS priority</dt>
+                    <dd className="text-white">{bundle.cmsPriority}</dd>
+                  </div>
+                </dl>
+                {bundle.notes.length > 0 ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {bundle.notes.map((note) => (
+                      <span key={note} className="rounded-full bg-white/10 px-2 py-1 text-[10px] uppercase tracking-wide text-white/70">
+                        {note.replace(/_/g, " ")}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <p className="mt-4 text-[11px] text-white/50">
+                  Last refreshed {bundle.provenance.cacheRefreshedAt.toLocaleString()} · Cache TTL {bundle.provenance.cacheTtlMinutes}m
+                </p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : recommendationFallback ? (
+        <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-sm text-white/70 backdrop-blur">
+          {recommendationFallback}
+        </section>
+      ) : null}
+
+{marketing.bundles.length > 0 ? (
         <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
           <h2 className="text-2xl font-semibold text-white">Bundle &amp; save</h2>
           <p className="mt-2 text-sm text-white/60">Pair this campaign with complementary services for multi-channel lift.</p>
