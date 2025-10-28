@@ -6,12 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import MutableSequence
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smplat_api.core.settings import settings
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
 from smplat_api.services.billing.providers import StripeBillingProvider, StripeHostedSession
+from smplat_api.services.secrets.stripe import (
+    StripeWorkspaceSecretsResolver,
+    build_default_stripe_secrets_resolver,
+)
 
 
 @dataclass(slots=True)
@@ -42,13 +47,35 @@ class BillingGatewayClient:
     """High-level gateway facade for billing ledger operations."""
 
     # meta: billing-gateway: staged-rollout
-    def __init__(self, db: AsyncSession, provider: StripeBillingProvider | None = None):
+    def __init__(
+        self,
+        db: AsyncSession,
+        workspace_id: UUID,
+        *,
+        provider: StripeBillingProvider | None = None,
+        secrets_resolver: StripeWorkspaceSecretsResolver | None = None,
+    ) -> None:
         self._db = db
-        self._provider = provider or StripeBillingProvider.from_settings()
+        self._workspace_id = workspace_id
+        self._provider = provider
+        self._secrets_resolver = secrets_resolver or build_default_stripe_secrets_resolver()
 
     def _ensure_rollout(self) -> None:
         if settings.billing_rollout_stage == "disabled":
             raise RuntimeError("Billing gateway is disabled in current rollout stage")
+
+    async def _resolve_provider(self) -> StripeBillingProvider:
+        if self._provider is not None:
+            return self._provider
+
+        secrets = await self._secrets_resolver.get(self._workspace_id)
+        if secrets is None:
+            raise RuntimeError("Stripe credentials are not configured for this workspace")
+
+        self._provider = StripeBillingProvider.from_credentials(
+            secrets.api_key, secrets.webhook_secret
+        )
+        return self._provider
 
     async def create_hosted_session(
         self,
@@ -63,7 +90,8 @@ class BillingGatewayClient:
         amount = Decimal(invoice.balance_due or invoice.total or Decimal("0"))
         if amount <= 0:
             raise ValueError("Invoice amount must be positive for hosted checkout")
-        session = await self._provider.create_checkout_session(
+        provider = await self._resolve_provider()
+        session = await provider.create_checkout_session(
             invoice_number=invoice.invoice_number,
             amount=amount,
             currency=invoice.currency.value,
@@ -84,7 +112,8 @@ class BillingGatewayClient:
             raise ValueError("Capture amount must be positive")
 
         idempotency_key = f"invoice-{invoice.id}-capture"
-        provider_result = await self._provider.capture_payment(
+        provider = await self._resolve_provider()
+        provider_result = await provider.capture_payment(
             payment_intent_id=invoice.payment_intent_id,
             amount=capture_amount,
             currency=invoice.currency.value,
@@ -143,7 +172,8 @@ class BillingGatewayClient:
             raise RuntimeError("Invoice does not have a captured charge to refund")
 
         idempotency_key = f"invoice-{invoice.id}-refund"
-        provider_result = await self._provider.refund_payment(
+        provider = await self._resolve_provider()
+        provider_result = await provider.refund_payment(
             charge_id=invoice.processor_charge_id,
             amount=refund_amount,
             metadata={"invoice_id": str(invoice.id), "workspace_id": str(invoice.workspace_id)},

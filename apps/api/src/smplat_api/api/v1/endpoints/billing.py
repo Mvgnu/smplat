@@ -409,7 +409,7 @@ async def create_invoice_checkout_session(
     if invoice is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
 
-    gateway = BillingGatewayClient(db)
+    gateway = BillingGatewayClient(db, workspace_id)
     success_url = f"{settings.frontend_url}/billing/success?invoiceId={invoice_id}"
     cancel_url = f"{settings.frontend_url}/billing/cancel?invoiceId={invoice_id}"
     try:
@@ -454,7 +454,7 @@ async def capture_invoice(
     if invoice is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
 
-    gateway = BillingGatewayClient(db)
+    gateway = BillingGatewayClient(db, workspace_id)
     try:
         decimal_amount = Decimal(str(payload.amount)) if payload.amount is not None else None
         await gateway.capture_payment(invoice, decimal_amount)
@@ -495,7 +495,7 @@ async def refund_invoice(
     if invoice is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
 
-    gateway = BillingGatewayClient(db)
+    gateway = BillingGatewayClient(db, workspace_id)
     try:
         decimal_amount = Decimal(str(payload.amount)) if payload.amount is not None else None
         await gateway.refund_payment(invoice, decimal_amount)

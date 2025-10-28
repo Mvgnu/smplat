@@ -78,7 +78,7 @@ async def test_gateway_capture_updates_invoice(session_factory):
         session.add(invoice)
         await session.flush()
 
-        gateway = BillingGatewayClient(session, provider=stub_provider)
+        gateway = BillingGatewayClient(session, invoice.workspace_id, provider=stub_provider)
         result = await gateway.capture_payment(invoice)
 
         assert result.intent_id == "pi_123"
@@ -113,7 +113,7 @@ async def test_gateway_refund_updates_adjustments(session_factory):
         session.add(invoice)
         await session.flush()
 
-        gateway = BillingGatewayClient(session, provider=stub_provider)
+        gateway = BillingGatewayClient(session, invoice.workspace_id, provider=stub_provider)
         result = await gateway.refund_payment(invoice)
 
         assert result.refund_id == "re_789"
@@ -133,9 +133,13 @@ async def test_checkout_session_endpoint_returns_hosted_url(app_with_db, monkeyp
     settings.billing_rollout_stage = "ga"
     workspace_id = uuid4()
     settings.billing_rollout_workspaces = [str(workspace_id)]
+    previous_secret = settings.stripe_secret_key
+    previous_webhook = settings.stripe_webhook_secret
+    settings.stripe_secret_key = "sk_test_stub"
+    settings.stripe_webhook_secret = "whsec_stub"
 
     stub_provider = StubStripeProvider()
-    monkeypatch.setattr(StripeBillingProvider, "from_settings", staticmethod(lambda: stub_provider))
+    monkeypatch.setattr(StripeBillingProvider, "from_credentials", staticmethod(lambda *args, **kwargs: stub_provider))
 
     try:
         async with session_factory() as session:
@@ -169,13 +173,19 @@ async def test_checkout_session_endpoint_returns_hosted_url(app_with_db, monkeyp
         settings.checkout_api_key = previous_key
         settings.billing_rollout_stage = previous_stage
         settings.billing_rollout_workspaces = previous_workspaces
+        settings.stripe_secret_key = previous_secret
+        settings.stripe_webhook_secret = previous_webhook
 
 
 @pytest.mark.asyncio
 async def test_stripe_webhook_updates_invoice(app_with_db, monkeypatch):
     app, session_factory = app_with_db
     stub_provider = StubStripeProvider()
-    monkeypatch.setattr(StripeBillingProvider, "from_settings", staticmethod(lambda: stub_provider))
+    monkeypatch.setattr(StripeBillingProvider, "from_credentials", staticmethod(lambda *args, **kwargs: stub_provider))
+    previous_secret = settings.stripe_secret_key
+    previous_webhook = settings.stripe_webhook_secret
+    settings.stripe_secret_key = "sk_test_stub"
+    settings.stripe_webhook_secret = "whsec_stub"
 
     class StubReplayWorker:
         def __init__(self, *_args, **_kwargs) -> None:
@@ -192,81 +202,85 @@ async def test_stripe_webhook_updates_invoice(app_with_db, monkeypatch):
         StubReplayWorker,
     )
 
-    async with session_factory() as session:
-        workspace_id = uuid4()
-        user = User(id=workspace_id, email="webhook@example.com", role=UserRoleEnum.CLIENT)
-        session.add(user)
-        invoice = Invoice(
-            workspace_id=workspace_id,
-            invoice_number="INV-5001",
-            status=InvoiceStatusEnum.ISSUED,
-            currency=CurrencyEnum.EUR,
-            subtotal=Decimal("120.00"),
-            tax=Decimal("0"),
-            total=Decimal("120.00"),
-            balance_due=Decimal("120.00"),
-            due_at=datetime.now(timezone.utc),
-        )
-        session.add(invoice)
-        await session.commit()
-        invoice_id = invoice.id
+    try:
+        async with session_factory() as session:
+            workspace_id = uuid4()
+            user = User(id=workspace_id, email="webhook@example.com", role=UserRoleEnum.CLIENT)
+            session.add(user)
+            invoice = Invoice(
+                workspace_id=workspace_id,
+                invoice_number="INV-5001",
+                status=InvoiceStatusEnum.ISSUED,
+                currency=CurrencyEnum.EUR,
+                subtotal=Decimal("120.00"),
+                tax=Decimal("0"),
+                total=Decimal("120.00"),
+                balance_due=Decimal("120.00"),
+                due_at=datetime.now(timezone.utc),
+            )
+            session.add(invoice)
+            await session.commit()
+            invoice_id = invoice.id
 
-    event_payload = {
-        "id": "evt_test",
-        "type": "payment_intent.succeeded",
-        "data": {
-            "object": {
-                "id": "pi_123",
-                "metadata": {"invoice_id": str(invoice_id)},
-                "customer": "cus_abc",
-                "charges": {
-                    "data": [
-                        {
-                            "id": "ch_456",
-                            "amount_captured": 12000,
-                            "created": int(datetime.now(timezone.utc).timestamp()),
-                        }
-                    ]
-                },
-            }
-        },
-    }
+        event_payload = {
+            "id": "evt_test",
+            "type": "payment_intent.succeeded",
+            "data": {
+                "object": {
+                    "id": "pi_123",
+                    "metadata": {"invoice_id": str(invoice_id)},
+                    "customer": "cus_abc",
+                    "charges": {
+                        "data": [
+                            {
+                                "id": "ch_456",
+                                "amount_captured": 12000,
+                                "created": int(datetime.now(timezone.utc).timestamp()),
+                            }
+                        ]
+                    },
+                }
+            },
+        }
 
-    def fake_construct_event(payload: bytes, sig_header: str, secret: str) -> dict[str, object]:  # type: ignore[override]
-        return event_payload
+        def fake_construct_event(payload: bytes, sig_header: str, secret: str) -> dict[str, object]:  # type: ignore[override]
+            return event_payload
 
-    monkeypatch.setattr(stripe.Webhook, 'construct_event', staticmethod(fake_construct_event))
+        monkeypatch.setattr(stripe.Webhook, 'construct_event', staticmethod(fake_construct_event))
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.post(
-            "/api/v1/billing/webhooks/stripe",
-            content="{}",
-            headers={"Stripe-Signature": "sig"},
-        )
-    assert response.status_code == 202
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/billing/webhooks/stripe",
+                content="{}",
+                headers={"Stripe-Signature": "sig"},
+            )
+        assert response.status_code == 202
 
-    async with session_factory() as session:
-        refreshed = await session.get(Invoice, invoice.id)
-        assert refreshed is not None
-        assert refreshed.status == InvoiceStatusEnum.PAID
-        assert refreshed.processor_charge_id == "ch_456"
-        assert refreshed.webhook_replay_token == "evt_test"
-        assert refreshed.payment_timeline_json[-1]["event"] == "captured"
+        async with session_factory() as session:
+            refreshed = await session.get(Invoice, invoice.id)
+            assert refreshed is not None
+            assert refreshed.status == InvoiceStatusEnum.PAID
+            assert refreshed.processor_charge_id == "ch_456"
+            assert refreshed.webhook_replay_token == "evt_test"
+            assert refreshed.payment_timeline_json[-1]["event"] == "captured"
 
-        ledger_stmt = select(ProcessorEvent).where(ProcessorEvent.external_id == "evt_test")
-        ledger_result = await session.execute(ledger_stmt)
-        stored_event = ledger_result.scalar_one()
-        assert stored_event.payload_hash is not None
-        assert stored_event.invoice_id == invoice.id
-        assert stored_event.replay_attempts == 1
-        assert stored_event.replay_requested is False
+            ledger_stmt = select(ProcessorEvent).where(ProcessorEvent.external_id == "evt_test")
+            ledger_result = await session.execute(ledger_stmt)
+            stored_event = ledger_result.scalar_one()
+            assert stored_event.payload_hash is not None
+            assert stored_event.invoice_id == invoice.id
+            assert stored_event.replay_attempts == 1
+            assert stored_event.replay_requested is False
+    finally:
+        settings.stripe_secret_key = previous_secret
+        settings.stripe_webhook_secret = previous_webhook
 
 
 @pytest.mark.asyncio
 async def test_stripe_webhook_duplicate_event_returns_duplicate(app_with_db, monkeypatch):
     app, session_factory = app_with_db
     stub_provider = StubStripeProvider()
-    monkeypatch.setattr(StripeBillingProvider, "from_settings", staticmethod(lambda: stub_provider))
+    monkeypatch.setattr(StripeBillingProvider, "from_credentials", staticmethod(lambda *args, **kwargs: stub_provider))
 
     class StubReplayWorker:
         def __init__(self, *_args, **_kwargs) -> None:
@@ -283,69 +297,86 @@ async def test_stripe_webhook_duplicate_event_returns_duplicate(app_with_db, mon
         StubReplayWorker,
     )
 
-    async with session_factory() as session:
-        workspace_id = uuid4()
-        user = User(id=workspace_id, email="dup@example.com", role=UserRoleEnum.CLIENT)
-        session.add(user)
-        invoice = Invoice(
-            workspace_id=workspace_id,
-            invoice_number="INV-5002",
-            status=InvoiceStatusEnum.ISSUED,
-            currency=CurrencyEnum.EUR,
-            subtotal=Decimal("120.00"),
-            tax=Decimal("0"),
-            total=Decimal("120.00"),
-            balance_due=Decimal("120.00"),
-            due_at=datetime.now(timezone.utc),
-        )
-        session.add(invoice)
-        await session.commit()
-        invoice_id = invoice.id
+    previous_secret = settings.stripe_secret_key
+    previous_webhook = settings.stripe_webhook_secret
+    settings.stripe_secret_key = "sk_test_stub"
+    settings.stripe_webhook_secret = "whsec_stub"
 
-    event_payload = {
-        "id": "evt_duplicate",
-        "type": "payment_intent.succeeded",
-        "data": {
-            "object": {
-                "id": "pi_dup",
-                "metadata": {"invoice_id": str(invoice_id)},
-                "customer": "cus_dup",
-                "charges": {"data": [{"id": "ch_dup", "amount_captured": 12000, "created": int(datetime.now(timezone.utc).timestamp())}]},
-            }
-        },
-    }
+    try:
+        async with session_factory() as session:
+            workspace_id = uuid4()
+            user = User(id=workspace_id, email="dup@example.com", role=UserRoleEnum.CLIENT)
+            session.add(user)
+            invoice = Invoice(
+                workspace_id=workspace_id,
+                invoice_number="INV-5002",
+                status=InvoiceStatusEnum.ISSUED,
+                currency=CurrencyEnum.EUR,
+                subtotal=Decimal("120.00"),
+                tax=Decimal("0"),
+                total=Decimal("120.00"),
+                balance_due=Decimal("120.00"),
+                due_at=datetime.now(timezone.utc),
+            )
+            session.add(invoice)
+            await session.commit()
+            invoice_id = invoice.id
 
-    monkeypatch.setattr(stripe.Webhook, 'construct_event', staticmethod(lambda payload, sig_header, secret: event_payload))
+        event_payload = {
+            "id": "evt_duplicate",
+            "type": "payment_intent.succeeded",
+            "data": {
+                "object": {
+                    "id": "pi_dup",
+                    "metadata": {"invoice_id": str(invoice_id)},
+                    "customer": "cus_dup",
+                    "charges": {
+                        "data": [
+                            {
+                                "id": "ch_dup",
+                                "amount_captured": 12000,
+                                "created": int(datetime.now(timezone.utc).timestamp()),
+                            }
+                        ]
+                    },
+                }
+            },
+        }
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        first = await client.post(
-            "/api/v1/billing/webhooks/stripe",
-            content="{}",
-            headers={"Stripe-Signature": "sig"},
-        )
-        second = await client.post(
-            "/api/v1/billing/webhooks/stripe",
-            content="{}",
-            headers={"Stripe-Signature": "sig"},
-        )
+        monkeypatch.setattr(stripe.Webhook, 'construct_event', staticmethod(lambda payload, sig_header, secret: event_payload))
 
-    assert first.status_code == 202
-    assert second.status_code == 202
-    assert second.json()["status"] == "duplicate"
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            first = await client.post(
+                "/api/v1/billing/webhooks/stripe",
+                content="{}",
+                headers={"Stripe-Signature": "sig"},
+            )
+            second = await client.post(
+                "/api/v1/billing/webhooks/stripe",
+                content="{}",
+                headers={"Stripe-Signature": "sig"},
+            )
 
-    async with session_factory() as session:
-        ledger_stmt = select(ProcessorEvent).where(ProcessorEvent.external_id == "evt_duplicate")
-        ledger_result = await session.execute(ledger_stmt)
-        stored_event = ledger_result.scalar_one()
-        assert stored_event.replay_attempts == 1
-        assert stored_event.replay_requested is False
+        assert first.status_code == 202
+        assert second.status_code == 202
+        assert second.json()["status"] == "duplicate"
+
+        async with session_factory() as session:
+            ledger_stmt = select(ProcessorEvent).where(ProcessorEvent.external_id == "evt_duplicate")
+            ledger_result = await session.execute(ledger_stmt)
+            stored_event = ledger_result.scalar_one()
+            assert stored_event.replay_attempts == 1
+            assert stored_event.replay_requested is False
+    finally:
+        settings.stripe_secret_key = previous_secret
+        settings.stripe_webhook_secret = previous_webhook
 
 
 @pytest.mark.asyncio
 async def test_stripe_webhook_missing_invoice_records_event(app_with_db, monkeypatch):
     app, session_factory = app_with_db
     stub_provider = StubStripeProvider()
-    monkeypatch.setattr(StripeBillingProvider, "from_settings", staticmethod(lambda: stub_provider))
+    monkeypatch.setattr(StripeBillingProvider, "from_credentials", staticmethod(lambda *args, **kwargs: stub_provider))
 
     class StubReplayWorker:
         def __init__(self, *_args, **_kwargs) -> None:
@@ -361,6 +392,11 @@ async def test_stripe_webhook_missing_invoice_records_event(app_with_db, monkeyp
         "smplat_api.api.v1.endpoints.billing_webhooks.ProcessorEventReplayWorker",
         StubReplayWorker,
     )
+
+    previous_secret = settings.stripe_secret_key
+    previous_webhook = settings.stripe_webhook_secret
+    settings.stripe_secret_key = "sk_test_stub"
+    settings.stripe_webhook_secret = "whsec_stub"
 
     event_payload = {
         "id": "evt_orphan",
@@ -370,27 +406,39 @@ async def test_stripe_webhook_missing_invoice_records_event(app_with_db, monkeyp
                 "id": "pi_orphan",
                 "metadata": {"invoice_id": str(uuid4())},
                 "customer": "cus_orphan",
-                "charges": {"data": [{"id": "ch_orphan", "amount_captured": 12000, "created": int(datetime.now(timezone.utc).timestamp())}]},
+                "charges": {
+                    "data": [
+                        {
+                            "id": "ch_orphan",
+                            "amount_captured": 12000,
+                            "created": int(datetime.now(timezone.utc).timestamp()),
+                        }
+                    ]
+                },
             }
         },
     }
 
     monkeypatch.setattr(stripe.Webhook, 'construct_event', staticmethod(lambda payload, sig_header, secret: event_payload))
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.post(
-            "/api/v1/billing/webhooks/stripe",
-            content="{}",
-            headers={"Stripe-Signature": "sig"},
-        )
+    try:
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/billing/webhooks/stripe",
+                content="{}",
+                headers={"Stripe-Signature": "sig"},
+            )
 
-    assert response.status_code == 202
-    assert response.json()["status"] == "ignored"
+        assert response.status_code == 202
+        assert response.json()["status"] == "ignored"
 
-    async with session_factory() as session:
-        ledger_stmt = select(ProcessorEvent).where(ProcessorEvent.external_id == "evt_orphan")
-        ledger_result = await session.execute(ledger_stmt)
-        stored_event = ledger_result.scalar_one()
-        assert stored_event.replay_requested is True
-        assert stored_event.last_replay_error == "invoice_not_found"
-        assert stored_event.replay_attempts == 1
+        async with session_factory() as session:
+            ledger_stmt = select(ProcessorEvent).where(ProcessorEvent.external_id == "evt_orphan")
+            ledger_result = await session.execute(ledger_stmt)
+            stored_event = ledger_result.scalar_one()
+            assert stored_event.replay_requested is True
+            assert stored_event.last_replay_error == "invoice_not_found"
+            assert stored_event.replay_attempts == 1
+    finally:
+        settings.stripe_secret_key = previous_secret
+        settings.stripe_webhook_secret = previous_webhook

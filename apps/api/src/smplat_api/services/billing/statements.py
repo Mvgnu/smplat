@@ -27,6 +27,10 @@ from smplat_api.services.billing.providers import (
     StripeBillingProvider,
     StripeDisputeRecord,
 )
+from smplat_api.services.secrets.stripe import (
+    StripeWorkspaceSecretsResolver,
+    build_default_stripe_secrets_resolver,
+)
 
 
 @dataclass(slots=True)
@@ -57,9 +61,32 @@ class StatementSyncResult:
 class StripeStatementIngestionService:
     """Synchronize Stripe balance transactions and disputes."""
 
-    def __init__(self, session: AsyncSession, provider: StripeBillingProvider | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        provider: StripeBillingProvider | None = None,
+        *,
+        secrets_resolver: StripeWorkspaceSecretsResolver | None = None,
+    ) -> None:
         self._session = session
-        self._provider = provider or StripeBillingProvider.from_settings()
+        self._default_provider = provider
+        self._workspace_providers: dict[UUID, StripeBillingProvider] = {}
+        self._secrets_resolver = secrets_resolver or build_default_stripe_secrets_resolver()
+
+    async def _resolve_provider(self, workspace_id: UUID) -> StripeBillingProvider:
+        if self._default_provider is not None:
+            return self._default_provider
+
+        if workspace_id in self._workspace_providers:
+            return self._workspace_providers[workspace_id]
+
+        secrets = await self._secrets_resolver.get(workspace_id)
+        if secrets is None:
+            raise RuntimeError(f"Stripe credentials are not configured for workspace {workspace_id}")
+
+        provider = StripeBillingProvider.from_credentials(secrets.api_key, secrets.webhook_secret)
+        self._workspace_providers[workspace_id] = provider
+        return provider
 
     async def sync_balance_transactions(
         self,
@@ -97,9 +124,10 @@ class StripeStatementIngestionService:
         existing_stmt_result = await self._session.execute(existing_stmt_query)
         existing_map = {stmt.transaction_id: stmt for stmt in existing_stmt_result.scalars().all()}
 
+        provider = await self._resolve_provider(workspace_id)
         cursor = cursor_token
         while True:
-            page = await self._provider.list_balance_transactions(
+            page = await provider.list_balance_transactions(
                 created_gte=created_gte,
                 created_lte=created_lte,
                 limit=limit,
@@ -211,13 +239,15 @@ class StripeStatementIngestionService:
     async def sync_disputes(
         self,
         *,
+        workspace_id: UUID,
         created_gte: datetime | None = None,
         created_lte: datetime | None = None,
         limit: int = 100,
     ) -> list[BillingDiscrepancy]:
         """Capture dispute information and create discrepancy placeholders."""
 
-        disputes: list[StripeDisputeRecord] = await self._provider.list_disputes(
+        provider = await self._resolve_provider(workspace_id)
+        disputes: list[StripeDisputeRecord] = await provider.list_disputes(
             created_gte=created_gte,
             created_lte=created_lte,
             limit=limit,
@@ -561,7 +591,8 @@ class StripeStatementIngestionService:
 
     async def _fetch_charge_metadata(self, charge_id: str) -> dict[str, str]:
         try:
-            charge = await self._provider.retrieve_charge(charge_id)
+            provider = await self._resolve_provider(workspace_id)
+            charge = await provider.retrieve_charge(charge_id)
         except Exception:
             return {}
         metadata = charge.get("metadata") if isinstance(charge, dict) else None

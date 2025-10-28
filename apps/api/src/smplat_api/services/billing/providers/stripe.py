@@ -102,18 +102,30 @@ class StripeBillingProvider:
             raise ValueError("Stripe secret key must be provided")
         self._secret_key = secret_key
         self._webhook_secret = webhook_secret
-        stripe.api_key = secret_key
 
     @classmethod
     def from_settings(cls) -> "StripeBillingProvider":
         """Build the provider using application settings."""
 
-        return cls(settings.stripe_secret_key, settings.stripe_webhook_secret)
+        return cls.from_credentials(settings.stripe_secret_key, settings.stripe_webhook_secret)
+
+    @classmethod
+    def from_credentials(
+        cls, secret_key: str, webhook_secret: str | None = None
+    ) -> "StripeBillingProvider":
+        """Instantiate the provider from explicit credential material."""
+
+        return cls(secret_key, webhook_secret)
 
     async def _run(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """Execute blocking Stripe SDK calls in a worker thread."""
 
-        return await asyncio.to_thread(func, *args, **kwargs)
+        previous_key = stripe.api_key
+        stripe.api_key = self._secret_key
+        try:
+            return await asyncio.to_thread(func, *args, **kwargs)
+        finally:
+            stripe.api_key = previous_key
 
     @staticmethod
     def _to_cents(amount: Decimal) -> int:

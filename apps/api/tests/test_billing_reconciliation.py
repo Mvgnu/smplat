@@ -585,7 +585,7 @@ async def test_sync_disputes_creates_discrepancy(session_factory):
         provider = StubStatementProvider(transactions, disputes, {})
 
         service = StripeStatementIngestionService(session, provider=provider)  # type: ignore[arg-type]
-        created = await service.sync_disputes()
+        created = await service.sync_disputes(workspace_id=workspace_id)
         assert len(created) == 1
         discrepancy = created[0]
         assert discrepancy.discrepancy_type == BillingDiscrepancyType.UNAPPLIED_REFUND
@@ -643,8 +643,8 @@ async def test_worker_run_once_marks_run_completed(session_factory, monkeypatch:
 
     original_init = StripeStatementIngestionService.__init__
 
-    def patched_init(self, session, provider=None):
-        original_init(self, session, provider=provider or stub_provider)
+    def patched_init(self, session, provider=None, **kwargs):
+        original_init(self, session, provider=provider or stub_provider, **kwargs)
 
     monkeypatch.setattr(StripeStatementIngestionService, "__init__", patched_init)
 
@@ -680,8 +680,8 @@ async def test_worker_run_once_marks_failure(session_factory, monkeypatch: pytes
     failing_provider = FailingProvider([], [], {})
     original_init = StripeStatementIngestionService.__init__
 
-    def patched_init(self, session, provider=None):
-        original_init(self, session, provider=provider or failing_provider)
+    def patched_init(self, session, provider=None, **kwargs):
+        original_init(self, session, provider=provider or failing_provider, **kwargs)
 
     monkeypatch.setattr(StripeStatementIngestionService, "__init__", patched_init)
 
