@@ -140,7 +140,7 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_sessio
         _enqueue_replay_processing()
         return {"status": "duplicate"}
 
-    await handle_stripe_event(invoice, event_type, data_object)
+    await handle_stripe_event(db, invoice, event_type, data_object)
     invoice.webhook_replay_token = event_id
     await register_replay_attempt(db, event=record.event, attempted_at=now, error=None)
     await db.flush()

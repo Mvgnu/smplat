@@ -15,7 +15,9 @@ poetry run pytest
 See `/docs` for full architecture decisions.
 
 ## Billing Gateway Integration
-- Hosted Stripe Checkout session endpoint: `POST /api/v1/billing/invoices/{invoiceId}/checkout` (requires `X-API-Key`) and now persists durable session rows linked to invoices for lifecycle analytics.
+- Hosted Stripe Checkout session endpoint: `POST /api/v1/billing/invoices/{invoiceId}/checkout` (requires `X-API-Key`) persists durable session rows linked to invoices for lifecycle analytics.
+- Hosted checkout lifecycle endpoints: `GET /api/v1/billing/sessions` + `GET /api/v1/billing/sessions/{sessionId}` expose workspace-scoped visibility, while `POST /api/v1/billing/sessions/{sessionId}/regenerate` triggers operator retries with optimistic locking on `updatedAt`.
+- Lifecycle automation: `smplat_api.services.billing.sessions.sweep_hosted_sessions` performs expiry/abandonment sweeps and is safe to run on a scheduler or async worker tick.
 - Webhook receiver: `POST /api/v1/billing/webhooks/stripe` validates Stripe signatures, persists the raw payload, and applies payment lifecycle updates.
 - Processor event ledger: `/api/v1/billing/webhooks/stripe` writes to `processor_events` before mutating invoices. Replay
   operations live under `/api/v1/billing/replays` for deterministic reprocessing.

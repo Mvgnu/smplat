@@ -1,6 +1,6 @@
 # Implementation Status Report
 
-_Last updated: 2025-10-17_
+_Last updated: 2025-10-18_
 
 ## Overall Summary
 - Storefront, checkout, and Stripe handoff are live end-to-end with configurable bundles, subscriptions, cart persistence, and fulfillment kick-off after successful payments.
@@ -11,7 +11,7 @@ _Last updated: 2025-10-17_
 - CMS schemas and seeding scripts are prepared; storefront marketing sections now pull from Payload by default and gracefully fall back to Sanity only when explicitly configured.
 - Client-facing dashboard (`/dashboard`) now requires an authenticated session, preloads assigned orders with persisted selection, surfaces fulfillment rollups, Instagram analytics, and catalog telemetry, and exposes notification preferences.
 - Billing center surfaces invoice history with CSV exports, staged rollout guardrails, and campaign intelligence overlays that correlate spend, fulfillment outcomes, and Instagram reach deltas.
-- Hosted Stripe checkout sessions persist to Postgres with invoice linkage, unlocking lifecycle analytics groundwork pending webhook enrichment.
+- Hosted Stripe checkout sessions now transition via webhook enrichment, scheduled expiry/abandonment sweeps, and operator APIs for regeneration, giving finance/support teams actionable lifecycle telemetry.
 - Weekly digests aggregate order/fulfillment activity via `tooling/scripts/run_weekly_digest.py`, reusing NotificationService templates with marketing preference enforcement.
 
 ## Storefront & Checkout
@@ -26,7 +26,7 @@ _Last updated: 2025-10-17_
 **Outstanding**
 - Operationalize catalog insights with CMS-driven experiments (e.g., automated bundle updates) and fold the exported telemetry into merchandising review cadences.
 - Build analytics + alerting for checkout/webhook success rates (Dashboards, PagerDuty/Webhook to Slack) using the new telemetry fields.
-- Expand hosted session lifecycle transitions (webhook updates, expiry sweeps) to fully unlock recovery cadences and retry automation.
+- Layer hosted session analytics into the dashboard (conversion funnels, retry prompts) and roll out proactive anomaly notifications for abandoned sessions.
 - Wire the new `tooling/scripts/smoke_checkout.py` into CI/CD once an environment can expose checkout + API key safely.
 
 ## Fulfillment & Operations

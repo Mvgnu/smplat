@@ -136,7 +136,7 @@ class ProcessorEventReplayWorker:
             )
             return
 
-        await handle_stripe_event(invoice, event_type, data_object)
+        await handle_stripe_event(session, invoice, event_type, data_object)
         invoice.webhook_replay_token = event.external_id
         await register_replay_attempt(
             session,
