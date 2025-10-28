@@ -11,6 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from smplat_api.core.settings import settings
+from smplat_api.jobs.bundle_guardrails import run_guardrail_evaluation
 from smplat_api.models.catalog import CatalogBundle
 from smplat_api.models.catalog_experiments import (
     CatalogBundleExperiment,
@@ -288,6 +290,90 @@ async def test_guardrail_worker_pauses_and_notifies(
             await session.execute(
                 select(CatalogBundleExperiment.status).where(
                     CatalogBundleExperiment.slug == "exp-worker"
+                )
+            )
+        ).scalar_one()
+        assert status == CatalogBundleExperimentStatus.PAUSED
+
+
+@pytest.mark.asyncio
+async def test_guardrail_job_runs_once(
+    app_with_db: tuple[object, async_sessionmaker[AsyncSession]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, factory = app_with_db
+    monkeypatch.setattr(settings, "bundle_experiment_guardrail_worker_enabled", True, raising=False)
+
+    async with factory() as session:
+        primary, attachment = await _seed_products(session)
+        control_slug, test_slug = await _seed_bundles(session, primary, attachment)
+
+        experiment = CatalogBundleExperiment(
+            slug="exp-job",
+            name="Job Experiment",
+            description=None,
+            status=CatalogBundleExperimentStatus.RUNNING,
+            guardrail_config={"min_acceptance_rate": 0.1},
+            sample_size_guardrail=10,
+        )
+        control_variant = CatalogBundleExperimentVariant(
+            experiment=experiment,
+            key="control",
+            name="Control",
+            weight=50,
+            is_control=True,
+            bundle_slug=control_slug,
+            override_payload={"hero": "baseline"},
+        )
+        test_variant = CatalogBundleExperimentVariant(
+            experiment=experiment,
+            key="test",
+            name="Test",
+            weight=50,
+            is_control=False,
+            bundle_slug=test_slug,
+            override_payload={"hero": "variant"},
+        )
+        session.add_all([experiment, control_variant, test_variant])
+        await session.commit()
+
+        now = dt.datetime.now(dt.timezone.utc)
+        session.add_all(
+            [
+                CatalogBundleExperimentMetric(
+                    experiment_id=experiment.id,
+                    variant_id=control_variant.id,
+                    window_start=now.date(),
+                    lookback_days=30,
+                    acceptance_rate=Decimal("0.2000"),
+                    acceptance_count=20,
+                    sample_size=100,
+                    guardrail_breached=False,
+                    computed_at=now,
+                ),
+                CatalogBundleExperimentMetric(
+                    experiment_id=experiment.id,
+                    variant_id=test_variant.id,
+                    window_start=now.date(),
+                    lookback_days=30,
+                    acceptance_rate=Decimal("0.0200"),
+                    acceptance_count=2,
+                    sample_size=20,
+                    guardrail_breached=True,
+                    computed_at=now,
+                ),
+            ]
+        )
+        await session.commit()
+
+    summary = await run_guardrail_evaluation(session_factory=factory)
+    assert summary["paused"] == 1
+
+    async with factory() as session:
+        status = (
+            await session.execute(
+                select(CatalogBundleExperiment.status).where(
+                    CatalogBundleExperiment.slug == "exp-job"
                 )
             )
         ).scalar_one()

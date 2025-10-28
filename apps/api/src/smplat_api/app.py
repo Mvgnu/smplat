@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from loguru import logger
@@ -10,6 +11,7 @@ from .api.routes import api_router
 from .core.logging import configure_logging
 from .services.fulfillment import TaskProcessor
 from .services.notifications import WeeklyDigestScheduler
+from .scheduling import CatalogJobScheduler
 from .workers import BundleExperimentGuardrailWorker, HostedSessionRecoveryWorker
 
 
@@ -37,6 +39,14 @@ async def lifespan(app: FastAPI):
         interval_seconds=settings.bundle_experiment_guardrail_interval_seconds,
     )
 
+    schedule_path = Path(settings.catalog_job_schedule_path)
+    if not schedule_path.is_absolute():
+        schedule_path = Path(__file__).resolve().parent.parent.parent / schedule_path
+    job_scheduler = CatalogJobScheduler(
+        session_factory=_session_factory,
+        config_path=schedule_path,
+    )
+
     digest_scheduler = WeeklyDigestScheduler(
         session_factory=_session_factory,
         interval_seconds=settings.weekly_digest_interval_seconds,
@@ -48,6 +58,7 @@ async def lifespan(app: FastAPI):
     app.state.weekly_digest_scheduler = digest_scheduler
     app.state.hosted_recovery_worker = recovery_worker
     app.state.bundle_experiment_guardrail_worker = guardrail_worker
+    app.state.catalog_job_scheduler = job_scheduler
 
     if settings.fulfillment_worker_enabled:
         worker_task = asyncio.create_task(processor.start())
@@ -90,11 +101,33 @@ async def lifespan(app: FastAPI):
         )
 
     guardrail_enabled = settings.bundle_experiment_guardrail_worker_enabled
-    if guardrail_enabled:
+    scheduler_enabled = settings.catalog_job_scheduler_enabled
+    if scheduler_enabled:
+        try:
+            job_scheduler.start()
+        except FileNotFoundError as exc:
+            logger.exception("Catalog job scheduler failed to start", error=str(exc))
+        else:
+            logger.info(
+                "Catalog job scheduler enabled",
+                schedule_path=str(schedule_path),
+            )
+    else:
+        logger.info(
+            "Catalog job scheduler disabled",
+            reason="catalog_job_scheduler_enabled is false",
+        )
+
+    if guardrail_enabled and not scheduler_enabled:
         guardrail_worker.start()
         logger.info(
             "Bundle experiment guardrail worker enabled",
             interval_seconds=guardrail_worker.interval_seconds,
+        )
+    elif guardrail_enabled and scheduler_enabled:
+        logger.info(
+            "Bundle experiment guardrail worker managed via scheduler",
+            schedule_path=str(schedule_path),
         )
     else:
         logger.info(
@@ -113,7 +146,9 @@ async def lifespan(app: FastAPI):
             await digest_scheduler.stop()
         if recovery_enabled and recovery_worker.is_running:
             await recovery_worker.stop()
-        if guardrail_enabled and guardrail_worker.is_running:
+        if scheduler_enabled and job_scheduler.is_running:
+            await job_scheduler.stop()
+        if guardrail_enabled and not scheduler_enabled and guardrail_worker.is_running:
             await guardrail_worker.stop()
 
 

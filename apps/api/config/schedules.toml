@@ -1,0 +1,15 @@
+# meta: schedules: bundle-experiments
+timezone = "UTC"
+
+[jobs.bundle_acceptance_aggregation]
+id = "bundle-acceptance-aggregation"
+task = "smplat_api.jobs.bundle_acceptance.run_aggregation"
+cron = "*/30 * * * *"
+
+[jobs.bundle_acceptance_aggregation.kwargs]
+lookback_days = 30
+
+[jobs.bundle_guardrail_evaluation]
+id = "bundle-guardrail-evaluation"
+task = "smplat_api.jobs.bundle_guardrails.run_guardrail_evaluation"
+cron = "*/5 * * * *"

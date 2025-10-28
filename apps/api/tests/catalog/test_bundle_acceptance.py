@@ -6,6 +6,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from smplat_api.core.settings import settings
+from smplat_api.jobs.bundle_acceptance import run_aggregation
 from smplat_api.models.catalog import CatalogBundle, CatalogBundleAcceptanceMetric
 from smplat_api.models.catalog_experiments import (
     CatalogBundleExperiment,
@@ -185,6 +187,39 @@ async def test_aggregator_recomputes_metrics(session_factory: async_sessionmaker
         assert metric.acceptance_count == 1
         assert metric.acceptance_rate == Decimal("0.5000")
         assert metric.last_accepted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_run_aggregation_job(session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "bundle_acceptance_aggregation_enabled", True, raising=False)
+
+    async with session_factory() as session:
+        primary, upsell = await _seed_products(session)
+        await _seed_bundle(
+            session,
+            primary_slug=primary.slug,
+            bundle_slug="bundle-omega",
+            title="Bundle Omega",
+            components=[upsell.slug],
+        )
+
+        now = dt.datetime.now(dt.timezone.utc)
+        await _create_order(session, primary, upsell, include_component=True, created_at=now - dt.timedelta(days=1))
+
+    summary = await run_aggregation(session_factory=session_factory, lookback_days=30)
+    assert summary["processed"] == 1
+
+    async with session_factory() as session:
+        metric = (
+            await session.execute(
+                select(CatalogBundleAcceptanceMetric).where(
+                    CatalogBundleAcceptanceMetric.bundle_slug == "bundle-omega"
+                )
+            )
+        ).scalar_one()
+
+        assert metric.acceptance_count == 1
+        assert metric.sample_size == 1
 
 
 @pytest.mark.asyncio

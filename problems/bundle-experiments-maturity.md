@@ -13,6 +13,7 @@ Delivering maturity requires phased work: (1) data integrity and guardrails (bac
 ## Log of Attempts (Chronological)
 - 2025-05-10: Tracker initialized to capture bundle experimentation maturity effort and ensure follow-up tasks remain visible between sessions.
 - 2025-05-10: Reinstated API guardrail wiring, settings toggles, worker exports, and documentation after accidental checkout wiped changes; queued pytest + storefront unit runs.
+- 2025-05-10: Introduced catalog job scheduler (APScheduler-backed) with TOML cron definitions for acceptance aggregation + guardrail evaluation; expanded API tests and runbook guidance to confirm automation cadence.
 
 ## Resolution Summary
 Pending.
