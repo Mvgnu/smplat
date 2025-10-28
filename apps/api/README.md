@@ -31,4 +31,10 @@ See `/docs` for full architecture decisions.
 - `HOSTED_RECOVERY_SLACK_ENABLED`, `HOSTED_RECOVERY_SLACK_WEBHOOK_URL`, `HOSTED_RECOVERY_SLACK_CHANNEL`: enable Slack escalation for higher-risk attempts.
 - Invoke one-off sweeps with `python tooling/scripts/run_hosted_session_recovery.py --trigger manual`.
 
+## Catalog Experimentation Automation
+- `CATALOG_JOB_SCHEDULER_ENABLED`: start the APScheduler-backed automation runner that consumes `config/schedules.toml`.
+- `CATALOG_JOB_SCHEDULE_PATH`: override the schedule file location (defaults to `config/schedules.toml`).
+- `BUNDLE_ACCEPTANCE_AGGREGATION_ENABLED`: allow the scheduler to execute `run_aggregation` for bundle acceptance metrics.
+- `BUNDLE_EXPERIMENT_GUARDRAIL_WORKER_ENABLED`: enable guardrail pauses + notifier dispatch (used by both the scheduler and the legacy interval worker).
+
 > meta: docs: hosted-recovery

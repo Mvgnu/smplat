@@ -9,7 +9,7 @@
   - `catalog_bundle_experiment_metrics` – time-series telemetry with lift + guardrail flags.
 
 ## Launch Checklist
-1. Ensure checkout acceptance aggregation jobs are scheduled (nightly cron) or run `BundleAcceptanceAggregator.recompute()` manually.
+1. Ensure checkout acceptance aggregation jobs are scheduled via the catalog job scheduler or run `BundleAcceptanceAggregator.recompute()` manually.
 2. Validate control/test bundles exist with up-to-date acceptance metrics.
 3. Use `/admin/merchandising/bundles` → Experimentation control center to create a draft experiment with:
    - Control + test bundle slugs.
@@ -19,8 +19,11 @@
 5. Confirm storefront loaders ingest the new overrides (payload provenance should include `catalog-experiment-service`).
 
 ## Automation & Scheduling
+- **Catalog job scheduler:** Set `CATALOG_JOB_SCHEDULER_ENABLED=true` and point `CATALOG_JOB_SCHEDULE_PATH` (defaults to `config/schedules.toml`) to load cron definitions. The default bundle experimentation schedule registers two jobs:
+  - `bundle-acceptance-aggregation` → `smplat_api.jobs.bundle_acceptance.run_aggregation` (`*/30 * * * *`). Requires `BUNDLE_ACCEPTANCE_AGGREGATION_ENABLED=true`.
+  - `bundle-guardrail-evaluation` → `smplat_api.jobs.bundle_guardrails.run_guardrail_evaluation` (`*/5 * * * *`). Respects `BUNDLE_EXPERIMENT_GUARDRAIL_WORKER_ENABLED` and reuses notifier plumbing.
 - **Backfill telemetry:** Run `python tooling/scripts/backfill_bundle_experiments.py --lookback-days 30` nightly (e.g., `0 2 * * *`) before publishing new overrides. Pass `--dry-run` during rehearsals.
-- **Guardrail worker:** Enable `bundle_experiment_guardrail_worker_enabled=true` in the API environment to evaluate experiments every `bundle_experiment_guardrail_interval_seconds` (default 900s). Configure `bundle_experiment_guardrail_email_recipients` and `bundle_experiment_guardrail_slack_webhook_url` for alert delivery.
+- **Guardrail worker (legacy):** When the scheduler is disabled, set `BUNDLE_EXPERIMENT_GUARDRAIL_WORKER_ENABLED=true` to run the interval loop every `bundle_experiment_guardrail_interval_seconds` (default 900s). Configure `bundle_experiment_guardrail_email_recipients` and `bundle_experiment_guardrail_slack_webhook_url` for alert delivery.
 - **Storefront sync:** `ProductDetailPage` fetches experiments on each request; ensure `CHECKOUT_API_KEY` is populated wherever storefront pages render experiments.
 
 ## QA Fixtures

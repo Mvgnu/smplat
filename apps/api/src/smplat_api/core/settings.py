@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     def _parse_guardrail_recipients(cls, value: object) -> list[str]:
         return cls._parse_rollout_list(value)
 
+    # Catalog automation scheduler
+    catalog_job_scheduler_enabled: bool = False
+    catalog_job_schedule_path: str = "config/schedules.toml"
+    bundle_acceptance_aggregation_enabled: bool = False
+
     # Email / notification settings
     smtp_host: str | None = None
     smtp_port: int = 587
