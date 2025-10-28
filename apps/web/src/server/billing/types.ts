@@ -158,3 +158,34 @@ export type ReconciliationDashboard = {
   staging: ReconciliationStagingEntry[];
   stagingBacklog: number;
 };
+
+export type ProcessorReplayStatus =
+  | "pending"
+  | "queued"
+  | "in-progress"
+  | "succeeded"
+  | "failed";
+
+export type ProcessorReplayEvent = {
+  id: string;
+  provider: string;
+  externalId: string;
+  correlationId: string | null;
+  workspaceId: string | null;
+  invoiceId: string | null;
+  replayRequested: boolean;
+  replayRequestedAt: string | null;
+  replayAttempts: number;
+  replayedAt: string | null;
+  lastReplayError: string | null;
+  receivedAt: string;
+  createdAt: string;
+  status: ProcessorReplayStatus;
+};
+
+export type ProcessorReplayFilters = {
+  provider?: string;
+  status?: ProcessorReplayStatus | "all";
+  correlationId?: string;
+  limit?: number;
+};
