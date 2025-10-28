@@ -47,6 +47,37 @@ export type ProductSubscriptionPlan = {
   displayOrder: number;
 };
 
+export type ProductDeliveryEstimate = {
+  minDays?: number | null;
+  maxDays?: number | null;
+  averageDays?: number | null;
+  confidence?: string | null;
+  headline?: string | null;
+  narrative?: string | null;
+};
+
+export type ProductAssurancePoint = {
+  id: string;
+  label: string;
+  description?: string | null;
+  evidence?: string | null;
+  source?: string | null;
+};
+
+export type ProductSupportChannel = {
+  id: string;
+  channel: string;
+  label: string;
+  target: string;
+  availability?: string | null;
+};
+
+export type ProductFulfillmentSummary = {
+  delivery?: ProductDeliveryEstimate;
+  assurances?: ProductAssurancePoint[];
+  support?: ProductSupportChannel[];
+};
+
 export type ProductDetail = {
   id: string;
   slug: string;
@@ -60,4 +91,5 @@ export type ProductDetail = {
   addOns: ProductAddOn[];
   customFields: ProductCustomField[];
   subscriptionPlans: ProductSubscriptionPlan[];
+  fulfillmentSummary?: ProductFulfillmentSummary | null;
 };

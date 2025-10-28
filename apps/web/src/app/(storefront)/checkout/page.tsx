@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { getCheckoutTrustExperience } from "@/server/cms/trust";
+
 import { CheckoutPageClient } from "./checkout.client";
 
 export const metadata: Metadata = {
@@ -7,6 +9,8 @@ export const metadata: Metadata = {
   description: "Complete your SMPLAT service purchase securely."
 };
 
-export default function CheckoutPage() {
-  return <CheckoutPageClient />;
+export default async function CheckoutPage() {
+  const trustExperience = await getCheckoutTrustExperience();
+
+  return <CheckoutPageClient trustContent={trustExperience} />;
 }

@@ -27,6 +27,7 @@ This document outlines the immediate implementation plan to transform SMPLAT fro
   - Service comparison and recommendations
   - Mobile-responsive design
 - **Status**: Product listing, configurable service detail, persistent cart, and checkout funnel live; product detail marketing pulls from Sanity page documents; saved configurations, price breakdown ledger, CMS-backed media galleries, catalog sort options, and bundle recommendations now in place. Next up: merch analytics experiments and deeper CMS-driven landing controls.
+- **Status**: Product listing, configurable service detail, persistent cart, and checkout funnel live; product detail marketing pulls from Sanity page documents; saved configurations, price breakdown ledger, CMS-backed media galleries, catalog sort options, bundle recommendations, and a CMS-managed checkout trust layer with concierge entry points and dynamic delivery timelines are now in place. Next up: merch analytics experiments and deeper CMS-driven landing controls.
 - **Observability**: `/api/v1/observability/catalog-search` captures search/filter/sort usage to inform merchandising decisions.
 
 #### 2. Stripe Payment Integration

@@ -31,6 +31,45 @@ class ProductSubscriptionBillingCycle(str, Enum):
     ANNUAL = "annual"
 
 
+class ProductDeliveryEstimate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    min_days: int | None = Field(None, alias="minDays")
+    max_days: int | None = Field(None, alias="maxDays")
+    average_days: int | None = Field(None, alias="averageDays")
+    confidence: str | None = Field(None, alias="confidence")
+    headline: str | None = Field(None, alias="headline")
+    narrative: str | None = Field(None, alias="narrative")
+
+
+class ProductAssurancePoint(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    id: str = Field(..., alias="id")
+    label: str = Field(..., alias="label")
+    description: str | None = Field(None, alias="description")
+    evidence: str | None = Field(None, alias="evidence")
+    source: str | None = Field(None, alias="source")
+
+
+class ProductSupportChannel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    id: str
+    channel: str
+    label: str
+    target: str
+    availability: str | None = None
+
+
+class ProductFulfillmentSummary(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    delivery: ProductDeliveryEstimate | None = None
+    assurances: list[ProductAssurancePoint] = Field(default_factory=list)
+    support: list[ProductSupportChannel] = Field(default_factory=list)
+
+
 class ProductResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
@@ -111,6 +150,9 @@ class ProductDetailResponse(ProductResponse):
     custom_fields: list[ProductCustomFieldResponse] = Field(default_factory=list, alias="customFields")
     subscription_plans: list[ProductSubscriptionPlanResponse] = Field(
         default_factory=list, alias="subscriptionPlans"
+    )
+    fulfillment_summary: ProductFulfillmentSummary | None = Field(
+        default=None, alias="fulfillmentSummary"
     )
 
 

@@ -426,7 +426,10 @@ export function ProductDetailClient({ product, marketing }: ProductDetailClientP
         id: field.id,
         label: field.label,
         value: selection.customFieldValues[field.id] ?? ""
-      }))
+      })),
+      deliveryEstimate: product.fulfillmentSummary?.delivery ?? null,
+      assuranceHighlights: product.fulfillmentSummary?.assurances ?? [],
+      supportChannels: product.fulfillmentSummary?.support ?? []
     });
 
     setConfirmation("Service configuration added to cart.");

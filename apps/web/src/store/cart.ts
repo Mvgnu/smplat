@@ -3,6 +3,12 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
+import type {
+  ProductAssurancePoint,
+  ProductDeliveryEstimate,
+  ProductSupportChannel,
+} from "@/types/product";
+
 export type CartOptionSelection = {
   groupId: string;
   groupName: string;
@@ -44,6 +50,9 @@ export type CartItem = {
   addOns: CartAddOnSelection[];
   subscriptionPlan?: CartSubscriptionSelection;
   customFields: CartCustomFieldValue[];
+  deliveryEstimate?: ProductDeliveryEstimate | null;
+  assuranceHighlights?: ProductAssurancePoint[];
+  supportChannels?: ProductSupportChannel[];
 };
 
 type CartState = {
