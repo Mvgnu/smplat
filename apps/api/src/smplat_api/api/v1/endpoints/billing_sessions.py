@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -21,12 +21,36 @@ from smplat_api.models.hosted_checkout_session import (
 )
 from smplat_api.models.invoice import Invoice
 from smplat_api.services.billing.gateway import BillingGatewayClient
+from smplat_api.services.billing.recovery import HostedSessionRecoveryCommunicator
 
 router = APIRouter(
     prefix="/billing/sessions",
     tags=["billing-sessions"],
     dependencies=[Depends(require_checkout_api_key)],
 )
+
+
+class HostedSessionRecoveryAttempt(BaseModel):
+    """Automation attempt metadata returned to the dashboard."""
+
+    attempt: int
+    status: str
+    scheduled_at: str = Field(alias="scheduledAt")
+    next_retry_at: str | None = Field(default=None, alias="nextRetryAt")
+    notified_at: str | None = Field(default=None, alias="notifiedAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class HostedSessionRecoveryState(BaseModel):
+    """Aggregate recovery signals for hosted sessions."""
+
+    attempts: list[HostedSessionRecoveryAttempt] = Field(default_factory=list)
+    next_retry_at: str | None = Field(default=None, alias="nextRetryAt")
+    last_notified_at: str | None = Field(default=None, alias="lastNotifiedAt")
+    last_channel: str | None = Field(default=None, alias="lastChannel")
+
+    model_config = {"populate_by_name": True}
 
 
 class HostedSessionResponse(BaseModel):
@@ -47,6 +71,9 @@ class HostedSessionResponse(BaseModel):
     last_error: str | None = Field(default=None, alias="lastError")
     recovery_notes: str | None = Field(default=None, alias="recoveryNotes")
     metadata: dict[str, Any] | None = None
+    recovery_state: HostedSessionRecoveryState | None = Field(
+        default=None, alias="recoveryState"
+    )
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
 
@@ -68,6 +95,19 @@ class RegenerateSessionRequest(BaseModel):
     notes: str | None = Field(
         default=None,
         description="Optional operator note captured on the regenerated session.",
+    )
+    automated: bool = Field(
+        default=False,
+        description="Flag indicating automation triggered the regeneration.",
+    )
+    override_next_retry_at: str | None = Field(
+        default=None,
+        alias="overrideNextRetryAt",
+        description="Optional ISO timestamp to override the next retry window.",
+    )
+    notify: bool = Field(
+        default=True,
+        description="Whether automation should emit recovery communications.",
     )
 
     model_config = {"populate_by_name": True}
@@ -167,6 +207,20 @@ async def regenerate_hosted_session(
             detail="Success and cancel URLs are required for regeneration",
         )
 
+    override_next_retry_at = None
+    if payload.override_next_retry_at:
+        try:
+            override_next_retry_at = datetime.fromisoformat(payload.override_next_retry_at)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid overrideNextRetryAt timestamp",
+            ) from exc
+        if override_next_retry_at.tzinfo is None:
+            override_next_retry_at = override_next_retry_at.replace(tzinfo=timezone.utc)
+        else:
+            override_next_retry_at = override_next_retry_at.astimezone(timezone.utc)
+
     gateway = BillingGatewayClient(db, workspace_id)
     await gateway.create_hosted_session(
         invoice,
@@ -183,6 +237,40 @@ async def regenerate_hosted_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to materialize regenerated hosted session",
         )
+
+    if override_next_retry_at is not None:
+        latest_session.next_retry_at = override_next_retry_at
+        metadata = dict(latest_session.metadata_json or {})
+        automation_meta = dict(metadata.get("automation", {}))
+        automation_meta["override_next_retry_at"] = override_next_retry_at.isoformat()
+        metadata["automation"] = automation_meta
+        latest_session.metadata_json = metadata
+
+    trigger_meta = dict((latest_session.metadata_json or {}).get("automation", {}))
+    trigger_meta.update(
+        {
+            "triggered_by": "automation" if payload.automated else "manual",
+            "trigger_notified": payload.notify,
+            "triggered_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    metadata = dict(latest_session.metadata_json or {})
+    metadata["automation"] = trigger_meta
+    latest_session.metadata_json = metadata
+
+    communicator = HostedSessionRecoveryCommunicator()
+    if payload.automated and payload.notify:
+        attempt = {
+            "attempt": latest_session.retry_count or 0,
+            "status": latest_session.status.value,
+            "scheduled_at": datetime.now(timezone.utc).isoformat(),
+            "next_retry_at": _isoformat(latest_session.next_retry_at),
+        }
+        await communicator.dispatch_notification(latest_session, attempt)
+        metadata = dict(latest_session.metadata_json or {})
+        metadata["last_notified_at"] = attempt["scheduled_at"]
+        latest_session.metadata_json = metadata
+
     await db.commit()
     await db.refresh(latest_session, attribute_names=["invoice"])
     return _serialize_hosted_session(latest_session)
@@ -195,6 +283,7 @@ def _serialize_hosted_session(session: HostedCheckoutSession) -> HostedSessionRe
 
     metadata = session.metadata_json or {}
     status_changed_at = session.completed_at or session.cancelled_at
+    recovery = _build_recovery_state(session, metadata)
     return HostedSessionResponse(
         id=str(session.id),
         sessionId=session.session_id,
@@ -211,12 +300,49 @@ def _serialize_hosted_session(session: HostedCheckoutSession) -> HostedSessionRe
         lastError=session.last_error,
         recoveryNotes=session.recovery_notes,
         metadata=metadata,
-        createdAt=_isoformat(session.created_at),
-        updatedAt=_isoformat(session.updated_at),
+        recoveryState=recovery,
+        createdAt=_isoformat(session.created_at) or "",
+        updatedAt=_isoformat(session.updated_at) or "",
+    )
+
+
+def _build_recovery_state(
+    session: HostedCheckoutSession, metadata: dict[str, Any]
+) -> HostedSessionRecoveryState | None:
+    attempts_raw = list(metadata.get("recovery_attempts", []))
+    communication_log = list(metadata.get("communication_log", []))
+    if not attempts_raw and not communication_log and not session.next_retry_at:
+        return None
+
+    attempts = [
+        HostedSessionRecoveryAttempt(
+            attempt=int(entry.get("attempt", 0) or 0),
+            status=str(entry.get("status", "unknown")),
+            scheduledAt=str(entry.get("scheduled_at") or entry.get("scheduledAt") or ""),
+            nextRetryAt=(
+                str(entry.get("next_retry_at") or entry.get("nextRetryAt"))
+                if entry.get("next_retry_at") or entry.get("nextRetryAt")
+                else None
+            ),
+            notifiedAt=(
+                str(entry.get("notified_at") or entry.get("notifiedAt"))
+                if entry.get("notified_at") or entry.get("notifiedAt")
+                else None
+            ),
+        )
+        for entry in attempts_raw
+    ]
+
+    last_comm = communication_log[-1] if communication_log else None
+    return HostedSessionRecoveryState(
+        attempts=attempts,
+        nextRetryAt=metadata.get("next_retry_at") or _isoformat(session.next_retry_at),
+        lastNotifiedAt=metadata.get("last_notified_at"),
+        lastChannel=str(last_comm.get("channel")) if last_comm else None,
     )
 
 
 def _isoformat(value: datetime | None) -> str | None:
     if value is None:
         return None
-    return value.isoformat()
+    return value.astimezone(timezone.utc).isoformat()

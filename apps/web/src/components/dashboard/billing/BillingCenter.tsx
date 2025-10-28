@@ -22,12 +22,14 @@ import type {
   BillingSummary,
   CampaignInsight,
   HostedSessionReport,
+  HostedSessionRecoveryTimeline,
   InvoiceAdjustment,
   PaymentTimelineEvent,
 } from "@/server/billing/types";
 
 import { CampaignIntelligenceGrid } from "./CampaignIntelligenceGrid";
 import { HostedSessionJourney } from "./HostedSessionJourney";
+import { RecoveryTimeline } from "./RecoveryTimeline";
 
 type BillingCenterProps = {
   invoices: BillingInvoice[];
@@ -35,6 +37,7 @@ type BillingCenterProps = {
   aging: BillingAgingBuckets;
   insights: CampaignInsight[];
   sessionsReport: HostedSessionReport | null;
+  recoveryTimeline: HostedSessionRecoveryTimeline | null;
 };
 
 const currencyFormatter = (currency: string) =>
@@ -57,6 +60,7 @@ export function BillingCenter({
   aging,
   insights,
   sessionsReport,
+  recoveryTimeline,
 }: BillingCenterProps) {
   const [notifying, setNotifying] = useState<string | null>(null);
   const [processingAction, setProcessingAction] = useState<{ id: string; type: "capture" | "refund" } | null>(
@@ -261,6 +265,7 @@ export function BillingCenter({
       </section>
 
       <HostedSessionJourney report={sessionsReport} />
+      <RecoveryTimeline timeline={recoveryTimeline} />
     </div>
   );
 }

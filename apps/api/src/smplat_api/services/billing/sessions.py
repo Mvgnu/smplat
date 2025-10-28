@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Iterable, Sequence
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from smplat_api.models.hosted_checkout_session import (
     HostedCheckoutSessionStatusEnum,
 )
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
+from smplat_api.services.billing.recovery import HostedSessionRecoveryCommunicator
 
 
 async def sweep_hosted_sessions(
@@ -30,6 +32,108 @@ async def sweep_hosted_sessions(
         db, current_time=current_time, limit=max(0, limit - expired)
     )
     return {"expired": expired, "abandoned": abandoned}
+
+
+# meta: hosted-session: recovery-scheduler
+async def schedule_hosted_session_recovery(
+    db: AsyncSession,
+    communicator: HostedSessionRecoveryCommunicator | None,
+    *,
+    now: datetime | None = None,
+    statuses: Sequence[HostedCheckoutSessionStatusEnum] | None = None,
+    limit: int = 100,
+    max_attempts: int = 5,
+) -> dict[str, int]:
+    """Select stalled sessions for automated recovery and queue notifications."""
+
+    current_time = now or datetime.now(timezone.utc)
+    eligible_statuses: Iterable[HostedCheckoutSessionStatusEnum] = (
+        statuses
+        if statuses is not None
+        else (
+            HostedCheckoutSessionStatusEnum.INITIATED,
+            HostedCheckoutSessionStatusEnum.FAILED,
+            HostedCheckoutSessionStatusEnum.EXPIRED,
+        )
+    )
+
+    stmt = (
+        select(HostedCheckoutSession)
+        .where(
+            and_(
+                HostedCheckoutSession.status.in_(tuple(eligible_statuses)),
+                HostedCheckoutSession.next_retry_at.isnot(None),
+                HostedCheckoutSession.next_retry_at <= current_time,
+                HostedCheckoutSession.retry_count < max_attempts,
+            )
+        )
+        .order_by(
+            HostedCheckoutSession.next_retry_at.asc(),
+            HostedCheckoutSession.created_at.asc(),
+        )
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+
+    result = await db.execute(stmt)
+    sessions = result.scalars().all()
+    if not sessions:
+        return {"scheduled": 0, "notified": 0}
+
+    notifications = 0
+    for session in sessions:
+        prior_attempts = list((session.metadata_json or {}).get("recovery_attempts", []))
+        retry_count = (session.retry_count or 0) + 1
+        session.retry_count = retry_count
+        session.last_retry_at = current_time
+
+        delay_minutes = min(240, 10 * (2 ** max(0, retry_count - 1)))
+        session.next_retry_at = current_time + timedelta(minutes=delay_minutes)
+
+        attempt_record = {
+            "attempt": retry_count,
+            "status": session.status.value,
+            "scheduled_at": current_time.isoformat(),
+            "next_retry_at": session.next_retry_at.isoformat(),
+        }
+
+        metadata = dict(session.metadata_json or {})
+        attempts = list(metadata.get("recovery_attempts", []))
+        attempts.append(attempt_record)
+        metadata["recovery_attempts"] = attempts[-25:]
+
+        automation_meta = dict(metadata.get("automation", {}))
+        automation_meta.update(
+            {
+                "scheduler_version": "auto-recovery/v1",
+                "next_retry_at": session.next_retry_at.isoformat(),
+                "last_attempt": attempt_record,
+            }
+        )
+        metadata["automation"] = automation_meta
+        session.metadata_json = metadata
+
+        if communicator is not None:
+            should_notify = communicator.should_notify(
+                session, prior_attempts=prior_attempts, current_attempt=attempt_record
+            )
+            if should_notify:
+                notified = await communicator.dispatch_notification(
+                    session, attempt_record
+                )
+                if notified:
+                    notifications += 1
+                    metadata = dict(session.metadata_json or {})
+                    metadata["last_notified_at"] = current_time.isoformat()
+                    automation_meta = dict(metadata.get("automation", {}))
+                    latest_attempt = dict(automation_meta.get("last_attempt", attempt_record))
+                    latest_attempt["notified_at"] = current_time.isoformat()
+                    automation_meta["last_attempt"] = latest_attempt
+                    metadata["automation"] = automation_meta
+                    session.metadata_json = metadata
+
+    await db.flush()
+    return {"scheduled": len(sessions), "notified": notifications}
 
 
 async def _expire_lapsed_sessions(

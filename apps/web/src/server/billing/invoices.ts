@@ -10,6 +10,7 @@ import type {
   BillingSummary,
   CampaignInsight,
   HostedSessionReport,
+  HostedSessionRecoveryTimeline,
 } from "./types";
 
 const apiBaseUrl =
@@ -90,6 +91,7 @@ const emptyPayload: BillingCenterPayload = {
   },
   insights: [],
   sessionsReport: null,
+  recoveryTimeline: null,
 };
 
 type RawHostedSessionReport = {
@@ -113,6 +115,27 @@ type RawHostedSessionReport = {
   invoiceStatuses: Array<{ status: string; count: number }>;
 };
 
+type RawHostedSessionListResponse = {
+  sessions: Array<{
+    id: string;
+    sessionId: string;
+    status: string;
+    metadata: Record<string, unknown> | null;
+    recoveryState?: {
+      attempts?: Array<{
+        attempt: number;
+        status: string;
+        scheduledAt?: string;
+        nextRetryAt?: string | null;
+        notifiedAt?: string | null;
+      }>;
+      nextRetryAt?: string | null;
+      lastNotifiedAt?: string | null;
+      lastChannel?: string | null;
+    } | null;
+  }>;
+};
+
 export async function fetchBillingCenterPayload({
   workspaceId,
   orders,
@@ -128,7 +151,7 @@ export async function fetchBillingCenterPayload({
   }
 
   try {
-    const [invoicesResponse, sessionsResponse] = await Promise.all([
+    const [invoicesResponse, reportsResponse, sessionsResponse] = await Promise.all([
       fetch(
         `${apiBaseUrl}/api/v1/billing/invoices?workspace_id=${encodeURIComponent(workspaceId)}`,
         {
@@ -140,6 +163,15 @@ export async function fetchBillingCenterPayload({
       ),
       fetch(
         `${apiBaseUrl}/api/v1/billing/reports?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          headers: {
+            "X-API-Key": checkoutApiKey,
+          },
+          cache: "no-store",
+        },
+      ),
+      fetch(
+        `${apiBaseUrl}/api/v1/billing/sessions?workspaceId=${encodeURIComponent(workspaceId)}`,
         {
           headers: {
             "X-API-Key": checkoutApiKey,
@@ -163,9 +195,10 @@ export async function fetchBillingCenterPayload({
     const summary = normalizeSummary(payload.summary);
     const aging = normalizeAging(payload.aging);
     const insights = buildInsights(invoices, orders, instagram);
-    const sessionsReport = await normalizeHostedSessionsReport(sessionsResponse);
+    const sessionsReport = await normalizeHostedSessionsReport(reportsResponse);
+    const recoveryTimeline = await normalizeRecoveryTimeline(workspaceId, sessionsResponse);
 
-    return { invoices, summary, aging, insights, sessionsReport };
+    return { invoices, summary, aging, insights, sessionsReport, recoveryTimeline };
   } catch (error) {
     console.warn("Unexpected error fetching billing data", error);
     return emptyPayload;
@@ -391,3 +424,84 @@ async function normalizeHostedSessionsReport(
     return null;
   }
 }
+
+async function normalizeRecoveryTimeline(
+  workspaceId: string,
+  response: Response,
+): Promise<HostedSessionRecoveryTimeline | null> {
+  if (!response.ok) {
+    if (response.status !== 404) {
+      console.warn("Failed to fetch hosted session recovery data", response.status);
+    }
+    return null;
+  }
+
+  try {
+    const raw = (await response.json()) as RawHostedSessionListResponse;
+    const sessions = raw.sessions
+      .map((session) => {
+        const metadata = (session.metadata ?? {}) as Record<string, unknown>;
+        const communicationLog = Array.isArray(metadata.communication_log)
+          ? (metadata.communication_log as Array<Record<string, unknown>>)
+          : [];
+        const attempts = (session.recoveryState?.attempts ?? []).map((attempt) => ({
+          attempt: Number(attempt.attempt ?? 0),
+          status: String(attempt.status ?? session.status ?? "unknown"),
+          scheduledAt: String(
+            (attempt as Record<string, unknown>).scheduledAt ??
+              (attempt as Record<string, unknown>).scheduled_at ??
+              "",
+          ),
+          nextRetryAt:
+            typeof (attempt as Record<string, unknown>).nextRetryAt === "string"
+              ? String((attempt as Record<string, unknown>).nextRetryAt)
+              : typeof (attempt as Record<string, unknown>).next_retry_at === "string"
+              ? String((attempt as Record<string, unknown>).next_retry_at)
+              : null,
+          notifiedAt:
+            typeof (attempt as Record<string, unknown>).notifiedAt === "string"
+              ? String((attempt as Record<string, unknown>).notifiedAt)
+              : typeof (attempt as Record<string, unknown>).notified_at === "string"
+              ? String((attempt as Record<string, unknown>).notified_at)
+              : null,
+        }));
+        const lastNotified =
+          session.recoveryState?.lastNotifiedAt ??
+          (typeof metadata.last_notified_at === "string" ? metadata.last_notified_at : null);
+        const nextRetry =
+          session.recoveryState?.nextRetryAt ??
+          (typeof metadata.next_retry_at === "string" ? metadata.next_retry_at : null);
+        const lastChannel =
+          session.recoveryState?.lastChannel ??
+          (communicationLog.length > 0
+            ? String(communicationLog[communicationLog.length - 1]?.channel ?? "")
+            : null);
+        return {
+          sessionId: session.sessionId,
+          status: session.status,
+          attempts,
+          lastNotifiedAt: lastNotified,
+          nextRetryAt: nextRetry,
+          lastChannel,
+        };
+      })
+      .filter(
+        (entry) =>
+          entry.attempts.length > 0 || entry.lastNotifiedAt !== null || entry.nextRetryAt !== null,
+      );
+
+    if (sessions.length === 0) {
+      return null;
+    }
+
+    return {
+      workspaceId,
+      generatedAt: new Date().toISOString(),
+      sessions,
+    } satisfies HostedSessionRecoveryTimeline;
+  } catch (error) {
+    console.warn("Failed to parse hosted session recovery response", error);
+    return null;
+  }
+}
+

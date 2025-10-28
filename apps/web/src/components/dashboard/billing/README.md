@@ -13,6 +13,7 @@ used by the server component in `apps/web/src/app/(client)/dashboard/page.tsx` a
   regeneration opportunities.
 - `HostedSessionActions` – surfaces quick operator actions for session regeneration, customer
   communications, and account escalations.
+- `RecoveryTimeline` – summarizes automation attempts, retry cadences, and notification history for hosted sessions.
 
 Each component includes structured metadata comments (`// meta: key: value`) so automation can
 track features and ownership. Keep this README in sync when adding new billing UI elements.
