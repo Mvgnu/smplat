@@ -11,8 +11,9 @@
 
 ## Smoke Test
 1. Seed at least one bundle for a storefront slug via SQL or Payload.
-2. Run `poetry run pytest apps/api/tests/catalog/test_recommendations.py::test_catalog_recommendation_endpoint`.
+2. Run `poetry run pytest apps/api/tests/catalog/test_bundle_acceptance.py` to verify instrumentation + aggregation.
 3. Call `POST /api/v1/catalog/recommendations` with a valid slug + `X-API-Key` to confirm non-empty `recommendations`.
+4. Trigger `POST /api/v1/catalog/recommendations/refresh` to ensure cache invalidation returns a fresh payload.
 
 ## Heuristics
 - **Score = (150 - cms_priority) + acceptance_rate*100 - min(queue_depth*1.5, 50)**.
@@ -30,8 +31,32 @@
 - Lightweight rate limiting: 8 requests per slug per 5 seconds. 429 indicates abuse.
 - If fallback response persists, verify:
   - Bundle definitions exist for the slug.
-  - Acceptance metrics records exist or optional.
+  - Acceptance metrics records exist (`catalog_bundle_acceptance_metrics`).
   - Fulfillment backlog query is reachable (ensure `order_items.product_id` populated).
+  - CMS override metadata (`catalog_bundles.metadata -> cms_override`) is valid JSON.
+
+## Acceptance Telemetry
+- Order creation now records bundle acceptance via `BundleAcceptanceService` (orders endpoint).
+- `BundleAcceptanceAggregator.recompute()` backfills metrics over configurable windows.
+- Events update `catalog_bundle_acceptance_metrics.acceptance_count`, `sample_size`, and `acceptance_rate` with 4-decimal precision.
+- Run aggregation as part of maintenance jobs (cron) prior to large experiments.
+
+## CMS Overrides & Tooling
+- Override payloads live under `catalog_bundles.metadata -> cms_override`.
+- API endpoints:
+  - `POST /api/v1/catalog/recommendations/override` – persist overrides (title, description, savings, priority, campaign, tags) and purge cache.
+  - `POST /api/v1/catalog/recommendations/refresh` – force recomputation for a slug.
+- Admin UI: `/admin/merchandising/bundles` surfaces live recommendations, applied notes, and override forms.
+  - Requires `CHECKOUT_API_KEY` to issue API calls.
+  - "Refresh cache" calls the refresh endpoint.
+  - "Apply override" posts to the override endpoint and revalidates the page.
+
+## Experiment Launch Checklist
+1. Confirm acceptance metrics updating (inspect latest row in `catalog_bundle_acceptance_metrics`).
+2. Review storefront payload via `/admin/merchandising/bundles`.
+3. Apply override with campaign tags + priority adjustments.
+4. Refresh cache to propagate override and confirm provenance badges surface in storefront (`bundle.provenance.notes`).
+5. Monitor acceptance deltas over first 24h; rerun aggregator for validation.
 
 ## Frontend Integration
 - Loader: `fetchCatalogBundleRecommendations` (`apps/web/src/server/catalog/recommendations.ts`).

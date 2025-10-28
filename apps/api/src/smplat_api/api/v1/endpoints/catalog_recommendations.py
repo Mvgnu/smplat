@@ -10,10 +10,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.db.session import get_session
+from smplat_api.models.catalog import CatalogBundle
 from smplat_api.services.catalog.recommendations import CatalogRecommendationService
 
 
@@ -108,19 +110,10 @@ async def get_recommendation_service(
     return CatalogRecommendationService(session)
 
 
-@router.post(
-    "",
-    status_code=status.HTTP_200_OK,
-    response_model=CatalogRecommendationResponse,
-    dependencies=[Depends(require_checkout_api_key)],
-)
-async def resolve_catalog_recommendations(
+async def _resolve_to_response(
     payload: CatalogRecommendationRequest,
-    service: CatalogRecommendationService = Depends(get_recommendation_service),
+    service: CatalogRecommendationService,
 ) -> CatalogRecommendationResponse:
-    """Resolve catalog bundle recommendations."""
-
-    await _enforce_rate_limit(payload.product_slug)
     snapshot = await service.resolve(payload.product_slug, payload.freshness_minutes)
 
     metadata = snapshot.metadata or {}
@@ -137,6 +130,11 @@ async def resolve_catalog_recommendations(
     recommendations: list[BundleRecommendationResponse] = []
     for bundle in snapshot.recommendations:
         heuristics = bundle.heuristics
+        provenance_notes = notes + bundle.provenance_notes
+        deduped_provenance = []
+        for note in provenance_notes:
+            if note not in deduped_provenance:
+                deduped_provenance.append(note)
         recommendations.append(
             BundleRecommendationResponse(
                 slug=bundle.slug,
@@ -159,7 +157,7 @@ async def resolve_catalog_recommendations(
                     cache_refreshed_at=snapshot.computed_at,
                     cache_expires_at=snapshot.expires_at,
                     cache_ttl_minutes=ttl_minutes or payload.freshness_minutes or 10,
-                    notes=notes,
+                    notes=deduped_provenance,
                 ),
             )
         )
@@ -176,3 +174,94 @@ async def resolve_catalog_recommendations(
         fallback_copy=fallback_copy,
         recommendations=recommendations,
     )
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_200_OK,
+    response_model=CatalogRecommendationResponse,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def resolve_catalog_recommendations(
+    payload: CatalogRecommendationRequest,
+    service: CatalogRecommendationService = Depends(get_recommendation_service),
+) -> CatalogRecommendationResponse:
+    """Resolve catalog bundle recommendations."""
+
+    await _enforce_rate_limit(payload.product_slug)
+    return await _resolve_to_response(payload, service)
+
+
+class CatalogRecommendationRefreshRequest(CatalogRecommendationRequest):
+    """Request payload that forces cache invalidation before resolving."""
+
+
+@router.post(
+    "/refresh",
+    status_code=status.HTTP_200_OK,
+    response_model=CatalogRecommendationResponse,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def refresh_catalog_recommendations(
+    payload: CatalogRecommendationRefreshRequest,
+    service: CatalogRecommendationService = Depends(get_recommendation_service),
+) -> CatalogRecommendationResponse:
+    """Invalidate caches before computing catalog bundle recommendations."""
+
+    await _enforce_rate_limit(payload.product_slug)
+    await service.invalidate_cache(payload.product_slug)
+    return await _resolve_to_response(payload, service)
+
+
+class CatalogBundleOverridePayload(BaseModel):
+    """Override payload applied to catalog bundle metadata."""
+
+    bundle_slug: str = Field(..., min_length=1, max_length=150)
+    title: str | None = Field(default=None, description="Optional override title")
+    description: str | None = Field(default=None, description="Optional override description")
+    savings_copy: str | None = Field(default=None, description="Optional override savings copy")
+    priority: int | None = Field(default=None, ge=0, le=200)
+    campaign: str | None = Field(default=None, max_length=120)
+    tags: list[str] = Field(default_factory=list)
+
+
+@router.post(
+    "/override",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def upsert_catalog_override(
+    payload: CatalogBundleOverridePayload,
+    service: CatalogRecommendationService = Depends(get_recommendation_service),
+) -> dict[str, str]:
+    """Persist CMS-driven overrides into catalog bundle metadata."""
+
+    stmt = select(CatalogBundle).where(CatalogBundle.bundle_slug == payload.bundle_slug)
+    result = await service.session.execute(stmt)
+    bundle = result.scalar_one_or_none()
+    if not bundle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bundle not found")
+
+    metadata = bundle.metadata_json if isinstance(bundle.metadata_json, dict) else {}
+    override = metadata.get("cms_override") if isinstance(metadata.get("cms_override"), dict) else {}
+
+    if payload.title is not None:
+        override["title"] = payload.title
+    if payload.description is not None:
+        override["description"] = payload.description
+    if payload.savings_copy is not None:
+        override["savings_copy"] = payload.savings_copy
+    if payload.priority is not None:
+        override["priority"] = payload.priority
+    if payload.campaign is not None:
+        override["campaign"] = payload.campaign
+    if payload.tags:
+        override["tags"] = payload.tags
+
+    override.setdefault("updated_at", _utcnow().isoformat())
+    metadata["cms_override"] = override
+    bundle.metadata_json = metadata
+
+    await service.session.commit()
+    await service.invalidate_cache(bundle.primary_product_slug)
+    return {"status": "ok"}

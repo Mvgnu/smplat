@@ -842,6 +842,15 @@ export function ProductDetailClient({ product, marketing }: ProductDetailClientP
                     ))}
                   </div>
                 ) : null}
+                {bundle.provenance.notes.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {bundle.provenance.notes.map((tag) => (
+                      <span key={tag} className="rounded-full border border-emerald-400/40 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-200/80">
+                        {tag.replace(/_/g, " ")}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 <p className="mt-4 text-[11px] text-white/50">
                   Last refreshed {bundle.provenance.cacheRefreshedAt.toLocaleString()} · Cache TTL {bundle.provenance.cacheTtlMinutes}m
                 </p>
