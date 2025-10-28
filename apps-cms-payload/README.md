@@ -57,6 +57,7 @@ The collections mirror the content expected by `apps/web`:
 
 - `pages` – marketing pages that embed hero data and structured content blocks
 - `blog-posts` – long-form insights rendered on `/blog`
+- `checkout-trust-experiences` – checkout trust modules with live metric bindings and provenance metadata
 - `faqs`, `testimonials`, `case-studies`, `pricing-tiers`, `site-settings`
 
 Rich text fields leverage the Lexical editor so seed scripts and the frontend use the same structures. The marketing kit registers hero, metrics, testimonial, product card, timeline, feature grid, media gallery, CTA cluster, and comparison table blocks so editors can compose full sections inside a single rich-text stream.
