@@ -24,6 +24,7 @@ Each metric definition includes a default freshness window that also governs the
 - `nps_trailing_30d` – 1440 minutes (24 hours)
 - `fulfillment_backlog_minutes` – 120 minutes (2 hours)
 - `fulfillment_staffing_coverage_pct` – 180 minutes (3 hours)
+- `fulfillment_delivery_sla_forecast` – 60 minutes (1 hour)
 
 If the storefront reports a `stale` badge, verify whether the freshness window should be tightened or whether the cache needs to be invalidated.
 
@@ -37,6 +38,7 @@ If the storefront reports a `stale` badge, verify whether the freshness window s
    - `fulfillment_tasks.result` JSON for embedded `nps_score` payloads
    - `fulfillment_tasks` queue depth (pending/in_progress) for backlog minutes
    - `fulfillment_tasks` schedule/completion counts over the last 24 hours for staffing coverage
+   - `fulfillment_staffing_shifts` for staffed capacity windows feeding SLA forecasts
 4. If a dataset backfill is in progress, keep the metric in an `unsupported` state (via CMS preview bindings) until the upstream data is complete. The storefront surfaces provenance notes from the API response.
 
 ### Metadata column collision postmortem (2024-05)

@@ -38,6 +38,37 @@ export type CheckoutMetricVerification = {
   unsupportedReason?: string | null;
   provenanceNotes?: string[] | null;
   metadata?: Record<string, unknown> | null;
+  percentileBands?: Record<string, number | null> | null;
+  freshnessMinutesElapsed?: number | null;
+  unsupportedGuard?: string | null;
+  forecast?: CheckoutMetricForecast | null;
+};
+
+export type CheckoutMetricForecastWindow = {
+  start: string;
+  end: string;
+  hourlyCapacity: number;
+  capacityTasks: number;
+  backlogAtStart: number;
+  projectedTasksCompleted: number;
+  backlogAfter: number;
+};
+
+export type CheckoutMetricSkuForecast = {
+  sku: string;
+  backlogTasks: number;
+  completedSampleSize: number;
+  averageMinutes: number | null;
+  percentileBands: Record<string, number | null>;
+  windows: CheckoutMetricForecastWindow[];
+  estimatedClearMinutes: number | null;
+  unsupportedReason: string | null;
+};
+
+export type CheckoutMetricForecast = {
+  generatedAt: string;
+  horizonHours: number;
+  skus: CheckoutMetricSkuForecast[];
 };
 
 export type CheckoutAssurancePoint = {
@@ -331,6 +362,10 @@ type TrustMetricResolution = {
     notes: string[] | null;
     unsupported_reason: string | null;
   } | null;
+  percentile_bands?: Record<string, number | null> | null;
+  freshness_minutes_elapsed?: number | null;
+  unsupported_guard?: string | null;
+  forecast?: unknown;
 };
 
 type TrustMetricRequestPayload = {
@@ -338,6 +373,131 @@ type TrustMetricRequestPayload = {
   freshness_window_minutes?: number | null;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const toNumberOrNull = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
+const toIntWithFallback = (value: unknown, fallback = 0): number => {
+  const parsed = toNumberOrNull(value);
+  if (parsed === null) {
+    return fallback;
+  }
+  const truncated = Math.trunc(parsed);
+  return Number.isFinite(truncated) ? truncated : fallback;
+};
+
+const normalizeForecast = (forecast: unknown): CheckoutMetricForecast | null => {
+  if (!isRecord(forecast)) {
+    return null;
+  }
+
+  const generatedAt =
+    typeof forecast.generated_at === "string"
+      ? forecast.generated_at
+      : typeof forecast.generatedAt === "string"
+        ? forecast.generatedAt
+        : null;
+  const horizonHoursNumber =
+    toNumberOrNull(forecast.horizon_hours) ?? toNumberOrNull(forecast.horizonHours);
+
+  const skuEntries = Array.isArray(forecast.skus) ? forecast.skus : [];
+  const skus: CheckoutMetricSkuForecast[] = skuEntries
+    .map((entry) => {
+      if (!isRecord(entry)) {
+        return null;
+      }
+
+      const windowsRaw = Array.isArray(entry.windows) ? entry.windows : [];
+      const windows = windowsRaw
+        .map((windowEntry) => {
+          if (!isRecord(windowEntry)) {
+            return null;
+          }
+
+          const start =
+            typeof windowEntry.start === "string"
+              ? windowEntry.start
+              : typeof windowEntry.starts_at === "string"
+                ? windowEntry.starts_at
+                : null;
+          const end =
+            typeof windowEntry.end === "string"
+              ? windowEntry.end
+              : typeof windowEntry.ends_at === "string"
+                ? windowEntry.ends_at
+                : null;
+          if (!start || !end) {
+            return null;
+          }
+
+          return {
+            start,
+            end,
+            hourlyCapacity: toIntWithFallback(windowEntry.hourly_capacity ?? windowEntry.hourlyCapacity),
+            capacityTasks: toIntWithFallback(windowEntry.capacity_tasks ?? windowEntry.capacityTasks),
+            backlogAtStart: toIntWithFallback(windowEntry.backlog_at_start ?? windowEntry.backlogAtStart),
+            projectedTasksCompleted: toIntWithFallback(
+              windowEntry.projected_tasks_completed ?? windowEntry.projectedTasksCompleted,
+            ),
+            backlogAfter: toIntWithFallback(windowEntry.backlog_after ?? windowEntry.backlogAfter),
+          } satisfies CheckoutMetricForecastWindow;
+        })
+        .filter(Boolean) as CheckoutMetricForecastWindow[];
+
+      const percentileBands = isRecord(entry.percentile_bands ?? entry.percentileBands)
+        ? Object.entries((entry.percentile_bands ?? entry.percentileBands) as Record<string, unknown>).reduce(
+            (acc, [key, val]) => {
+              acc[key] = toNumberOrNull(val);
+              return acc;
+            },
+            {} as Record<string, number | null>,
+          )
+        : {};
+
+      return {
+        sku: typeof entry.sku === "string" ? entry.sku : "unknown-sku",
+        backlogTasks: toIntWithFallback(entry.backlog_tasks ?? entry.backlogTasks),
+        completedSampleSize: toIntWithFallback(
+          entry.completed_sample_size ?? entry.completedSampleSize,
+        ),
+        averageMinutes: toNumberOrNull(entry.average_minutes ?? entry.averageMinutes),
+        percentileBands,
+        windows,
+        estimatedClearMinutes: toNumberOrNull(
+          entry.estimated_clear_minutes ?? entry.estimatedClearMinutes,
+        ),
+        unsupportedReason:
+          typeof entry.unsupported_reason === "string"
+            ? entry.unsupported_reason
+            : typeof entry.unsupportedReason === "string"
+              ? entry.unsupportedReason
+              : null,
+      } satisfies CheckoutMetricSkuForecast;
+    })
+    .filter(Boolean) as CheckoutMetricSkuForecast[];
+
+  if (!generatedAt || horizonHoursNumber === null) {
+    return null;
+  }
+
+  return {
+    generatedAt,
+    horizonHours: Math.trunc(horizonHoursNumber),
+    skus,
+  } satisfies CheckoutMetricForecast;
+};
 const cloneMetric = (metric: CheckoutMetricVerification | undefined): CheckoutMetricVerification | undefined => {
   if (!metric) {
     return undefined;
@@ -361,6 +521,20 @@ const cloneMetric = (metric: CheckoutMetricVerification | undefined): CheckoutMe
     unsupportedReason: metric.unsupportedReason ?? null,
     provenanceNotes: metric.provenanceNotes ? [...metric.provenanceNotes] : null,
     metadata: metric.metadata ? { ...metric.metadata } : null,
+    percentileBands: metric.percentileBands ? { ...metric.percentileBands } : null,
+    freshnessMinutesElapsed: metric.freshnessMinutesElapsed ?? null,
+    unsupportedGuard: metric.unsupportedGuard ?? null,
+    forecast: metric.forecast
+      ? {
+          generatedAt: metric.forecast.generatedAt,
+          horizonHours: metric.forecast.horizonHours,
+          skus: metric.forecast.skus.map((sku) => ({
+            ...sku,
+            percentileBands: { ...sku.percentileBands },
+            windows: sku.windows.map((window) => ({ ...window })),
+          })),
+        }
+      : null,
   } satisfies CheckoutMetricVerification;
 };
 
@@ -404,6 +578,10 @@ const createMetricVerification = (
     unsupportedReason: null,
     provenanceNotes: null,
     metadata: null,
+    percentileBands: null,
+    freshnessMinutesElapsed: null,
+    unsupportedGuard: null,
+    forecast: null,
   } satisfies CheckoutMetricVerification;
 };
 
@@ -571,6 +749,10 @@ const applyMetricResolution = (
     metric.unsupportedReason = null;
     metric.provenanceNotes = null;
     metric.metadata = metric.metadata ?? null;
+    metric.percentileBands = metric.percentileBands ?? null;
+    metric.freshnessMinutesElapsed = metric.freshnessMinutesElapsed ?? null;
+    metric.unsupportedGuard = metric.unsupportedGuard ?? null;
+    metric.forecast = metric.forecast ?? null;
     return;
   }
 
@@ -597,6 +779,17 @@ const applyMetricResolution = (
   metric.cacheTtlMinutes =
     typeof provenance?.cache_ttl_minutes === "number" ? provenance.cache_ttl_minutes : null;
   metric.unsupportedReason = provenance?.unsupported_reason ?? null;
+  metric.percentileBands =
+    resolution.percentile_bands && isRecord(resolution.percentile_bands)
+      ? Object.entries(resolution.percentile_bands).reduce((acc, [key, val]) => {
+          acc[key] = toNumberOrNull(val);
+          return acc;
+        }, {} as Record<string, number | null>)
+      : resolution.percentile_bands ?? null;
+  metric.freshnessMinutesElapsed = toNumberOrNull(resolution.freshness_minutes_elapsed);
+  metric.unsupportedGuard =
+    typeof resolution.unsupported_guard === "string" ? resolution.unsupported_guard : null;
+  metric.forecast = normalizeForecast(resolution.forecast ?? null);
 
   const provenanceNotes = provenance?.notes ?? null;
   metric.provenanceNotes = provenanceNotes && provenanceNotes.length > 0 ? [...provenanceNotes] : null;

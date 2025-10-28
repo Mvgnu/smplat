@@ -1,6 +1,10 @@
 """Endpoints for trust experience intelligence."""
 
-from datetime import datetime
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from typing import Any
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
@@ -9,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.db.session import get_session
 from smplat_api.services.fulfillment import FulfillmentMetricsService
-from smplat_api.services.fulfillment.metrics import MetricRequest
+from smplat_api.services.fulfillment.metrics import MetricRequest, ResolvedMetric
 
 
 router = APIRouter(prefix="/trust", tags=["Trust"])
@@ -73,6 +77,71 @@ class TrustMetricResponse(BaseModel):
     provenance: TrustMetricProvenance = Field(
         ..., description="Provenance metadata including cache layer diagnostics"
     )
+    percentile_bands: dict[str, float | None] | None = Field(
+        default=None,
+        description="Percentile bands (e.g. p50, p90) exposed when metrics carry distribution data.",
+    )
+    freshness_minutes_elapsed: float | None = Field(
+        default=None,
+        description="Computed freshness age in minutes since the snapshot was generated.",
+    )
+    unsupported_guard: str | None = Field(
+        default=None,
+        description="Guardrail reason when the metric is partially or fully unsupported.",
+    )
+    forecast: TrustMetricForecast | None = Field(
+        default=None,
+        description="Structured forecast payload for metrics that project future outcomes.",
+    )
+
+
+class TrustMetricForecastWindow(BaseModel):
+    """Capacity-aware forecast window for a SKU."""
+
+    start: datetime = Field(..., description="Window start timestamp")
+    end: datetime = Field(..., description="Window end timestamp")
+    hourly_capacity: int = Field(..., description="Configured hourly task capacity")
+    capacity_tasks: int = Field(..., description="Total tasks that can be cleared in the window")
+    backlog_at_start: int = Field(..., description="Backlog depth entering the window")
+    projected_tasks_completed: int = Field(..., description="Projected tasks completed within the window")
+    backlog_after: int = Field(..., description="Remaining backlog after applying window capacity")
+
+
+class TrustMetricSkuForecast(BaseModel):
+    """Per-SKU forecast rollup."""
+
+    sku: str = Field(..., description="Normalized SKU or slug identifier")
+    backlog_tasks: int = Field(..., description="Queued fulfillment tasks awaiting completion")
+    completed_sample_size: int = Field(..., description="Historical completions sampled for the forecast")
+    average_minutes: float | None = Field(
+        default=None, description="Average minutes per task derived from history"
+    )
+    percentile_bands: dict[str, float | None] = Field(
+        default_factory=dict,
+        description="Percentile minutes per task derived from history",
+    )
+    windows: list[TrustMetricForecastWindow] = Field(
+        default_factory=list,
+        description="Capacity windows used to project backlog clearance",
+    )
+    estimated_clear_minutes: float | None = Field(
+        default=None, description="Minutes until backlog clears based on staffing"
+    )
+    unsupported_reason: str | None = Field(
+        default=None,
+        description="Reason why the SKU forecast is partially unsupported (if applicable)",
+    )
+
+
+class TrustMetricForecast(BaseModel):
+    """Aggregate forecast payload for trust metrics."""
+
+    generated_at: datetime = Field(..., description="Timestamp when forecast was generated")
+    horizon_hours: int = Field(..., description="Forecast planning horizon in hours")
+    skus: list[TrustMetricSkuForecast] = Field(
+        default_factory=list,
+        description="Per-SKU forecast breakdowns",
+    )
 
 
 class TrustExperienceResolveResponse(BaseModel):
@@ -80,6 +149,32 @@ class TrustExperienceResolveResponse(BaseModel):
 
     slug: str
     metrics: list[TrustMetricResponse]
+
+
+def _derive_unsupported_guard(metric: ResolvedMetric) -> str | None:
+    """Surface a consolidated unsupported guard for storefront consumers."""
+
+    guard = metric.provenance.unsupported_reason
+    if guard:
+        return guard
+
+    metadata = metric.metadata if isinstance(metric.metadata, dict) else None
+    if not metadata:
+        return None
+
+    sku_breakdown = metadata.get("sku_breakdown")
+    if isinstance(sku_breakdown, dict) and sku_breakdown:
+        unsupported_codes = [
+            details.get("unsupported_reason")
+            for details in sku_breakdown.values()
+            if isinstance(details, dict) and details.get("unsupported_reason")
+        ]
+        if unsupported_codes and len(unsupported_codes) == len(sku_breakdown):
+            return "all_skus_unsupported"
+        if unsupported_codes:
+            return "partial_sku_support"
+
+    return None
 
 
 class TrustMetricPurgeRequest(BaseModel):
@@ -120,6 +215,8 @@ async def resolve_trust_experience(
     ]
     resolved = await service.resolve_metrics(metric_requests)
 
+    now = datetime.now(timezone.utc)
+
     return TrustExperienceResolveResponse(
         slug=payload.slug,
         metrics=[
@@ -133,6 +230,18 @@ async def resolve_trust_experience(
                 verification_state=item.verification_state,
                 metadata=item.metadata,
                 provenance=TrustMetricProvenance(**item.provenance.as_dict()),
+                percentile_bands=(
+                    item.metadata.get("overall_percentile_bands")
+                    if isinstance(item.metadata, dict)
+                    else None
+                ),
+                freshness_minutes_elapsed=(
+                    max((now - item.computed_at).total_seconds() / 60, 0)
+                    if item.computed_at
+                    else None
+                ),
+                unsupported_guard=_derive_unsupported_guard(item),
+                forecast=(TrustMetricForecast(**item.forecast) if item.forecast else None),
             )
             for item in resolved
         ],
