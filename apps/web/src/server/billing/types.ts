@@ -188,4 +188,27 @@ export type ProcessorReplayFilters = {
   status?: ProcessorReplayStatus | "all";
   correlationId?: string;
   limit?: number;
+  workspaceId?: string | "all";
+  since?: string;
+};
+
+export type ProcessorReplayAttempt = {
+  id: string;
+  attemptedAt: string;
+  status: "succeeded" | "failed" | string;
+  error: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+export type ProcessorReplayDetail = ProcessorReplayEvent & {
+  attempts: ProcessorReplayAttempt[];
+  invoiceSnapshot: {
+    id: string;
+    number: string;
+    status: string;
+    total: number;
+    currency: string;
+    issuedAt: string;
+    dueAt: string;
+  } | null;
 };

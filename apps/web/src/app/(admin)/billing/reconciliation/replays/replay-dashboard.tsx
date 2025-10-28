@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import type {
+  ProcessorReplayDetail,
   ProcessorReplayEvent,
   ProcessorReplayFilters,
   ProcessorReplayStatus,
@@ -48,9 +49,56 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
   const [actions, setActions] = useState<ReplayActionMap>({});
   const [pending, setPending] = useState<PendingState>({});
   const [isPending, startTransition] = useTransition();
+  const [workspaceId, setWorkspaceId] = useState<string>("all");
+  const latestTimestampRef = useRef<string | null>(null);
+  const pollingControllerRef = useRef<AbortController | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<ProcessorReplayDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState<boolean>(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const providerFilter = filters.provider ?? "all";
+  const statusFilter = filters.status ?? "all";
+  const correlationFilter = filters.correlationId ?? "";
+
+  const mergeEvents = useCallback(
+    (incoming: ProcessorReplayEvent[], replace = false) => {
+      if (incoming.length === 0 && !replace) {
+        return;
+      }
+
+      const nextLatest = incoming.reduce<string | null>((acc, event) => {
+        if (!acc) {
+          return event.receivedAt;
+        }
+        return acc > event.receivedAt ? acc : event.receivedAt;
+      }, latestTimestampRef.current);
+
+      setEvents((prev) => {
+        const base = replace ? [] : prev;
+        const map = new Map(base.map((item) => [item.id, item] as const));
+        incoming.forEach((event) => {
+          map.set(event.id, event);
+        });
+        const merged = Array.from(map.values());
+        merged.sort((a, b) => (a.receivedAt > b.receivedAt ? -1 : a.receivedAt < b.receivedAt ? 1 : 0));
+        return merged;
+      });
+
+      latestTimestampRef.current = nextLatest;
+    },
+    [],
+  );
 
   useEffect(() => {
     setEvents(initialEvents);
+    const latest = initialEvents.reduce<string | null>((acc, event) => {
+      if (!acc) {
+        return event.receivedAt;
+      }
+      return acc > event.receivedAt ? acc : event.receivedAt;
+    }, latestTimestampRef.current);
+    latestTimestampRef.current = latest;
   }, [initialEvents]);
 
   useEffect(() => {
@@ -67,6 +115,159 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
     }
   }, [searchTerm]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setPollError(null);
+    pollingControllerRef.current?.abort();
+    const controller = new AbortController();
+    pollingControllerRef.current = controller;
+    latestTimestampRef.current = null;
+
+    const buildParams = (includeSince: boolean) => {
+      if (includeSince && !latestTimestampRef.current) {
+        return null;
+      }
+      const params = new URLSearchParams();
+      params.set("limit", "200");
+      params.set("requestedOnly", "false");
+      if (workspaceId !== "all" && workspaceId !== "__unassigned__") {
+        params.set("workspaceId", workspaceId);
+      }
+      if (providerFilter !== "all") {
+        params.set("provider", providerFilter);
+      }
+      if (statusFilter !== "all") {
+        params.set("status", statusFilter);
+      }
+      if (correlationFilter) {
+        params.set("correlationId", correlationFilter);
+      }
+      if (includeSince && latestTimestampRef.current) {
+        params.set("since", latestTimestampRef.current);
+      }
+      return params;
+    };
+
+    const fetchInitial = async () => {
+      try {
+        const params = buildParams(false);
+        if (!params) {
+          return;
+        }
+        const response = await fetch(`/api/billing/replays?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Upstream responded with ${response.status}`);
+        }
+        const body = (await response.json()) as { events: ProcessorReplayEvent[] };
+        if (cancelled) {
+          return;
+        }
+        mergeEvents(body.events, true);
+        setPollError(null);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Unable to refresh replays.";
+        setPollError(message);
+      }
+    };
+
+    const fetchDeltas = async () => {
+      try {
+        const params = buildParams(true);
+        if (!params) {
+          return;
+        }
+        const response = await fetch(`/api/billing/replays?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Upstream responded with ${response.status}`);
+        }
+        const body = (await response.json()) as { events: ProcessorReplayEvent[] };
+        if (cancelled) {
+          return;
+        }
+        mergeEvents(body.events, false);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Unable to refresh replays.";
+        setPollError(message);
+      }
+    };
+
+    fetchInitial();
+    const interval = setInterval(fetchDeltas, 8000);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearInterval(interval);
+    };
+  }, [workspaceId, providerFilter, statusFilter, correlationFilter, mergeEvents]);
+
+  useEffect(() => {
+    if (!selectedEventId) {
+      setDetail(null);
+      setDetailError(null);
+      setDetailLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError(null);
+
+    const params = new URLSearchParams();
+    if (workspaceId !== "all" && workspaceId !== "__unassigned__") {
+      params.set("workspaceId", workspaceId);
+    }
+    const query = params.toString();
+
+    const fetchDetail = async () => {
+      try {
+        const response = await fetch(
+          `/api/billing/replays/${selectedEventId}${query ? `?${query}` : ""}`,
+          {
+            cache: "no-store",
+          },
+        );
+        if (!response.ok) {
+          throw new Error(`Upstream responded with ${response.status}`);
+        }
+        const body = (await response.json()) as { event: ProcessorReplayDetail };
+        if (cancelled) {
+          return;
+        }
+        setDetail(body.event);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Unable to load replay detail.";
+        setDetailError(message);
+        setDetail(null);
+      } finally {
+        if (!cancelled) {
+          setDetailLoading(false);
+        }
+      }
+    };
+
+    fetchDetail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEventId, workspaceId]);
+
   const providerOptions = useMemo(() => {
     const providers = Array.from(new Set(events.map((event) => event.provider.toLowerCase())));
     providers.sort();
@@ -78,8 +279,32 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
     );
   }, [events]);
 
+  const workspaceOptions = useMemo(() => {
+    const ids = new Set(events.map((event) => event.workspaceId ?? "__unassigned__"));
+    const options = Array.from(ids)
+      .filter((id) => id !== "__unassigned__")
+      .map((id) => ({
+        label: id,
+        value: id,
+      }));
+    options.sort((a, b) => a.label.localeCompare(b.label));
+    if (ids.has("__unassigned__")) {
+      options.push({ label: "Unassigned", value: "__unassigned__" });
+    }
+    return [{ label: "All workspaces", value: "all" as const }, ...options];
+  }, [events]);
+
   const filteredEvents = useMemo(() => {
     return events.filter((event) => {
+      if (workspaceId !== "all") {
+        if (workspaceId === "__unassigned__" && event.workspaceId) {
+          return false;
+        }
+        if (workspaceId !== "__unassigned__" && event.workspaceId !== workspaceId) {
+          return false;
+        }
+      }
+
       if (filters.provider && filters.provider !== "all") {
         if (event.provider.toLowerCase() !== filters.provider.toLowerCase()) {
           return false;
@@ -103,7 +328,7 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
 
       return true;
     });
-  }, [events, filters]);
+  }, [events, filters, workspaceId]);
 
   const updateEvent = (event: ProcessorReplayEvent) => {
     setEvents((prev) => {
@@ -133,7 +358,12 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
       optimisticUpdate(event);
 
       try {
-        const response = await fetch(`/api/billing/replays/${event.id}`, {
+        const params = new URLSearchParams();
+        if (workspaceId !== "all" && workspaceId !== "__unassigned__") {
+          params.set("workspaceId", workspaceId);
+        }
+        const query = params.toString();
+        const response = await fetch(`/api/billing/replays/${event.id}${query ? `?${query}` : ""}`, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -205,8 +435,29 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
   };
 
   return (
-    <section className="space-y-6" data-testid="replay-dashboard">
+    <>
+      <section className="space-y-6" data-testid="replay-dashboard">
       <div className="flex flex-wrap items-end gap-4 rounded-lg border border-white/10 bg-white/5 p-6">
+        <div className="flex flex-col">
+          <label className="text-xs uppercase tracking-wide text-white/60" htmlFor="workspace-filter">
+            Workspace
+          </label>
+          <select
+            id="workspace-filter"
+            className="mt-1 rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white shadow-sm focus:border-sky-400 focus:outline-none"
+            value={workspaceId}
+            onChange={(event) => {
+              setWorkspaceId(event.target.value);
+            }}
+          >
+            {workspaceOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <div className="flex flex-col">
           <label className="text-xs uppercase tracking-wide text-white/60" htmlFor="provider-filter">
             Provider
@@ -263,6 +514,12 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
         </div>
       </div>
 
+      {pollError && (
+        <div className="rounded-md border border-rose-400/40 bg-rose-500/10 p-3 text-sm text-rose-200">
+          Live updates paused: {pollError}
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-lg border border-white/10 bg-black/30">
         <table className="min-w-full divide-y divide-white/10">
           <thead className="bg-white/5 text-left text-sm uppercase tracking-wider text-white/60">
@@ -271,6 +528,7 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
               <th className="px-4 py-3">Provider</th>
               <th className="px-4 py-3">External ID</th>
               <th className="px-4 py-3">Correlation</th>
+              <th className="px-4 py-3">Workspace</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Replay attempts</th>
               <th className="px-4 py-3">Last replay</th>
@@ -296,11 +554,23 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
                     <td className="px-4 py-3 align-top font-mono text-xs">
                       {event.correlationId ?? event.invoiceId ?? "—"}
                     </td>
+                    <td className="px-4 py-3 align-top font-mono text-xs text-white/60">
+                      {event.workspaceId ?? "—"}
+                    </td>
                     <td className="px-4 py-3 align-top">{renderStatusBadge(event.status)}</td>
                     <td className="px-4 py-3 align-top">{event.replayAttempts}</td>
                     <td className="px-4 py-3 align-top text-white/70">{formatDate(event.replayedAt)}</td>
                     <td className="px-4 py-3 align-top">
                       <div className="flex flex-col gap-2">
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center rounded-md border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold text-white/80 transition hover:bg-white/20"
+                          onClick={() => {
+                            setSelectedEventId((prev) => (prev === event.id ? null : event.id));
+                          }}
+                        >
+                          {selectedEventId === event.id ? "Hide detail" : "Inspect event"}
+                        </button>
                         <button
                           type="button"
                           className="inline-flex items-center justify-center rounded-md border border-sky-400/60 bg-sky-500/20 px-3 py-1 text-xs font-semibold text-sky-100 transition hover:bg-sky-500/30 disabled:cursor-not-allowed disabled:border-slate-500/40 disabled:bg-slate-500/10 disabled:text-slate-300/60"
@@ -346,5 +616,150 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
         </table>
       </div>
     </section>
+
+    {selectedEventId && (
+      <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/70 backdrop-blur-sm">
+        <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-white/10 bg-slate-950/95 p-6 shadow-2xl">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Replay detail</h2>
+              <p className="text-sm text-white/60">Deep dive into the processor replay lifecycle.</p>
+            </div>
+            <button
+              type="button"
+              className="rounded-md border border-white/10 px-3 py-1 text-xs font-medium text-white/70 transition hover:bg-white/10"
+              onClick={() => setSelectedEventId(null)}
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="mt-6 space-y-6">
+            {detailLoading && <p className="text-sm text-white/70">Loading replay details…</p>}
+            {detailError && !detailLoading && (
+              <p className="rounded-md border border-rose-400/40 bg-rose-500/10 p-3 text-sm text-rose-200">
+                {detailError}
+              </p>
+            )}
+            {!detailLoading && !detailError && !detail && (
+              <p className="text-sm text-white/60">Replay detail unavailable for this event.</p>
+            )}
+
+            {detail && (
+              <>
+                <section className="space-y-3 rounded-lg border border-white/10 bg-white/5 p-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-wide text-white/60">Event summary</h3>
+                  <dl className="grid grid-cols-2 gap-3 text-sm text-white/80">
+                    <div>
+                      <dt className="text-xs uppercase text-white/50">Provider</dt>
+                      <dd className="font-mono text-xs uppercase text-white/80">{detail.provider}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs uppercase text-white/50">Workspace</dt>
+                      <dd className="font-mono text-xs text-white/70">{detail.workspaceId ?? "—"}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-xs uppercase text-white/50">External ID</dt>
+                      <dd className="font-mono text-xs text-white/80 break-words">{detail.externalId}</dd>
+                    </div>
+                    <div className="col-span-2">
+                      <dt className="text-xs uppercase text-white/50">Correlation</dt>
+                      <dd className="font-mono text-xs text-white/70">
+                        {detail.correlationId ?? detail.invoiceId ?? "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs uppercase text-white/50">Status</dt>
+                      <dd>{renderStatusBadge(detail.status)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs uppercase text-white/50">Last replay</dt>
+                      <dd className="text-xs text-white/70">{formatDate(detail.replayedAt)}</dd>
+                    </div>
+                    {detail.lastReplayError && (
+                      <div className="col-span-2">
+                        <dt className="text-xs uppercase text-rose-300/80">Last error</dt>
+                        <dd className="mt-1 whitespace-pre-wrap rounded bg-rose-500/10 p-3 text-xs text-rose-100">
+                          {detail.lastReplayError}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                </section>
+
+                <section className="space-y-3 rounded-lg border border-white/10 bg-white/5 p-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-wide text-white/60">Replay timeline</h3>
+                  {detail.attempts.length === 0 ? (
+                    <p className="text-sm text-white/60">No replay attempts have been recorded.</p>
+                  ) : (
+                    <ul className="space-y-3">
+                      {detail.attempts.map((attempt) => (
+                        <li
+                          key={attempt.id}
+                          className="rounded-md border border-white/10 bg-black/40 p-3 text-sm text-white/80"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold">
+                              {attempt.status === "succeeded" ? "Succeeded" : attempt.status}
+                            </span>
+                            <span className="text-xs text-white/60">{formatDate(attempt.attemptedAt)}</span>
+                          </div>
+                          {attempt.error && (
+                            <p className="mt-2 text-xs text-rose-300">{attempt.error}</p>
+                          )}
+                          {attempt.metadata && (
+                            <details className="mt-2 text-xs text-white/70">
+                              <summary className="cursor-pointer text-white/80">Metadata</summary>
+                              <pre className="mt-2 max-h-48 overflow-auto rounded bg-black/60 p-2 text-[11px] text-white/70">
+                                {JSON.stringify(attempt.metadata, null, 2)}
+                              </pre>
+                            </details>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="space-y-3 rounded-lg border border-white/10 bg-white/5 p-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-wide text-white/60">Invoice snapshot</h3>
+                  {detail.invoiceSnapshot ? (
+                    <dl className="grid grid-cols-2 gap-3 text-sm text-white/80">
+                      <div>
+                        <dt className="text-xs uppercase text-white/50">Invoice</dt>
+                        <dd className="font-mono text-xs text-white/80">
+                          {detail.invoiceSnapshot.number} ({detail.invoiceSnapshot.id})
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs uppercase text-white/50">Status</dt>
+                        <dd className="text-xs text-white/70">{detail.invoiceSnapshot.status}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs uppercase text-white/50">Total</dt>
+                        <dd className="text-xs text-white/70">
+                          {detail.invoiceSnapshot.currency} {detail.invoiceSnapshot.total.toFixed(2)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs uppercase text-white/50">Issued</dt>
+                        <dd className="text-xs text-white/70">{formatDate(detail.invoiceSnapshot.issuedAt)}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs uppercase text-white/50">Due</dt>
+                        <dd className="text-xs text-white/70">{formatDate(detail.invoiceSnapshot.dueAt)}</dd>
+                      </div>
+                    </dl>
+                  ) : (
+                    <p className="text-sm text-white/60">This replay is not linked to an invoice.</p>
+                  )}
+                </section>
+              </>
+            )}
+          </div>
+        </aside>
+      </div>
+    )}
+    </>
   );
 }

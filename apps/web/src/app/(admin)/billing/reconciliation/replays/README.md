@@ -6,8 +6,10 @@ server component fetches replay metadata from the billing API and renders the in
 
 Capabilities include:
 
-- Filtering by provider, replay status, and correlation identifier fragments.
-- Inspecting replay attempts, request metadata, and last error context.
+- Workspace, provider, status, and correlation filtering with live polling updates powered by the
+  billing replay API cursor.
+- Detailed replay timelines with attempt metadata, error context, and invoice snapshots surfaced in the
+  investigative drawer.
 - Triggering replays (including force replays) through the proxied Next.js API route with optimistic UI
   feedback.
 

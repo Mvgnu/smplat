@@ -16,7 +16,11 @@ section documents the core operating procedures for finance and platform operato
 ## Replay APIs
 
 - `GET /api/v1/billing/replays` lists ledger entries. Use `requestedOnly=false` to include processed
-  events or `provider` filters when triaging specific gateways.
+  events or `provider` filters when triaging specific gateways. The `workspaceId` query parameter
+  scopes results to a tenant, while the optional `since` cursor returns only events received after the
+  provided timestamp (ISO-8601).
+- `GET /api/v1/billing/replays/{eventId}` returns a single event with replay attempt history and a
+  lightweight invoice snapshot. Supplying `workspaceId` enforces tenant isolation for the lookup.
 - `POST /api/v1/billing/replays/{eventId}/trigger` flags an event for replay. Passing
   `{ "force": true }` executes an immediate replay. Without `force` the request schedules background
   processing and returns accepted.
@@ -33,7 +37,7 @@ section documents the core operating procedures for finance and platform operato
 
 ## Operational workflow
 
-1. **Monitor queue** – Use the replay list endpoint or forthcoming admin UI to monitor queued events
+1. **Monitor queue** – Use the replay list endpoint or admin UI to monitor queued events
    (`replayRequested=true`). Investigate repeated `lastReplayError` values.
 2. **Investigate root cause** – Resolve underlying data issues (e.g., create the missing invoice) before
    triggering a replay.
@@ -49,16 +53,21 @@ section documents the core operating procedures for finance and platform operato
 The `/admin/billing/reconciliation/replays` surface exposes replay orchestration controls without requiring
 API tooling. Operators should:
 
-1. **Filter context** – Select the processor provider and replay status from the filter controls. Use the
-   correlation search box for invoice IDs or partial correlation IDs.
-2. **Inspect history** – Expand the **Last error** accordion in each row to review the most recent
-   `lastReplayError` payload, replay attempts, and request timestamps.
-3. **Trigger replay** – Choose **Trigger replay** to queue another attempt. The UI optimistically updates
-   status badges and shows confirmation.
-4. **Handle guardrails** – If a 409 response appears (`Replay limit reached`), use the surfaced **Force replay**
-   button after validating the payload. Force replays call the FastAPI endpoint with `force=true`.
-5. **Verify** – Confirm the operator console reflects updated attempts or eventual success. Refreshing the
-   page fetches live data from `/api/v1/billing/replays`.
+1. **Filter context** – Select the workspace, processor provider, and replay status from the filter
+   controls. Use the correlation search box for invoice IDs or partial correlation IDs. Setting the
+   workspace selector updates the API queries to respect tenant isolation.
+2. **Live monitoring** – The console polls the replay API every few seconds using the `since` cursor to
+   surface new events and status transitions without requiring manual refreshes. Connection failures are
+   surfaced inline so operators can retry or fall back to manual fetches.
+3. **Inspect history** – Choose **Inspect event** to open the investigative drawer. The drawer shows the
+   full replay timeline, attempt metadata, error payloads, and invoice snapshot so operators can confirm
+   downstream impact before triggering another replay.
+4. **Trigger replay** – Use **Trigger replay** to queue another attempt. The UI optimistically updates
+   status badges and shows confirmation. Operators can still issue a **Force replay** when a 409
+   (`Replay limit reached`) response is returned and the payload has been vetted.
+5. **Verify** – Confirm the drawer timeline reflects new attempts or eventual success. The live polling
+   loop will merge newly completed events, but the **Refresh** control remains available via the browser
+   for manual reconciliation.
 
 Screenshots and walkthroughs are maintained in the admin README to align with evolving UI patterns.
 

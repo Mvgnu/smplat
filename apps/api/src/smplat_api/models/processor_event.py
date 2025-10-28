@@ -145,12 +145,30 @@ async def mark_replay_requested(
     return event
 
 
+class ProcessorEventReplayAttempt(Base):
+    """Audit log capturing each replay attempt for a processor event."""
+
+    __tablename__ = "processor_event_replay_attempts"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    event_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("processor_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    status = Column(String(32), nullable=False)
+    error = Column(Text, nullable=True)
+    metadata_snapshot = Column(JSON, nullable=True)
+
+
 async def register_replay_attempt(
     session: AsyncSession,
     *,
     event: ProcessorEvent,
     attempted_at: datetime,
     error: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> ProcessorEvent:
     """Record a replay attempt and capture the outcome."""
 
@@ -159,8 +177,36 @@ async def register_replay_attempt(
     event.last_replay_error = error
     if error is None:
         event.replay_requested = False
+
+    attempt = ProcessorEventReplayAttempt(
+        event_id=event.id,
+        attempted_at=attempted_at,
+        status="succeeded" if error is None else "failed",
+        error=error,
+        metadata_snapshot=metadata,
+    )
+    session.add(attempt)
+
     await session.flush()
     return event
+
+
+async def fetch_replay_attempts(
+    session: AsyncSession,
+    *,
+    event_id: UUID,
+    limit: int = 25,
+) -> list[ProcessorEventReplayAttempt]:
+    """Return replay attempts for a processor event ordered by recency."""
+
+    stmt = (
+        select(ProcessorEventReplayAttempt)
+        .where(ProcessorEventReplayAttempt.event_id == event_id)
+        .order_by(ProcessorEventReplayAttempt.attempted_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 async def fetch_events_for_replay(

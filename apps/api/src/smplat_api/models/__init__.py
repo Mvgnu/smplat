@@ -27,7 +27,9 @@ from .order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum  # noqa: F
 from .payment import Payment, PaymentProviderEnum, PaymentStatusEnum  # noqa: F401
 from .processor_event import (  # noqa: F401
     ProcessorEvent,
+    ProcessorEventReplayAttempt,
     fetch_events_for_replay,
+    fetch_replay_attempts,
     mark_replay_requested,
     record_processor_event,
     register_replay_attempt,

@@ -18,6 +18,6 @@ fetchers and the UI.
 ## Replay Console
 
 The `replays/` directory hosts the processor replay console, which consumes the FastAPI billing replay
-endpoints through `@/server/billing/replays`. Operators can filter by provider, replay status, and
-correlation identifiers, inspect replay attempt history, and trigger or force replays via the proxied
-Next.js API route.
+endpoints through `@/server/billing/replays`. Operators can filter by workspace, provider, status, and
+correlation identifiers, observe live polling updates, inspect replay attempt history within the
+investigative drawer, and trigger or force replays via the proxied Next.js API route.
