@@ -22,6 +22,8 @@ Each metric definition includes a default freshness window that also governs the
 - `fulfillment_sla_on_time_pct` – 1440 minutes (24 hours)
 - `first_response_minutes` – 360 minutes (6 hours)
 - `nps_trailing_30d` – 1440 minutes (24 hours)
+- `fulfillment_backlog_minutes` – 120 minutes (2 hours)
+- `fulfillment_staffing_coverage_pct` – 180 minutes (3 hours)
 
 If the storefront reports a `stale` badge, verify whether the freshness window should be tightened or whether the cache needs to be invalidated.
 
@@ -33,6 +35,8 @@ If the storefront reports a `stale` badge, verify whether the freshness window s
    - `fulfillment_tasks` for schedule/completion timestamps
    - `order_items` + `orders` for first response calculations
    - `fulfillment_tasks.result` JSON for embedded `nps_score` payloads
+   - `fulfillment_tasks` queue depth (pending/in_progress) for backlog minutes
+   - `fulfillment_tasks` schedule/completion counts over the last 24 hours for staffing coverage
 4. If a dataset backfill is in progress, keep the metric in an `unsupported` state (via CMS preview bindings) until the upstream data is complete. The storefront surfaces provenance notes from the API response.
 
 ### Metadata column collision postmortem (2024-05)
@@ -45,7 +49,7 @@ If the storefront reports a `stale` badge, verify whether the freshness window s
 ## Adding a new metric
 
 1. **Catalog entry** – update `FulfillmentMetricsService._definitions` with the new metric ID, source, default freshness window, and computation function.
-2. **CMS options** – append the metric option to `metricOptions` within `CheckoutTrustExperiences.ts`.
+2. **CMS options** – append the metric option to `metricOptions` within `CheckoutTrustExperiences.ts` and document preview copy, especially new metadata keys exposed to operators.
 3. **Documentation** – list the metric in `docs/cms/trust-content.md` with a short description and provenance.
 4. **Front-end copy** – ensure checkout components handle the new metric (tooltips, fallbacks, preview badges).
 5. **Testing** – hit `POST /api/v1/trust/experiences` with the new metric ID and confirm the verification payload before publishing CMS changes.

@@ -37,6 +37,7 @@ export type CheckoutMetricVerification = {
   cacheTtlMinutes?: number | null;
   unsupportedReason?: string | null;
   provenanceNotes?: string[] | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 export type CheckoutAssurancePoint = {
@@ -181,12 +182,30 @@ const fallbackExperience: CheckoutTrustExperience = {
       title: "Campaign milestones audited weekly",
       description:
         "Operators log deliverables in the client portal with timestamped evidence so finance and marketing stay aligned.",
+      metric: {
+        metricId: "fulfillment_backlog_minutes",
+        metricSource: "fulfillment",
+        freshnessWindowMinutes: 120,
+        provenanceNote: "Live backlog minutes pulled from operator queues.",
+      },
     },
     {
       id: "compliance",
       title: "Compliance-ready workflows",
       description:
         "Meta, TikTok, and FTC guardrails are embedded into each workflow with automated checks before campaigns go live.",
+    },
+    {
+      id: "staffing",
+      title: "Operators staffed ahead of demand",
+      description:
+        "Coverage planning blends live order intake with operator rosters so no campaign waits for assignments.",
+      metric: {
+        metricId: "fulfillment_staffing_coverage_pct",
+        metricSource: "fulfillment",
+        freshnessWindowMinutes: 180,
+        provenanceNote: "24h staffing coverage trend across pods.",
+      },
     },
   ],
   supportChannels: [
@@ -232,6 +251,32 @@ const fallbackExperience: CheckoutTrustExperience = {
       value: "4.9/5",
       fallbackValue: "4.9/5",
       caption: "Post-onboarding CSAT responses",
+    },
+    {
+      id: "backlog",
+      label: "Active backlog",
+      value: "Under 2h",
+      fallbackValue: "Under 2h",
+      caption: "Rolling average queue depth across pods",
+      metric: {
+        metricId: "fulfillment_backlog_minutes",
+        metricSource: "fulfillment",
+        freshnessWindowMinutes: 120,
+        provenanceNote: "Operators keep backlog under two hours.",
+      },
+    },
+    {
+      id: "coverage",
+      label: "Staffing coverage",
+      value: "96%",
+      fallbackValue: "96%",
+      caption: "Completed vs. scheduled work (24h)",
+      metric: {
+        metricId: "fulfillment_staffing_coverage_pct",
+        metricSource: "fulfillment",
+        freshnessWindowMinutes: 180,
+        provenanceNote: "Coverage stays above 90% on live queues.",
+      },
     },
   ],
   testimonials: [
@@ -315,6 +360,7 @@ const cloneMetric = (metric: CheckoutMetricVerification | undefined): CheckoutMe
     cacheTtlMinutes: metric.cacheTtlMinutes ?? null,
     unsupportedReason: metric.unsupportedReason ?? null,
     provenanceNotes: metric.provenanceNotes ? [...metric.provenanceNotes] : null,
+    metadata: metric.metadata ? { ...metric.metadata } : null,
   } satisfies CheckoutMetricVerification;
 };
 
@@ -357,6 +403,7 @@ const createMetricVerification = (
     cacheTtlMinutes: null,
     unsupportedReason: null,
     provenanceNotes: null,
+    metadata: null,
   } satisfies CheckoutMetricVerification;
 };
 
@@ -523,6 +570,7 @@ const applyMetricResolution = (
     metric.cacheTtlMinutes = null;
     metric.unsupportedReason = null;
     metric.provenanceNotes = null;
+    metric.metadata = metric.metadata ?? null;
     return;
   }
 
@@ -552,6 +600,7 @@ const applyMetricResolution = (
 
   const provenanceNotes = provenance?.notes ?? null;
   metric.provenanceNotes = provenanceNotes && provenanceNotes.length > 0 ? [...provenanceNotes] : null;
+  metric.metadata = resolution.metadata ?? null;
 
   if (metric.provenanceNotes?.length) {
     metric.provenanceNote = metric.provenanceNotes[0];

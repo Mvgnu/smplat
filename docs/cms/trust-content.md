@@ -25,12 +25,19 @@ This document captures the Payload CMS schema for checkout trust experiences and
 
 Both assurance points and performance snapshots include a `metric` group with the following fields:
 
-- `metricId` – canonical metric identifier (e.g. `fulfillment_sla_on_time_pct`).
+- `metricId` – canonical metric identifier (e.g. `fulfillment_sla_on_time_pct`, `fulfillment_backlog_minutes`, `fulfillment_staffing_coverage_pct`).
 - `metricSource` – provenance string used for the tooltip badge (`fulfillment`, `operator_staffing`, or `support_analytics`).
 - `freshnessWindowMinutes` – maximum tolerated staleness before the UI downgrades the module to `stale`.
 - `previewState` – operator override for preview displays (`fresh`, `stale`, or `missing`).
 - `provenanceNote` – free-form context surfaced in checkout tooltips and preview panels.
 - `fallbackValue` – (performance snapshots only) text rendered when no live metric is available.
+- `metadata` – populated at runtime with diagnostic payloads (e.g. backlog minutes, staffing lookback counts) for UI copy or tooltips.
+
+### Delivery confidence metrics
+
+- `fulfillment_backlog_minutes` aggregates overdue minutes for active tasks, exposing `total_backlog_minutes`, `average_backlog_minutes`, and task counts so operators can message queue depth accurately.
+- `fulfillment_staffing_coverage_pct` compares completed versus scheduled work across the last 24 hours. Metadata includes `scheduled_tasks`, `completed_tasks`, and `lookback_hours` to back up staffing copy.
+- Both metrics inherit the trust cache contract, meaning provenance includes cache layer, refreshed/expiry timestamps, and TTL diagnostics for preview tooling.
 
 ## Live metric binding
 
