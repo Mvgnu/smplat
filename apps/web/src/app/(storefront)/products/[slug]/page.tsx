@@ -5,11 +5,13 @@ import type { ResolvingMetadata } from "next";
 import { getCheckoutTrustExperience } from "@/server/cms/trust";
 import { getPageBySlug } from "@/server/cms/loaders";
 import { fetchCatalogBundleRecommendations } from "@/server/catalog/recommendations";
+import { fetchCatalogExperiments } from "@/server/catalog/experiments";
 import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import type { PageDocument } from "@/server/cms/types";
 import { ProductDetail } from "@/types/product";
 
 import { ProductDetailClient } from "./product-detail-client";
+import { filterExperimentsForRecommendations } from "./experiment-overlay";
 import {
   defaultMarketing,
   marketingFallbacks,
@@ -349,6 +351,11 @@ export default async function ProductDetailPage({ params }: PageProps) {
   const trustExperience = await getCheckoutTrustExperience();
   const marketing = integrateTrustSignals(mergeMarketingContent(fallback, page), trustExperience);
   const recommendationSnapshot = await fetchCatalogBundleRecommendations(product.slug);
+  const experiments = await fetchCatalogExperiments();
+  const relevantExperiments = filterExperimentsForRecommendations(
+    recommendationSnapshot.recommendations,
+    experiments,
+  );
 
   return (
     <ProductDetailClient
@@ -356,6 +363,7 @@ export default async function ProductDetailPage({ params }: PageProps) {
       marketing={marketing}
       recommendations={recommendationSnapshot.recommendations}
       recommendationFallback={recommendationSnapshot.fallbackCopy}
+      experiments={relevantExperiments}
     />
   );
 }

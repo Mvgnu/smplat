@@ -19,7 +19,11 @@ import {
   type SavedConfiguration
 } from "@/store/saved-configurations";
 import type { ProductDetail, ProductOptionGroup } from "@/types/product";
-import type { CatalogBundleRecommendation } from "@smplat/types";
+import type { CatalogBundleRecommendation, CatalogExperimentResponse } from "@smplat/types";
+import {
+  buildBundleExperimentOverlay,
+  hasGuardrailBreaches,
+} from "../experiment-overlay";
 import type { MarketingContent } from "../marketing-content";
 
 type ConfigSelection = {
@@ -49,6 +53,7 @@ type ProductDetailClientProps = {
   marketing: MarketingContent;
   recommendations: CatalogBundleRecommendation[];
   recommendationFallback?: string | null;
+  experiments: CatalogExperimentResponse[];
 };
 
 function formatCurrency(amount: number, currency: string): string {
@@ -270,7 +275,13 @@ function formatTimestamp(iso: string): string {
   }
 }
 
-export function ProductDetailClient({ product, marketing }: ProductDetailClientProps) {
+export function ProductDetailClient({
+  product,
+  marketing,
+  recommendations,
+  recommendationFallback,
+  experiments,
+}: ProductDetailClientProps) {
   const [selection, setSelection] = useState<ConfigSelection>({
     total: product.basePrice,
     selectedOptions: {},
@@ -302,6 +313,39 @@ export function ProductDetailClient({ product, marketing }: ProductDetailClientP
   const priceBreakdown = useMemo(
     () => computePriceBreakdown(product, selection),
     [product, selection]
+  );
+  const experimentOverlay = useMemo(
+    () => buildBundleExperimentOverlay(experiments),
+    [experiments]
+  );
+  const experimentSummaries = useMemo(
+    () =>
+      experiments.map((experiment) => {
+        const variants = experiment.variants.map((variant) => {
+          const metric = variant.metrics
+            .slice()
+            .sort((a, b) => b.computedAt.getTime() - a.computedAt.getTime())[0];
+          return {
+            key: variant.key,
+            name: variant.name,
+            bundleSlug: variant.bundleSlug,
+            isControl: variant.isControl,
+            guardrailBreached: metric?.guardrailBreached ?? false,
+            acceptanceRate: metric?.acceptanceRate ?? null,
+            sampleSize: metric?.sampleSize ?? null,
+          };
+        });
+        const guardrailTriggered =
+          experiment.status === "paused" || variants.some((variant) => variant.guardrailBreached);
+        return {
+          slug: experiment.slug,
+          name: experiment.name,
+          status: experiment.status,
+          guardrailTriggered,
+          variants,
+        };
+      }),
+    [experiments]
   );
 
   const handleConfiguratorChange = (next: ConfigSelection) => {
@@ -792,75 +836,178 @@ export function ProductDetailClient({ product, marketing }: ProductDetailClientP
             </span>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {recommendations.map((bundle) => (
-              <article key={bundle.slug} className="rounded-2xl border border-white/15 bg-black/30 p-5 text-sm text-white/80">
-                <div className="flex flex-col gap-1 md:flex-row md:items-start md:justify-between">
-                  <div>
-                    <p className="text-base font-semibold text-white">{bundle.title}</p>
-                    {bundle.savingsCopy ? (
-                      <span className="mt-1 inline-flex rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-200">
-                        {bundle.savingsCopy}
-                      </span>
-                    ) : null}
+            {recommendations.map((bundle) => {
+              const overlay = experimentOverlay.get(bundle.slug);
+              const guardrailTriggered = hasGuardrailBreaches(overlay);
+              const activeVariant = overlay?.find((variant) => !variant.isControl) ?? overlay?.[0];
+              const acceptanceRate =
+                activeVariant?.latestAcceptanceRate ?? bundle.acceptanceRate ?? null;
+              const sampleSize = activeVariant?.latestSampleSize ?? bundle.acceptanceCount ?? null;
+
+              return (
+                <article
+                  key={bundle.slug}
+                  className={`rounded-2xl border bg-black/30 p-5 text-sm text-white/80 transition ${
+                    guardrailTriggered ? "border-amber-400/60" : "border-white/15"
+                  }`}
+                >
+                  <div className="flex flex-col gap-1 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="text-base font-semibold text-white">{bundle.title}</p>
+                      {bundle.savingsCopy ? (
+                        <span className="mt-1 inline-flex rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-200">
+                          {bundle.savingsCopy}
+                        </span>
+                      ) : null}
+                    </div>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-white/60">
+                      Score {bundle.score.toFixed(1)}
+                    </span>
                   </div>
-                  <span className="text-xs font-semibold uppercase tracking-wide text-white/60">
-                    Score {bundle.score.toFixed(1)}
-                  </span>
-                </div>
-                {bundle.description ? <p className="mt-2 text-xs text-white/60">{bundle.description}</p> : null}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {bundle.components.map((component) => (
-                    <Link
-                      key={component}
-                      href={`/products/${component}`}
-                      className="inline-flex items-center rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white hover:text-white"
-                    >
-                      {component.replace(/-/g, " ")}
-                    </Link>
-                  ))}
-                </div>
-                <dl className="mt-4 grid gap-4 text-xs text-white/60 md:grid-cols-3">
-                  <div>
-                    <dt className="uppercase tracking-wide">Acceptance</dt>
-                    <dd className="text-white">{formatPercentage(bundle.acceptanceRate)}</dd>
-                  </div>
-                  <div>
-                    <dt className="uppercase tracking-wide">Queue depth</dt>
-                    <dd className="text-white">{formatQueueDepth(bundle.queueDepth)}</dd>
-                  </div>
-                  <div>
-                    <dt className="uppercase tracking-wide">CMS priority</dt>
-                    <dd className="text-white">{bundle.cmsPriority}</dd>
-                  </div>
-                </dl>
-                {bundle.notes.length > 0 ? (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {bundle.notes.map((note) => (
-                      <span key={note} className="rounded-full bg-white/10 px-2 py-1 text-[10px] uppercase tracking-wide text-white/70">
-                        {note.replace(/_/g, " ")}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                {bundle.provenance.notes.length > 0 ? (
+                  {bundle.description ? <p className="mt-2 text-xs text-white/60">{bundle.description}</p> : null}
+                  {overlay && overlay.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {overlay.map((variant) => (
+                        <span
+                          key={`${variant.experimentSlug}-${variant.variantKey}`}
+                          className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-wide ${
+                            variant.guardrailBreached ? "bg-amber-500/20 text-amber-200" : "bg-white/10 text-white/70"
+                          }`}
+                        >
+                          {variant.experimentName}: {variant.variantKey}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {bundle.provenance.notes.map((tag) => (
-                      <span key={tag} className="rounded-full border border-emerald-400/40 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-200/80">
-                        {tag.replace(/_/g, " ")}
-                      </span>
+                    {bundle.components.map((component) => (
+                      <Link
+                        key={component}
+                        href={`/products/${component}`}
+                        className="inline-flex items-center rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white hover:text-white"
+                      >
+                        {component.replace(/-/g, " ")}
+                      </Link>
                     ))}
                   </div>
-                ) : null}
-                <p className="mt-4 text-[11px] text-white/50">
-                  Last refreshed {bundle.provenance.cacheRefreshedAt.toLocaleString()} · Cache TTL {bundle.provenance.cacheTtlMinutes}m
-                </p>
-              </article>
-            ))}
+                  <dl className="mt-4 grid gap-4 text-xs text-white/60 md:grid-cols-3">
+                    <div>
+                      <dt className="uppercase tracking-wide">Acceptance</dt>
+                      <dd className="text-white">
+                        {formatPercentage(acceptanceRate)}
+                        {sampleSize !== null ? (
+                          <span className="ml-2 text-xs text-white/60">n={sampleSize}</span>
+                        ) : null}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="uppercase tracking-wide">Queue depth</dt>
+                      <dd className="text-white">{formatQueueDepth(bundle.queueDepth)}</dd>
+                    </div>
+                    <div>
+                      <dt className="uppercase tracking-wide">CMS priority</dt>
+                      <dd className="text-white">{bundle.cmsPriority}</dd>
+                    </div>
+                  </dl>
+                  {guardrailTriggered ? (
+                    <p className="mt-3 text-xs text-amber-300">
+                      Guardrail triggered — variants are throttled until telemetry stabilizes.
+                    </p>
+                  ) : null}
+                  {bundle.notes.length > 0 ? (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {bundle.notes.map((note) => (
+                        <span key={note} className="rounded-full bg-white/10 px-2 py-1 text-[10px] uppercase tracking-wide text-white/70">
+                          {note.replace(/_/g, " ")}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {bundle.provenance.notes.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {bundle.provenance.notes.map((tag) => (
+                        <span key={tag} className="rounded-full border border-emerald-400/40 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-200/80">
+                          {tag.replace(/_/g, " ")}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <p className="mt-4 text-[11px] text-white/50">
+                    Last refreshed {bundle.provenance.cacheRefreshedAt.toLocaleString()} · Cache TTL {bundle.provenance.cacheTtlMinutes}m
+                  </p>
+                </article>
+              );
+            })}
           </div>
         </section>
       ) : recommendationFallback ? (
         <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-sm text-white/70 backdrop-blur">
           {recommendationFallback}
+        </section>
+      ) : null}
+
+      {experimentSummaries.length > 0 ? (
+        <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-white">Experiment activity</h2>
+              <p className="text-sm text-white/60">
+                Guardrails auto-pause experiments when acceptance dips below thresholds.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 space-y-4">
+            {experimentSummaries.map((experiment) => (
+              <article
+                key={experiment.slug}
+                className={`rounded-2xl border p-5 text-sm transition ${
+                  experiment.guardrailTriggered
+                    ? "border-amber-400/60 bg-amber-500/10 text-amber-100"
+                    : "border-white/15 bg-black/20 text-white/70"
+                }`}
+              >
+                <div className="flex flex-col gap-1 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-base font-semibold text-white">{experiment.name}</p>
+                    <p className="text-xs text-white/60">Slug: {experiment.slug} · Status: {experiment.status}</p>
+                  </div>
+                  {experiment.guardrailTriggered ? (
+                    <span className="rounded-full bg-amber-500/20 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-200">
+                      Guardrail active
+                    </span>
+                  ) : (
+                    <span className="rounded-full border border-white/20 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white/70">
+                      {experiment.status.toUpperCase()}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {experiment.variants.map((variant) => (
+                    <div
+                      key={`${experiment.slug}-${variant.key}`}
+                      className={`rounded-xl border px-3 py-3 text-xs ${
+                        variant.guardrailBreached
+                          ? "border-amber-400/60 bg-amber-500/10 text-amber-100"
+                          : "border-white/15 bg-white/5 text-white/70"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-white">{variant.name}</span>
+                        <span className="uppercase tracking-wide text-white/60">
+                          {variant.isControl ? "Control" : "Variant"}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-3 text-white/60">
+                        <span>Acceptance {formatPercentage(variant.acceptanceRate)}</span>
+                        <span>n={variant.sampleSize ?? "–"}</span>
+                        {variant.bundleSlug ? <span>Bundle {variant.bundleSlug}</span> : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
         </section>
       ) : null}
 

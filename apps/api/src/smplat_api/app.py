@@ -10,7 +10,7 @@ from .api.routes import api_router
 from .core.logging import configure_logging
 from .services.fulfillment import TaskProcessor
 from .services.notifications import WeeklyDigestScheduler
-from .workers import HostedSessionRecoveryWorker
+from .workers import BundleExperimentGuardrailWorker, HostedSessionRecoveryWorker
 
 
 def _session_factory():
@@ -32,6 +32,11 @@ async def lifespan(app: FastAPI):
         trigger_label=settings.hosted_recovery_trigger_label,
     )
 
+    guardrail_worker = BundleExperimentGuardrailWorker(
+        session_factory=_session_factory,
+        interval_seconds=settings.bundle_experiment_guardrail_interval_seconds,
+    )
+
     digest_scheduler = WeeklyDigestScheduler(
         session_factory=_session_factory,
         interval_seconds=settings.weekly_digest_interval_seconds,
@@ -42,6 +47,7 @@ async def lifespan(app: FastAPI):
     worker_task: asyncio.Task | None = None
     app.state.weekly_digest_scheduler = digest_scheduler
     app.state.hosted_recovery_worker = recovery_worker
+    app.state.bundle_experiment_guardrail_worker = guardrail_worker
 
     if settings.fulfillment_worker_enabled:
         worker_task = asyncio.create_task(processor.start())
@@ -83,6 +89,19 @@ async def lifespan(app: FastAPI):
             reason="hosted_recovery_worker_enabled is false",
         )
 
+    guardrail_enabled = settings.bundle_experiment_guardrail_worker_enabled
+    if guardrail_enabled:
+        guardrail_worker.start()
+        logger.info(
+            "Bundle experiment guardrail worker enabled",
+            interval_seconds=guardrail_worker.interval_seconds,
+        )
+    else:
+        logger.info(
+            "Bundle experiment guardrail worker disabled",
+            reason="bundle_experiment_guardrail_worker_enabled is false",
+        )
+
     try:
         yield
     finally:
@@ -94,6 +113,8 @@ async def lifespan(app: FastAPI):
             await digest_scheduler.stop()
         if recovery_enabled and recovery_worker.is_running:
             await recovery_worker.stop()
+        if guardrail_enabled and guardrail_worker.is_running:
+            await guardrail_worker.stop()
 
 
 def create_app() -> FastAPI:
