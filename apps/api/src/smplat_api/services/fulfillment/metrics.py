@@ -8,11 +8,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
-from sqlalchemy import Select, case, func, select
+from sqlalchemy import Select, case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smplat_api.models.fulfillment import FulfillmentTask
 from smplat_api.models.order import Order, OrderItem
+from smplat_api.models.metric_cache import FulfillmentMetricCache
 
 # meta: caching-strategy: timed-memory
 _CACHE_LOCK = asyncio.Lock()
@@ -56,6 +57,32 @@ class ResolvedMetric:
     freshness_window_minutes: int | None
     verification_state: str
     metadata: dict[str, Any]
+    provenance: "MetricProvenance"
+
+
+@dataclass(slots=True)
+class MetricProvenance:
+    """Context for how a metric snapshot was sourced."""
+
+    # meta: provenance: fulfillment
+    source: str | None
+    cache_layer: str
+    cache_refreshed_at: datetime | None
+    cache_expires_at: datetime | None
+    cache_ttl_minutes: int | None
+    notes: list[str]
+    unsupported_reason: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "cache_layer": self.cache_layer,
+            "cache_refreshed_at": self.cache_refreshed_at,
+            "cache_expires_at": self.cache_expires_at,
+            "cache_ttl_minutes": self.cache_ttl_minutes,
+            "notes": self.notes,
+            "unsupported_reason": self.unsupported_reason,
+        }
 
 
 MetricComputer = Callable[["FulfillmentMetricsService"], Awaitable[MetricSnapshot]]
@@ -109,6 +136,15 @@ class FulfillmentMetricsService:
             definition = self._definitions.get(request.metric_id)
             if not definition:
                 logger.warning("Unsupported metric requested", metric_id=request.metric_id)
+                provenance = MetricProvenance(
+                    source=None,
+                    cache_layer="none",
+                    cache_refreshed_at=None,
+                    cache_expires_at=None,
+                    cache_ttl_minutes=None,
+                    notes=["Metric not registered in fulfillment catalog."],
+                    unsupported_reason="metric_not_registered",
+                )
                 resolved.append(
                     ResolvedMetric(
                         metric_id=request.metric_id,
@@ -119,13 +155,15 @@ class FulfillmentMetricsService:
                         freshness_window_minutes=request.freshness_window_minutes,
                         verification_state="unsupported",
                         metadata={"source": "unknown"},
+                        provenance=provenance,
                     )
                 )
                 continue
 
-            snapshot = await self._get_snapshot(definition)
+            snapshot, cache_metadata = await self._get_snapshot(definition)
             freshness_window = request.freshness_window_minutes or definition.default_freshness_minutes
             verification_state = self._derive_verification_state(snapshot, freshness_window)
+            provenance = self._build_provenance(definition, cache_metadata)
 
             resolved.append(
                 ResolvedMetric(
@@ -137,23 +175,166 @@ class FulfillmentMetricsService:
                     freshness_window_minutes=freshness_window,
                     verification_state=verification_state,
                     metadata={"source": definition.source, **snapshot.metadata},
+                    provenance=provenance,
                 )
             )
 
         return resolved
 
-    async def _get_snapshot(self, definition: MetricDefinition) -> MetricSnapshot:
+    async def _get_snapshot(self, definition: MetricDefinition) -> tuple[MetricSnapshot, dict[str, Any]]:
+        now = _utcnow()
+        persistent_ttl = self._persistent_ttl(definition)
+
         async with _CACHE_LOCK:
             cached = _CACHE.get(definition.metric_id)
-            if cached and (_utcnow() - cached.computed_at) <= _CACHE_TTL:
-                return cached
+            if cached and (now - cached.computed_at) <= _CACHE_TTL:
+                logger.debug(
+                    "Fulfillment metric served from in-memory cache",
+                    metric_id=definition.metric_id,
+                    cache_layer="memory",
+                )
+                return cached, self._build_cache_metadata("memory", cached, persistent_ttl)
+
+        persistent = await self._load_persistent_snapshot(definition.metric_id, now)
+        if persistent:
+            logger.debug(
+                "Fulfillment metric hydrated from persistent cache",
+                metric_id=definition.metric_id,
+                cache_layer="persistent",
+            )
+            async with _CACHE_LOCK:
+                _CACHE[definition.metric_id] = persistent
+            return persistent, self._build_cache_metadata("persistent", persistent, persistent_ttl)
 
         snapshot = await definition.computer(self)
+        logger.debug(
+            "Fulfillment metric recomputed",
+            metric_id=definition.metric_id,
+            cache_layer="computed",
+        )
+        await self._store_persistent_snapshot(snapshot, persistent_ttl)
 
         async with _CACHE_LOCK:
             _CACHE[definition.metric_id] = snapshot
 
-        return snapshot
+        return snapshot, self._build_cache_metadata("computed", snapshot, persistent_ttl)
+
+    async def purge_cache(self, metric_id: str | None = None) -> list[str]:
+        """Invalidate both memory and persistent caches for selected metrics."""
+
+        if metric_id:
+            target_ids = [metric_id]
+        else:
+            async with _CACHE_LOCK:
+                target_ids = list(_CACHE.keys())
+
+        stmt = select(FulfillmentMetricCache.metric_id)
+        if metric_id:
+            stmt = stmt.where(FulfillmentMetricCache.metric_id == metric_id)
+        db_result = await self._session.execute(stmt)
+        db_ids = list(db_result.scalars())
+
+        if metric_id:
+            target_ids.extend(db_ids)
+        else:
+            target_ids.extend(db_ids)
+
+        unique_ids = sorted({metric for metric in target_ids if metric})
+
+        async with _CACHE_LOCK:
+            if metric_id:
+                _CACHE.pop(metric_id, None)
+            else:
+                _CACHE.clear()
+
+        delete_stmt = delete(FulfillmentMetricCache)
+        if metric_id:
+            delete_stmt = delete_stmt.where(FulfillmentMetricCache.metric_id == metric_id)
+        await self._session.execute(delete_stmt)
+        await self._session.flush()
+
+        logger.info("Fulfillment metric cache purged", metric_ids=unique_ids or [metric_id or "all"])
+
+        return unique_ids
+
+    def _persistent_ttl(self, definition: MetricDefinition) -> timedelta:
+        minutes = definition.default_freshness_minutes or int(_CACHE_TTL.total_seconds() // 60)
+        minimum_minutes = max(minutes, int(_CACHE_TTL.total_seconds() // 60))
+        return timedelta(minutes=minimum_minutes)
+
+    async def _load_persistent_snapshot(self, metric_id: str, now: datetime) -> MetricSnapshot | None:
+        record = await self._session.get(FulfillmentMetricCache, metric_id)
+        if not record:
+            return None
+
+        expires_at = record.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if expires_at <= now:
+            await self._evict_persistent_metric(metric_id)
+            return None
+
+        return record.to_snapshot()
+
+    async def _store_persistent_snapshot(self, snapshot: MetricSnapshot, ttl: timedelta) -> None:
+        expires_at = snapshot.computed_at + ttl
+        record = await self._session.get(FulfillmentMetricCache, snapshot.metric_id)
+
+        if record:
+            record.value = snapshot.value
+            record.formatted_value = snapshot.formatted_value
+            record.sample_size = snapshot.sample_size
+            record.computed_at = snapshot.computed_at
+            record.expires_at = expires_at
+            record.metadata_json = snapshot.metadata
+        else:
+            self._session.add(FulfillmentMetricCache.from_snapshot(snapshot, expires_at))
+
+        await self._session.flush()
+
+    async def _evict_persistent_metric(self, metric_id: str) -> None:
+        await self._session.execute(
+            delete(FulfillmentMetricCache).where(FulfillmentMetricCache.metric_id == metric_id)
+        )
+        await self._session.flush()
+
+    def _build_cache_metadata(
+        self,
+        layer: str,
+        snapshot: MetricSnapshot,
+        ttl: timedelta,
+    ) -> dict[str, Any]:
+        expires_at = snapshot.computed_at + ttl
+        ttl_minutes = int(ttl.total_seconds() // 60)
+        notes_lookup = {
+            "memory": ["Served from in-memory cache."],
+            "persistent": ["Hydrated from persistent cache store."],
+            "computed": ["Snapshot recomputed from fulfillment sources."],
+        }
+        notes = notes_lookup.get(layer, [])
+
+        return {
+            "layer": layer,
+            "refreshed_at": snapshot.computed_at,
+            "expires_at": expires_at,
+            "ttl_minutes": ttl_minutes,
+            "notes": notes,
+        }
+
+    def _build_provenance(
+        self,
+        definition: MetricDefinition,
+        cache_metadata: dict[str, Any],
+    ) -> MetricProvenance:
+        return MetricProvenance(
+            source=definition.source,
+            cache_layer=cache_metadata.get("layer", "unknown"),
+            cache_refreshed_at=cache_metadata.get("refreshed_at"),
+            cache_expires_at=cache_metadata.get("expires_at"),
+            cache_ttl_minutes=cache_metadata.get("ttl_minutes"),
+            notes=list(cache_metadata.get("notes", [])),
+        )
 
     @staticmethod
     def _derive_verification_state(snapshot: MetricSnapshot, freshness_window: int | None) -> str:

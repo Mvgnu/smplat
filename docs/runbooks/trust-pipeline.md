@@ -6,13 +6,18 @@ This runbook documents how to monitor and maintain the checkout trust pipeline t
 
 - **CMS collection:** `checkout-trust-experiences`
 - **Backend service:** `apps/api/src/smplat_api/services/fulfillment/metrics.py`
-- **API endpoint:** `POST /api/v1/trust/experiences`
+- **API endpoints:** `POST /api/v1/trust/experiences`, `POST /api/v1/trust/metrics/purge`
 - **Front-end resolver:** `apps/web/src/server/cms/trust.ts`
 - **Preview route:** `/trust-preview/[id]` (requires `CHECKOUT_PREVIEW_TOKEN` in the query string when configured)
 
 ## Refresh cadence
 
-Metrics are cached for 15 minutes in-memory inside the FastAPI process. Each metric definition includes a default freshness window:
+Metrics use a **two-tier cache**:
+
+- **In-memory:** 15-minute TTL inside the FastAPI worker for hot requests.
+- **Persistent:** `fulfillment_metric_cache` Postgres table. Entries inherit the metric's default freshness window and are automatically evicted when expired or via the purge endpoint.
+
+Each metric definition includes a default freshness window that also governs the persistent TTL:
 
 - `fulfillment_sla_on_time_pct` – 1440 minutes (24 hours)
 - `first_response_minutes` – 360 minutes (6 hours)
@@ -22,12 +27,13 @@ If the storefront reports a `stale` badge, verify whether the freshness window s
 
 ## Regenerating metrics
 
-1. Connect to the API pod and restart the FastAPI process to clear the in-memory cache, or ship a deploy to refresh naturally.
-2. Re-run the checkout flow and confirm that badges report `fresh` in `/trust-preview/checkout`.
+1. Call `POST /api/v1/trust/metrics/purge` with the relevant `metric_id` (or omit the field to flush all metrics). The endpoint responds with the purged identifiers.
+2. Re-run the checkout flow and confirm that badges report `fresh` in `/trust-preview/checkout`. Provenance metadata now includes cache layer, refreshed timestamp, and TTL diagnostics.
 3. If values remain stale, inspect the source tables:
    - `fulfillment_tasks` for schedule/completion timestamps
    - `order_items` + `orders` for first response calculations
    - `fulfillment_tasks.result` JSON for embedded `nps_score` payloads
+4. If a dataset backfill is in progress, keep the metric in an `unsupported` state (via CMS preview bindings) until the upstream data is complete. The storefront surfaces provenance notes from the API response.
 
 ### Metadata column collision postmortem (2024-05)
 

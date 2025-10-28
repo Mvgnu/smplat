@@ -13,12 +13,14 @@ from smplat_api.models.fulfillment import (
     FulfillmentTaskStatusEnum,
     FulfillmentTaskTypeEnum,
 )
+from smplat_api.models.metric_cache import FulfillmentMetricCache
 from smplat_api.models.order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum
 from smplat_api.models.product import Product, ProductStatusEnum
 from smplat_api.services.fulfillment.metrics import (
     FulfillmentMetricsService,
     MetricRequest,
     _CACHE,
+    _utcnow,
 )
 
 
@@ -114,6 +116,11 @@ async def test_on_time_percentage_counts_completed_within_schedule(session_facto
         assert resolved.sample_size == 2
         assert resolved.metadata["source"] == "fulfillment"
         assert resolved.metadata["on_time_tasks"] == 1
+        assert resolved.provenance.source == "fulfillment"
+        assert resolved.provenance.cache_layer == "computed"
+        assert resolved.provenance.cache_refreshed_at is not None
+        assert resolved.provenance.cache_expires_at is not None
+        assert resolved.provenance.cache_ttl_minutes == 1440
 
 
 @pytest.mark.asyncio
@@ -155,6 +162,9 @@ async def test_first_response_minutes_returns_average_delta(session_factory):
         assert resolved.sample_size == 2
         assert resolved.value == pytest.approx(45.0)
         assert resolved.formatted_value == "45m"
+        assert resolved.provenance.source == "support"
+        assert resolved.provenance.cache_layer == "computed"
+        assert resolved.provenance.cache_ttl_minutes == 360
 
 
 @pytest.mark.asyncio
@@ -197,6 +207,137 @@ async def test_nps_trailing_30d_ignores_non_numeric_scores(session_factory):
         assert resolved.sample_size == 1
         assert resolved.value == pytest.approx(10.0)
         assert resolved.formatted_value == "10.0"
+        assert resolved.provenance.source == "fulfillment"
+        assert resolved.provenance.cache_layer == "computed"
+        assert resolved.provenance.cache_ttl_minutes == 1440
+
+
+@pytest.mark.asyncio
+async def test_persistent_cache_hydrates_when_memory_empty(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ANALYTICS_COLLECTION,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Cache hydration baseline",
+                scheduled_at=now,
+                completed_at=now,
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+
+        [initial] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_sla_on_time_pct")]
+        )
+
+        assert initial.provenance.cache_layer == "computed"
+
+        _CACHE.clear()
+
+        [hydrated] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_sla_on_time_pct")]
+        )
+
+        assert hydrated.value == initial.value
+        assert hydrated.provenance.cache_layer == "persistent"
+        assert hydrated.provenance.cache_refreshed_at == initial.provenance.cache_refreshed_at
+
+
+@pytest.mark.asyncio
+async def test_persistent_cache_recomputes_when_expired(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ANALYTICS_COLLECTION,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Cache eviction baseline",
+                scheduled_at=now,
+                completed_at=now,
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+
+        [initial] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_sla_on_time_pct")]
+        )
+
+        cache_entry = await session.get(FulfillmentMetricCache, "fulfillment_sla_on_time_pct")
+        assert cache_entry is not None
+
+        stale_timestamp = _utcnow() - timedelta(days=2)
+        cache_entry.computed_at = stale_timestamp
+        cache_entry.expires_at = _utcnow() - timedelta(minutes=1)
+        await session.flush()
+
+        _CACHE.clear()
+
+        [recomputed] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_sla_on_time_pct")]
+        )
+
+        assert recomputed.provenance.cache_layer == "computed"
+        assert recomputed.computed_at is not None
+        assert recomputed.computed_at > stale_timestamp
+        assert recomputed.provenance.cache_refreshed_at != initial.provenance.cache_refreshed_at
+
+
+@pytest.mark.asyncio
+async def test_purge_cache_clears_memory_and_persistent(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ANALYTICS_COLLECTION,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Purge baseline",
+                scheduled_at=now,
+                completed_at=now,
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+
+        await service.resolve_metrics([MetricRequest(metric_id="fulfillment_sla_on_time_pct")])
+
+        assert "fulfillment_sla_on_time_pct" in _CACHE
+
+        purged = await service.purge_cache(metric_id="fulfillment_sla_on_time_pct")
+
+        assert purged == ["fulfillment_sla_on_time_pct"]
+        assert "fulfillment_sla_on_time_pct" not in _CACHE
+        assert await session.get(FulfillmentMetricCache, "fulfillment_sla_on_time_pct") is None
+
+
+@pytest.mark.asyncio
+async def test_unsupported_metric_reports_diagnostics(session_factory):
+    async with session_factory() as session:
+        service = FulfillmentMetricsService(session)
+
+        [resolved] = await service.resolve_metrics([MetricRequest(metric_id="unknown_metric")])
+
+        assert resolved.verification_state == "unsupported"
+        assert resolved.provenance.cache_layer == "none"
+        assert resolved.provenance.unsupported_reason == "metric_not_registered"
+        assert resolved.provenance.notes
 
 
 @pytest.mark.asyncio

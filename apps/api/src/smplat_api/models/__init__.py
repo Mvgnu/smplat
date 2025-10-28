@@ -27,6 +27,7 @@ from .hosted_checkout_session import (  # noqa: F401
     HostedSessionRecoveryRun,
 )
 from .invoice import Invoice, InvoiceLineItem, InvoiceStatusEnum  # noqa: F401
+from .metric_cache import FulfillmentMetricCache  # noqa: F401
 from .notification import Notification, NotificationChannelEnum, NotificationStatusEnum  # noqa: F401
 from .order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum  # noqa: F401
 from .onboarding import (  # noqa: F401
