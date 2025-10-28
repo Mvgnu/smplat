@@ -1,5 +1,3 @@
-# SMPLAT FastAPI Service
-
 ## Local Development
 ```bash
 poetry install
@@ -18,10 +16,19 @@ See `/docs` for full architecture decisions.
 - Hosted Stripe Checkout session endpoint: `POST /api/v1/billing/invoices/{invoiceId}/checkout` (requires `X-API-Key`) persists durable session rows linked to invoices for lifecycle analytics.
 - Hosted checkout lifecycle endpoints: `GET /api/v1/billing/sessions` + `GET /api/v1/billing/sessions/{sessionId}` expose workspace-scoped visibility, while `POST /api/v1/billing/sessions/{sessionId}/regenerate` triggers operator retries with optimistic locking on `updatedAt`.
 - Lifecycle automation: `smplat_api.services.billing.sessions.sweep_hosted_sessions` performs expiry/abandonment sweeps and is safe to run on a scheduler or async worker tick.
+- Recovery automation: `HostedSessionRecoveryWorker` runs continuously when `HOSTED_RECOVERY_WORKER_ENABLED=true`, logging sweeps to `hosted_session_recovery_runs` and coordinating notifications through SendGrid/Slack when configured.
 - Webhook receiver: `POST /api/v1/billing/webhooks/stripe` validates Stripe signatures, persists the raw payload, and applies payment lifecycle updates.
-- Processor event ledger: `/api/v1/billing/webhooks/stripe` writes to `processor_events` before mutating invoices. Replay
-  operations live under `/api/v1/billing/replays` for deterministic reprocessing.
+- Processor event ledger: `/api/v1/billing/webhooks/stripe` writes to `processor_events` before mutating invoices. Replay operations live under `/api/v1/billing/replays` for deterministic reprocessing.
 - Reconciliation endpoints under `/api/v1/billing/reconciliation` expose runs, discrepancies, and resolution actions for finance teams.
 - Durable ingestion cursors are persisted in the `billing_sync_cursors` table. Each reconciliation run logs per-workspace cursor checkpoints so operators can monitor ingestion progress (see `docs/billing/reconciliation.md`).
 - Run `poetry run pytest apps/api/tests/test_billing_gateway.py` before deployments touching billing flows.
 - Stripe credentials are resolved per workspace through the Vault-backed resolver in `smplat_api.services.secrets.stripe`. Configure `VAULT_ADDR`, `VAULT_TOKEN`, and `VAULT_STRIPE_MOUNT_PATH` for secure multi-tenant rollouts; development environments fall back to `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`.
+
+## Hosted Session Recovery Configuration
+- `HOSTED_RECOVERY_WORKER_ENABLED`: toggle the background worker.
+- `HOSTED_RECOVERY_INTERVAL_SECONDS`, `HOSTED_RECOVERY_LIMIT`, `HOSTED_RECOVERY_MAX_ATTEMPTS`: cadence controls for scheduling.
+- `HOSTED_RECOVERY_EMAIL_ENABLED`, `SENDGRID_API_KEY`, `SENDGRID_SENDER_EMAIL`, `HOSTED_RECOVERY_EMAIL_RECIPIENTS`: enable SendGrid dispatch for early-attempt emails.
+- `HOSTED_RECOVERY_SLACK_ENABLED`, `HOSTED_RECOVERY_SLACK_WEBHOOK_URL`, `HOSTED_RECOVERY_SLACK_CHANNEL`: enable Slack escalation for higher-risk attempts.
+- Invoke one-off sweeps with `python tooling/scripts/run_hosted_session_recovery.py --trigger manual`.
+
+> meta: docs: hosted-recovery

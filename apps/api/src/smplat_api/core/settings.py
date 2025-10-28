@@ -47,6 +47,26 @@ class Settings(BaseSettings):
             return [str(item).strip() for item in value if str(item).strip()]
         return []
 
+    # Hosted recovery automation
+    hosted_recovery_worker_enabled: bool = False
+    hosted_recovery_interval_seconds: int = 300
+    hosted_recovery_limit: int = 100
+    hosted_recovery_max_attempts: int = 5
+    hosted_recovery_trigger_label: str = "scheduler"
+    hosted_recovery_email_enabled: bool = False
+    hosted_recovery_email_recipients: list[str] = Field(default_factory=list)
+
+    @field_validator("hosted_recovery_email_recipients", mode="before")
+    @classmethod
+    def _parse_recovery_recipients(cls, value: object) -> list[str]:
+        return cls._parse_rollout_list(value)
+
+    hosted_recovery_slack_enabled: bool = False
+    hosted_recovery_slack_webhook_url: str | None = None
+    hosted_recovery_slack_channel: str | None = None
+    sendgrid_api_key: str | None = None
+    sendgrid_sender_email: str | None = None
+
     # Email / notification settings
     smtp_host: str | None = None
     smtp_port: int = 587

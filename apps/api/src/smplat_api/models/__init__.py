@@ -24,6 +24,7 @@ from .fulfillment import (  # noqa: F401
 from .hosted_checkout_session import (  # noqa: F401
     HostedCheckoutSession,
     HostedCheckoutSessionStatusEnum,
+    HostedSessionRecoveryRun,
 )
 from .invoice import Invoice, InvoiceLineItem, InvoiceStatusEnum  # noqa: F401
 from .notification import Notification, NotificationChannelEnum, NotificationStatusEnum  # noqa: F401

@@ -98,4 +98,10 @@ async def test_schedule_hosted_session_recovery_updates_state(session_factory):
         assert "scheduled_at" in latest_attempt
         assert hosted.metadata_json.get("last_notified_at") is not None
         automation_meta = hosted.metadata_json.get("automation", {})
-        assert automation_meta.get("last_attempt", {}).get("attempt") == 2
+        latest_attempt_meta = automation_meta.get("last_attempt", {})
+        assert latest_attempt_meta.get("attempt") == 2
+        assert latest_attempt_meta.get("provider") == "stub-email"
+        attempts_log = hosted.metadata_json.get("recovery_attempts", [])
+        assert attempts_log[-1].get("provider") == "stub-email"
+        comm_log = hosted.metadata_json.get("communication_log", [])
+        assert comm_log[-1].get("provider") == "stub-email"
