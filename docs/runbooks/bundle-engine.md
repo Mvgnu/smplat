@@ -40,16 +40,25 @@
 - `BundleAcceptanceAggregator.recompute()` backfills metrics over configurable windows.
 - Events update `catalog_bundle_acceptance_metrics.acceptance_count`, `sample_size`, and `acceptance_rate` with 4-decimal precision.
 - Run aggregation as part of maintenance jobs (cron) prior to large experiments.
+- Aggregator now also mirrors metrics into `catalog_bundle_experiment_metrics` for active experiments, computing lift vs. control and tagging guardrail breaches.
+- Schedule the async recompute task nightly (or via on-demand job runner) to keep time-series current for experimentation dashboards.
 
 ## CMS Overrides & Tooling
 - Override payloads live under `catalog_bundles.metadata -> cms_override`.
 - API endpoints:
   - `POST /api/v1/catalog/recommendations/override` – persist overrides (title, description, savings, priority, campaign, tags) and purge cache.
   - `POST /api/v1/catalog/recommendations/refresh` – force recomputation for a slug.
+- Experiment APIs (require checkout API key):
+  - `GET /api/v1/catalog/experiments` – list experiment definitions, variants, and telemetry snapshots.
+  - `POST /api/v1/catalog/experiments` – create experiments with control/test variants and guardrail settings.
+  - `PUT /api/v1/catalog/experiments/{slug}` – update guardrails or status (`draft`, `running`, `paused`, `completed`).
+  - `POST /api/v1/catalog/experiments/{slug}/publish` – flip status to `running` and surface overrides for storefront loaders.
+  - `POST /api/v1/catalog/experiments/{slug}/evaluate` – return guardrail evaluation summary for operator tooling.
 - Admin UI: `/admin/merchandising/bundles` surfaces live recommendations, applied notes, and override forms.
   - Requires `CHECKOUT_API_KEY` to issue API calls.
   - "Refresh cache" calls the refresh endpoint.
   - "Apply override" posts to the override endpoint and revalidates the page.
+  - Experiment control panel allows creating experiments, publishing overrides, and pausing when guardrails trip. Metrics cards surface acceptance, sample size, lift vs. control, and guardrail status.
 
 ## Experiment Launch Checklist
 1. Confirm acceptance metrics updating (inspect latest row in `catalog_bundle_acceptance_metrics`).

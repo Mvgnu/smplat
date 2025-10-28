@@ -6,6 +6,12 @@ from .catalog import (  # noqa: F401
     CatalogBundleAcceptanceMetric,
     CatalogRecommendationCache,
 )
+from .catalog_experiments import (  # noqa: F401
+    CatalogBundleExperiment,
+    CatalogBundleExperimentMetric,
+    CatalogBundleExperimentStatus,
+    CatalogBundleExperimentVariant,
+)
 from .billing_reconciliation import (  # noqa: F401
     BillingDiscrepancy,
     BillingDiscrepancyStatus,

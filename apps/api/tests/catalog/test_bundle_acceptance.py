@@ -7,6 +7,12 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from smplat_api.models.catalog import CatalogBundle, CatalogBundleAcceptanceMetric
+from smplat_api.models.catalog_experiments import (
+    CatalogBundleExperiment,
+    CatalogBundleExperimentMetric,
+    CatalogBundleExperimentStatus,
+    CatalogBundleExperimentVariant,
+)
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.models.order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum
 from smplat_api.models.product import Product, ProductStatusEnum
@@ -179,3 +185,78 @@ async def test_aggregator_recomputes_metrics(session_factory: async_sessionmaker
         assert metric.acceptance_count == 1
         assert metric.acceptance_rate == Decimal("0.5000")
         assert metric.last_accepted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_aggregator_updates_experiment_metrics(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    async with session_factory() as session:
+        primary, upsell = await _seed_products(session)
+        await _seed_bundle(
+            session,
+            primary_slug=primary.slug,
+            bundle_slug="bundle-gamma",
+            title="Bundle Gamma",
+            components=[upsell.slug],
+        )
+
+        experiment = CatalogBundleExperiment(
+            slug="bundle-gamma-exp",
+            name="Bundle Gamma Experiment",
+            status=CatalogBundleExperimentStatus.RUNNING,
+            guardrail_config={"min_acceptance_rate": 0.1},
+            sample_size_guardrail=3,
+        )
+        session.add(experiment)
+        await session.flush()
+
+        control_variant = CatalogBundleExperimentVariant(
+            experiment_id=experiment.id,
+            key="control",
+            name="Control",
+            weight=50,
+            is_control=True,
+            bundle_slug="bundle-gamma",
+            override_payload={"strategy": "baseline"},
+        )
+        test_variant = CatalogBundleExperimentVariant(
+            experiment_id=experiment.id,
+            key="test",
+            name="Test",
+            weight=50,
+            is_control=False,
+            bundle_slug="bundle-gamma",
+            override_payload={"strategy": "experiment"},
+        )
+        session.add_all([control_variant, test_variant])
+        await session.commit()
+
+        now = dt.datetime.now(dt.timezone.utc)
+        await _create_order(session, primary, upsell, include_component=True, created_at=now - dt.timedelta(days=1))
+        await _create_order(session, primary, upsell, include_component=False, created_at=now - dt.timedelta(hours=12))
+
+        aggregator = BundleAcceptanceAggregator(session)
+        await aggregator.recompute()
+        await session.commit()
+
+        metrics = (
+            await session.execute(
+                select(CatalogBundleExperimentMetric)
+                .where(CatalogBundleExperimentMetric.experiment_id == experiment.id)
+                .order_by(CatalogBundleExperimentMetric.variant_id)
+            )
+        ).scalars().all()
+
+        assert len(metrics) == 2
+        control_metric = next(metric for metric in metrics if metric.variant_id == control_variant.id)
+        test_metric = next(metric for metric in metrics if metric.variant_id == test_variant.id)
+
+        assert control_metric.sample_size == 2
+        assert control_metric.acceptance_count == 1
+        assert control_metric.acceptance_rate == Decimal("0.5000")
+        assert control_metric.guardrail_breached is True
+
+        assert test_metric.sample_size == 2
+        assert test_metric.acceptance_count == 1
+        assert test_metric.acceptance_rate == Decimal("0.5000")
+        assert test_metric.lift_vs_control == Decimal("0.0000")
+        assert test_metric.guardrail_breached is True
