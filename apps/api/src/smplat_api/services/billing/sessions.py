@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-"""Hosted checkout session lifecycle orchestration utilities."""
-
 from datetime import datetime, timezone
 
 from sqlalchemy import and_, select

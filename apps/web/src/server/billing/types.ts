@@ -73,11 +73,47 @@ export type CampaignInsight = {
   commentary: string;
 };
 
+// meta: billing-report: types
+
+export type HostedSessionMetrics = {
+  total: number;
+  statusCounts: Record<string, number>;
+  conversionRate: number;
+  abandonmentRate: number;
+  averageCompletionSeconds: number | null;
+  averageRetryCount: number;
+  sessionsWithRetries: number;
+  averageRetryLatencySeconds: number | null;
+  pendingRegeneration: number;
+};
+
+export type HostedSessionReason = {
+  reason: string;
+  count: number;
+};
+
+export type HostedSessionInvoiceRollup = {
+  status: string;
+  count: number;
+};
+
+export type HostedSessionReport = {
+  workspaceId: string;
+  generatedAt: string;
+  windowStart: string;
+  windowEnd: string;
+  lookbackDays: number;
+  metrics: HostedSessionMetrics;
+  abandonmentReasons: HostedSessionReason[];
+  invoiceStatuses: HostedSessionInvoiceRollup[];
+};
+
 export type BillingCenterPayload = {
   invoices: BillingInvoice[];
   summary: BillingSummary;
   aging: BillingAgingBuckets;
   insights: CampaignInsight[];
+  sessionsReport: HostedSessionReport | null;
 };
 
 export type ReconciliationRunMetrics = {

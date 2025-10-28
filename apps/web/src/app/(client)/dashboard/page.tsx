@@ -227,6 +227,7 @@ export default async function ClientDashboardPage({ searchParams }: DashboardPag
         summary={billing.summary}
         aging={billing.aging}
         insights={billing.insights}
+        sessionsReport={billing.sessionsReport}
       />
 
       <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">

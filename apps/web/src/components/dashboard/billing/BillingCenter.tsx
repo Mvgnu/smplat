@@ -21,17 +21,20 @@ import type {
   BillingInvoice,
   BillingSummary,
   CampaignInsight,
+  HostedSessionReport,
   InvoiceAdjustment,
   PaymentTimelineEvent,
 } from "@/server/billing/types";
 
 import { CampaignIntelligenceGrid } from "./CampaignIntelligenceGrid";
+import { HostedSessionJourney } from "./HostedSessionJourney";
 
 type BillingCenterProps = {
   invoices: BillingInvoice[];
   summary: BillingSummary;
   aging: BillingAgingBuckets;
   insights: CampaignInsight[];
+  sessionsReport: HostedSessionReport | null;
 };
 
 const currencyFormatter = (currency: string) =>
@@ -48,7 +51,13 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric"
 });
 
-export function BillingCenter({ invoices, summary, aging, insights }: BillingCenterProps) {
+export function BillingCenter({
+  invoices,
+  summary,
+  aging,
+  insights,
+  sessionsReport,
+}: BillingCenterProps) {
   const [notifying, setNotifying] = useState<string | null>(null);
   const [processingAction, setProcessingAction] = useState<{ id: string; type: "capture" | "refund" } | null>(
     null,
@@ -94,8 +103,9 @@ export function BillingCenter({ invoices, summary, aging, insights }: BillingCen
   }
 
   return (
-    <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
-      <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-8">
+      <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
+        <div className="flex flex-col gap-8">
         <header className="flex flex-col gap-2">
           <h2 className="text-xl font-semibold text-white">Billing center</h2>
           <p className="text-sm text-white/60">
@@ -248,7 +258,10 @@ export function BillingCenter({ invoices, summary, aging, insights }: BillingCen
 
         <CampaignIntelligenceGrid insights={insights} currencyFormatter={formatter} />
       </div>
-    </section>
+      </section>
+
+      <HostedSessionJourney report={sessionsReport} />
+    </div>
   );
 }
 
