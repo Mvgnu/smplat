@@ -11,7 +11,10 @@ from loguru import logger
 from sqlalchemy import Select, case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from smplat_api.models.fulfillment import FulfillmentTask
+from smplat_api.models.fulfillment import (
+    FulfillmentTask,
+    FulfillmentTaskStatusEnum,
+)
 from smplat_api.models.order import Order, OrderItem
 from smplat_api.models.metric_cache import FulfillmentMetricCache
 
@@ -124,6 +127,18 @@ class FulfillmentMetricsService:
                 default_freshness_minutes=1440,
                 source="fulfillment",
                 computer=FulfillmentMetricsService._compute_nps_trailing_30d,
+            ),
+            "fulfillment_backlog_minutes": MetricDefinition(
+                metric_id="fulfillment_backlog_minutes",
+                default_freshness_minutes=120,
+                source="fulfillment",
+                computer=FulfillmentMetricsService._compute_backlog_minutes,
+            ),
+            "fulfillment_staffing_coverage_pct": MetricDefinition(
+                metric_id="fulfillment_staffing_coverage_pct",
+                default_freshness_minutes=180,
+                source="fulfillment",
+                computer=FulfillmentMetricsService._compute_staffing_coverage,
             ),
         }
 
@@ -411,6 +426,126 @@ class FulfillmentMetricsService:
             formatted_value=formatted,
             computed_at=_utcnow(),
             sample_size=len(deltas),
+        )
+
+        return snapshot
+
+    async def _compute_backlog_minutes(self) -> MetricSnapshot:
+        """Aggregate overdue backlog minutes for active fulfillment tasks."""
+
+        now = _utcnow()
+        stmt: Select = (
+            select(FulfillmentTask.scheduled_at, FulfillmentTask.created_at)
+            .where(
+                FulfillmentTask.status.in_(
+                    [
+                        FulfillmentTaskStatusEnum.PENDING,
+                        FulfillmentTaskStatusEnum.IN_PROGRESS,
+                    ]
+                )
+            )
+        )
+
+        result = await self._session.execute(stmt)
+        rows = result.all()
+
+        backlog_minutes: list[float] = []
+        for scheduled_at, created_at in rows:
+            anchor = scheduled_at or created_at
+            if anchor is None:
+                continue
+            if anchor.tzinfo is None:
+                anchor = anchor.replace(tzinfo=timezone.utc)
+            delta_minutes = (now - anchor).total_seconds() / 60
+            if delta_minutes > 0:
+                backlog_minutes.append(delta_minutes)
+
+        overdue_tasks = len(backlog_minutes)
+        outstanding_tasks = len(rows)
+        total_minutes = sum(backlog_minutes)
+        average_minutes = (total_minutes / overdue_tasks) if overdue_tasks else None
+
+        formatted = None
+        value = None
+        if overdue_tasks:
+            value = total_minutes
+            if total_minutes >= 60:
+                hours = total_minutes / 60
+                formatted = f"{hours:.1f}h"
+            else:
+                formatted = f"{total_minutes:.0f}m"
+
+        snapshot = MetricSnapshot(
+            metric_id="fulfillment_backlog_minutes",
+            value=value,
+            formatted_value=formatted,
+            computed_at=now,
+            sample_size=outstanding_tasks,
+            metadata={
+                "source": "fulfillment",
+                "overdue_task_count": overdue_tasks,
+                "outstanding_task_count": outstanding_tasks,
+                "average_backlog_minutes": average_minutes,
+                "total_backlog_minutes": total_minutes,
+            },
+        )
+
+        return snapshot
+
+    async def _compute_staffing_coverage(self) -> MetricSnapshot:
+        """Estimate staffing coverage by comparing completed vs. scheduled tasks."""
+
+        now = _utcnow()
+        lookback = now - timedelta(hours=24)
+
+        scheduled_stmt: Select = (
+            select(func.count())
+            .where(FulfillmentTask.scheduled_at.isnot(None))
+            .where(FulfillmentTask.scheduled_at >= lookback)
+            .where(FulfillmentTask.scheduled_at <= now)
+            .where(
+                FulfillmentTask.status.in_(
+                    [
+                        FulfillmentTaskStatusEnum.PENDING,
+                        FulfillmentTaskStatusEnum.IN_PROGRESS,
+                    ]
+                )
+            )
+        )
+
+        completed_stmt: Select = (
+            select(func.count())
+            .where(FulfillmentTask.completed_at.isnot(None))
+            .where(FulfillmentTask.completed_at >= lookback)
+            .where(FulfillmentTask.completed_at <= now)
+            .where(FulfillmentTask.status == FulfillmentTaskStatusEnum.COMPLETED)
+        )
+
+        scheduled_count = int((await self._session.execute(scheduled_stmt)).scalar_one() or 0)
+        completed_count = int((await self._session.execute(completed_stmt)).scalar_one() or 0)
+
+        coverage = None
+        formatted = None
+        if scheduled_count:
+            coverage = completed_count / scheduled_count
+        elif completed_count:
+            coverage = 1.0
+
+        if coverage is not None:
+            formatted = f"{coverage * 100:.0f}%"
+
+        snapshot = MetricSnapshot(
+            metric_id="fulfillment_staffing_coverage_pct",
+            value=coverage,
+            formatted_value=formatted,
+            computed_at=now,
+            sample_size=scheduled_count,
+            metadata={
+                "source": "fulfillment",
+                "lookback_hours": 24,
+                "scheduled_tasks": scheduled_count,
+                "completed_tasks": completed_count,
+            },
         )
 
         return snapshot

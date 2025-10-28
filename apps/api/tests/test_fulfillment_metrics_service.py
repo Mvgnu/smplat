@@ -213,6 +213,120 @@ async def test_nps_trailing_30d_ignores_non_numeric_scores(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_backlog_minutes_reports_overdue_work(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ANALYTICS_COLLECTION,
+                status=FulfillmentTaskStatusEnum.PENDING,
+                title="Prep backlog",
+                scheduled_at=now - timedelta(hours=3),
+            )
+        )
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.FOLLOWER_GROWTH,
+                status=FulfillmentTaskStatusEnum.IN_PROGRESS,
+                title="Execution",
+                scheduled_at=now - timedelta(minutes=45),
+            )
+        )
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ENGAGEMENT_BOOST,
+                status=FulfillmentTaskStatusEnum.PENDING,
+                title="Future task",
+                scheduled_at=now + timedelta(hours=1),
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_backlog_minutes")]
+        )
+
+        assert resolved.metric_id == "fulfillment_backlog_minutes"
+        assert resolved.sample_size == 3
+        assert resolved.metadata["overdue_task_count"] == 2
+        assert resolved.metadata["outstanding_task_count"] == 3
+        assert resolved.metadata["total_backlog_minutes"] > 0
+        assert resolved.value == pytest.approx(
+            resolved.metadata["total_backlog_minutes"], abs=1.0
+        )
+        assert resolved.metadata["average_backlog_minutes"] == pytest.approx(
+            resolved.metadata["total_backlog_minutes"] / 2, abs=1.0
+        )
+        assert resolved.provenance.cache_layer == "computed"
+
+
+@pytest.mark.asyncio
+async def test_staffing_coverage_measures_completed_vs_scheduled(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        for offset_minutes in (60, 180, 360, 600):
+            session.add(
+                FulfillmentTask(
+                    order_item_id=item.id,
+                    task_type=FulfillmentTaskTypeEnum.CAMPAIGN_OPTIMIZATION,
+                    status=FulfillmentTaskStatusEnum.PENDING,
+                    title=f"Scheduled {offset_minutes}",
+                    scheduled_at=now - timedelta(minutes=offset_minutes),
+                )
+            )
+
+        for offset_minutes in (30, 90, 180):
+            session.add(
+                FulfillmentTask(
+                    order_item_id=item.id,
+                    task_type=FulfillmentTaskTypeEnum.CAMPAIGN_OPTIMIZATION,
+                    status=FulfillmentTaskStatusEnum.COMPLETED,
+                    title=f"Completed {offset_minutes}",
+                    scheduled_at=now - timedelta(minutes=offset_minutes),
+                    completed_at=now - timedelta(minutes=offset_minutes // 2),
+                )
+            )
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.CAMPAIGN_OPTIMIZATION,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Completed last week",
+                scheduled_at=now - timedelta(days=10),
+                completed_at=now - timedelta(days=7),
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_staffing_coverage_pct")]
+        )
+
+        assert resolved.metric_id == "fulfillment_staffing_coverage_pct"
+        assert resolved.sample_size == 4
+        assert resolved.metadata["scheduled_tasks"] == 4
+        assert resolved.metadata["completed_tasks"] == 3
+        assert resolved.metadata["lookback_hours"] == 24
+        assert resolved.value == pytest.approx(0.75, abs=0.05)
+        assert resolved.formatted_value == "75%"
+        assert resolved.provenance.cache_layer == "computed"
+
+
+@pytest.mark.asyncio
 async def test_persistent_cache_hydrates_when_memory_empty(session_factory):
     async with session_factory() as session:
         _, item = await _seed_order_with_item(session)
