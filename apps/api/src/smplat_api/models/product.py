@@ -93,6 +93,107 @@ class Product(Base):
         cascade="all, delete-orphan",
     )
 
+    @property
+    def fulfillment_summary(self) -> dict | None:
+        """Return structured fulfillment assurances derived from configuration."""
+
+        config = self.fulfillment_config or {}
+        if not isinstance(config, dict):
+            return None
+
+        delivery_config = config.get("delivery") or {}
+        assurances_config = config.get("assurances") or []
+        support_config = config.get("support") or []
+
+        def _as_int(value: object) -> int | None:
+            try:
+                if isinstance(value, bool):
+                    return int(value)
+                if isinstance(value, (int, float)):
+                    return int(value)
+                if isinstance(value, str) and value.strip():
+                    return int(float(value))
+            except Exception:  # pragma: no cover - defensive conversion
+                return None
+            return None
+
+        def _as_str(value: object) -> str | None:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            return None
+
+        def _extract_delivery(raw: dict | None) -> dict | None:
+            if not isinstance(raw, dict):
+                return None
+
+            return {
+                "minDays": _as_int(raw.get("minDays") or raw.get("min_days")),
+                "maxDays": _as_int(raw.get("maxDays") or raw.get("max_days")),
+                "averageDays": _as_int(raw.get("averageDays") or raw.get("average_days")),
+                "confidence": _as_str(raw.get("confidence")),
+                "headline": _as_str(raw.get("headline")),
+                "narrative": _as_str(raw.get("narrative")),
+            }
+
+        def _extract_assurances(raw_list: list | None) -> list[dict]:
+            items: list[dict] = []
+            if not isinstance(raw_list, list):
+                return items
+            for entry in raw_list:
+                if not isinstance(entry, dict):
+                    continue
+                label = _as_str(entry.get("label"))
+                description = _as_str(entry.get("description"))
+                if not label and not description:
+                    continue
+                items.append(
+                    {
+                        "id": _as_str(entry.get("id")) or label or "assurance",
+                        "label": label or description or "",
+                        "description": description,
+                        "evidence": _as_str(entry.get("evidence")),
+                        "source": _as_str(entry.get("source")),
+                    }
+                )
+            return items
+
+        def _extract_support(raw_list: list | None) -> list[dict]:
+            items: list[dict] = []
+            if not isinstance(raw_list, list):
+                return items
+            for entry in raw_list:
+                if not isinstance(entry, dict):
+                    continue
+                channel = _as_str(entry.get("channel")) or _as_str(entry.get("type"))
+                label = _as_str(entry.get("label")) or channel
+                target = _as_str(entry.get("target")) or _as_str(entry.get("href"))
+                if not channel or not label or not target:
+                    continue
+                items.append(
+                    {
+                        "id": _as_str(entry.get("id")) or f"{channel}:{target}",
+                        "channel": channel,
+                        "label": label,
+                        "target": target,
+                        "availability": _as_str(entry.get("availability")),
+                    }
+                )
+            return items
+
+        summary: dict[str, object] = {}
+        delivery = _extract_delivery(delivery_config)
+        assurances = _extract_assurances(assurances_config)
+        support = _extract_support(support_config)
+
+        if delivery and any(value is not None for value in delivery.values()):
+            summary["delivery"] = delivery
+        if assurances:
+            summary["assurances"] = assurances
+        if support:
+            summary["support"] = support
+
+        return summary or None
+
 
 class ProductOptionGroup(Base):
     __tablename__ = "product_option_groups"

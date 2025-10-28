@@ -24,12 +24,11 @@ _Last updated: 2025-10-18_
 - Saved configuration presets (with local persistence), granular price breakdowns, and CMS-backed media galleries enrich the merchandising surface.
 - Catalog listing now supports sort-by options (price/title) and promotes CMS-defined cross-sell bundles for quick merchandising experiments.
 - Catalog insights surface trending and zero-result searches in the storefront and can be exported via `tooling/scripts/export_catalog_insights.py` for merchandising hand-offs.
+- Checkout flow now includes a CMS-backed trust layer with guarantee copy, concierge entry points, dynamic delivery timelines derived from fulfillment configuration, social proof metrics, and contextual bundle recommendations with lightweight acceptance logging.
 
 **Outstanding**
-- Layer confidence-building elements into checkout (CMS-authored trust copy, delivery timeline widget, concierge support CTA) and wire dynamic estimates from fulfillment data.
-- Deliver contextual bundle & upsell flows (post-add-to-cart modal, seasonal offers, ROI storytelling) with lightweight acceptance analytics.
-- Seed storefront social proof modules (testimonial carousels, verified results gallery, live AMA scheduler) sourced from CMS collections.
-- Map the post-purchase onboarding journey (success redirect wizard, asset checklist, referral incentives) and expose operator visibility via dashboard components.
+- Extend the trust experience to product detail and marketing surfaces (CMS-driven AMA scheduling, storefront testimonial streams) and introduce ROI storytelling modals for high-value bundles.
+- Deepen acceptance analytics by surfacing the new Postgres-backed offer/onboarding event streams in operator dashboards and alerting.
 
 ## Fulfillment & Operations
 **Delivered**

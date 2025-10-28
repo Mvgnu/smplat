@@ -1,9 +1,12 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
+import type { CheckoutTrustExperience } from "@/server/cms/trust";
 import { cartTotalSelector, useCartStore } from "@/store/cart";
+import { marketingFallbacks } from "../products/marketing-content";
+import { Clock, ShieldCheck, Users } from "lucide-react";
 
 function formatCurrency(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
@@ -21,7 +24,27 @@ type CheckoutState = {
   notes?: string;
 };
 
-export function CheckoutPageClient() {
+type CheckoutPageClientProps = {
+  trustContent: CheckoutTrustExperience;
+};
+
+type AssuranceDisplay = {
+  id: string;
+  title: string;
+  description: string;
+  evidence?: string;
+};
+
+type UpsellRecommendation = {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  savings?: string;
+  href: string;
+};
+
+export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
   const items = useCartStore((state) => state.items);
   const cartTotal = useCartStore(cartTotalSelector);
   const clearCart = useCartStore((state) => state.clear);
@@ -50,6 +73,198 @@ export function CheckoutPageClient() {
       })),
     [items]
   );
+
+  const aggregatedAssurances = useMemo<AssuranceDisplay[]>(() => {
+    const map = new Map<string, AssuranceDisplay>();
+
+    trustContent.assurances.forEach((assurance) => {
+      const title = assurance.title.trim();
+      if (!title) {
+        return;
+      }
+      map.set(assurance.id, {
+        id: assurance.id,
+        title,
+        description: assurance.description.trim(),
+        evidence: assurance.evidence,
+      });
+    });
+
+    items.forEach((item) => {
+      (item.assuranceHighlights ?? []).forEach((highlight) => {
+        const title = (highlight.label ?? "").trim();
+        const description = (highlight.description ?? "").trim();
+        if (!title && !description) {
+          return;
+        }
+        const id = highlight.id ?? `${title}-${description}`;
+        map.set(id, {
+          id,
+          title: title || description,
+          description,
+          evidence: (highlight.evidence as string | undefined) ?? undefined,
+        });
+      });
+    });
+
+    return Array.from(map.values()).slice(0, 4);
+  }, [items, trustContent.assurances]);
+
+  const aggregatedSupportChannels = useMemo(() => {
+    const map = new Map<string, CheckoutTrustExperience["supportChannels"][number]>();
+
+    trustContent.supportChannels.forEach((channel) => {
+      map.set(channel.id, channel);
+    });
+
+    items.forEach((item) => {
+      (item.supportChannels ?? []).forEach((channel) => {
+        const id = `${channel.channel}:${channel.target}`;
+        if (map.has(id)) {
+          return;
+        }
+        map.set(id, {
+          id,
+          channel: channel.channel,
+          label: channel.label,
+          target: channel.target,
+          availability: channel.availability ?? undefined,
+        });
+      });
+    });
+
+    return Array.from(map.values()).slice(0, 4);
+  }, [items, trustContent.supportChannels]);
+
+  const aggregatedTimeline = useMemo(() => {
+    const estimates = items
+      .map((item) => item.deliveryEstimate)
+      .filter((estimate): estimate is NonNullable<typeof estimate> => Boolean(estimate));
+
+    let minDays: number | undefined;
+    let maxDays: number | undefined;
+    let totalAverage = 0;
+    let averageCount = 0;
+    let confidence: string | undefined;
+    const narrativeSegments = new Set<string>();
+
+    if (trustContent.guaranteeDescription) {
+      narrativeSegments.add(trustContent.guaranteeDescription);
+    }
+
+    estimates.forEach((estimate) => {
+      if (typeof estimate.minDays === "number") {
+        minDays = typeof minDays === "number" ? Math.min(minDays, estimate.minDays) : estimate.minDays;
+      }
+      if (typeof estimate.maxDays === "number") {
+        maxDays = typeof maxDays === "number" ? Math.max(maxDays, estimate.maxDays) : estimate.maxDays;
+      }
+      if (typeof estimate.averageDays === "number") {
+        totalAverage += estimate.averageDays;
+        averageCount += 1;
+      }
+      if (!confidence && estimate.confidence) {
+        confidence = estimate.confidence;
+      }
+      if (estimate.narrative) {
+        narrativeSegments.add(estimate.narrative);
+      } else if (estimate.headline) {
+        narrativeSegments.add(estimate.headline);
+      }
+    });
+
+    let averageDays = averageCount > 0 ? Math.round(totalAverage / averageCount) : undefined;
+
+    if (typeof averageDays !== "number" && typeof minDays === "number" && typeof maxDays === "number") {
+      averageDays = Math.round((minDays + maxDays) / 2);
+    }
+
+    if (typeof minDays !== "number") {
+      minDays = 10;
+    }
+    if (typeof maxDays !== "number") {
+      maxDays = 14;
+    }
+    if (typeof averageDays !== "number") {
+      averageDays = Math.round((minDays + maxDays) / 2);
+    }
+
+    if (!confidence) {
+      confidence = "Verified timeline";
+    }
+
+    const narrative = Array.from(narrativeSegments).join(" ");
+
+    return { minDays, maxDays, averageDays, confidence, narrative };
+  }, [items, trustContent.guaranteeDescription]);
+
+  const performanceSnapshots = useMemo(() => trustContent.performanceSnapshots.slice(0, 3), [trustContent.performanceSnapshots]);
+  const testimonialHighlight = trustContent.testimonials[0];
+
+  const upsellRecommendations = useMemo<UpsellRecommendation[]>(() => {
+    const cartSlugs = new Set(items.map((item) => item.slug));
+    const seen = new Set<string>();
+    const recommendations: UpsellRecommendation[] = [];
+
+    const pushRecommendation = (bundle: { slug: string; title: string; description: string; savings?: string }) => {
+      const normalizedSlug = bundle.slug.trim();
+      if (!normalizedSlug || seen.has(normalizedSlug)) {
+        return;
+      }
+      const parts = normalizedSlug.split("+");
+      const target = parts.find((part) => !cartSlugs.has(part)) ?? parts[0];
+      const href = `/products/${target}`;
+      seen.add(normalizedSlug);
+      recommendations.push({
+        id: normalizedSlug,
+        slug: normalizedSlug,
+        title: bundle.title,
+        description: bundle.description,
+        savings: bundle.savings,
+        href,
+      });
+    };
+
+    trustContent.bundleOffers.forEach((bundle) => pushRecommendation(bundle));
+
+    items.forEach((item) => {
+      const fallback = marketingFallbacks[item.slug];
+      fallback?.bundles?.forEach((bundle) => pushRecommendation(bundle));
+    });
+
+    return recommendations.slice(0, 4);
+  }, [items, trustContent.bundleOffers]);
+
+  const hasLoggedUpsellImpression = useRef(false);
+
+  const recordOfferEvent = useCallback(
+    async (eventType: string, recommendation: UpsellRecommendation) => {
+      try {
+        await fetch("/api/analytics/offer-events", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            eventType,
+            offerSlug: recommendation.slug,
+            targetSlug: recommendation.slug,
+            action: eventType === "cta_click" ? "cta_clicked" : "bundle_visible",
+            cartTotal,
+            currency,
+          }),
+        });
+      } catch (trackingError) {
+        console.warn("Failed to record offer event", trackingError);
+      }
+    },
+    [cartTotal, currency]
+  );
+
+  useEffect(() => {
+    if (!hasLoggedUpsellImpression.current && upsellRecommendations.length > 0) {
+      void recordOfferEvent("impression", upsellRecommendations[0]);
+      hasLoggedUpsellImpression.current = true;
+    }
+  }, [upsellRecommendations, recordOfferEvent]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -146,6 +361,92 @@ export function CheckoutPageClient() {
           Confirm your contact details and finalize payment via our Stripe-hosted checkout.
         </p>
       </header>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white">
+              <ShieldCheck className="h-5 w-5" />
+            </span>
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold text-white">{trustContent.guaranteeHeadline}</h2>
+              <p className="text-sm text-white/60">{trustContent.guaranteeDescription}</p>
+            </div>
+          </div>
+          <ul className="mt-4 space-y-3 text-sm text-white/70">
+            {aggregatedAssurances.map((assurance) => (
+              <li key={assurance.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                <p className="font-semibold text-white">{assurance.title}</p>
+                <p>{assurance.description}</p>
+                {assurance.evidence ? (
+                  <p className="text-xs text-white/50">Evidence: {assurance.evidence}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </article>
+        <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white">
+              <Clock className="h-5 w-5" />
+            </span>
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold text-white">Delivery timeline</h2>
+              <p className="text-sm text-white/60">{aggregatedTimeline.confidence}</p>
+            </div>
+          </div>
+          <dl className="mt-4 grid grid-cols-2 gap-4 text-sm">
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-center">
+              <dt className="text-xs uppercase tracking-wide text-white/50">Kickoff</dt>
+              <dd className="text-xl font-semibold text-white">{aggregatedTimeline.minDays}d</dd>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-center">
+              <dt className="text-xs uppercase tracking-wide text-white/50">First milestone</dt>
+              <dd className="text-xl font-semibold text-white">{aggregatedTimeline.averageDays}d</dd>
+            </div>
+            <div className="col-span-2 rounded-2xl border border-white/10 bg-black/20 p-3 text-center">
+              <dt className="text-xs uppercase tracking-wide text-white/50">Full activation</dt>
+              <dd className="text-xl font-semibold text-white">{aggregatedTimeline.maxDays}d</dd>
+            </div>
+          </dl>
+          {aggregatedTimeline.narrative ? (
+            <p className="mt-4 text-sm text-white/70">{aggregatedTimeline.narrative}</p>
+          ) : null}
+        </article>
+        <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white">
+              <Users className="h-5 w-5" />
+            </span>
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold text-white">Concierge support</h2>
+              <p className="text-sm text-white/60">Direct operator access before and after checkout.</p>
+            </div>
+          </div>
+          <ul className="mt-4 space-y-3 text-sm text-white/70">
+            {aggregatedSupportChannels.map((channel) => {
+              const href = channel.channel === "email"
+                ? `mailto:${channel.target}`
+                : channel.channel === "phone" || channel.channel === "call"
+                  ? (channel.target.startsWith('tel:') ? channel.target : `tel:${channel.target}`)
+                  : channel.target.startsWith('http')
+                    ? channel.target
+                    : channel.target;
+              return (
+                <li key={channel.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-sm font-semibold text-white">{channel.label}</span>
+                    <a href={href} className="text-xs text-white/60 underline-offset-2 hover:underline">{channel.target}</a>
+                    {channel.availability ? (
+                      <span className="text-xs text-white/50">{channel.availability}</span>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </article>
+      </section>
 
       <section className="grid gap-10 lg:grid-cols-[3fr,2fr]">
         <form onSubmit={handleSubmit} className="space-y-6 rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
@@ -258,8 +559,65 @@ export function CheckoutPageClient() {
             Payments are processed securely via Stripe. You&apos;ll be redirected to confirm card details. On success
             we&apos;ll follow up with onboarding steps and assign your fulfillment pod.
           </p>
+          {performanceSnapshots.length > 0 ? (
+            <div className="space-y-3 rounded-2xl border border-white/10 bg-black/20 p-4">
+              <h3 className="text-xs uppercase tracking-wide text-white/50">Performance snapshots</h3>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {performanceSnapshots.map((snapshot) => (
+                  <div key={snapshot.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                    <p className="text-xs uppercase tracking-wide text-white/50">{snapshot.label}</p>
+                    <p className="text-lg font-semibold text-white">{snapshot.value}</p>
+                    {snapshot.caption ? (
+                      <p className="text-xs text-white/50">{snapshot.caption}</p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {testimonialHighlight ? (
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <p className="text-sm italic text-white/80">&ldquo;{testimonialHighlight.quote}&rdquo;</p>
+              <p className="mt-3 text-xs text-white/50">{testimonialHighlight.author}{testimonialHighlight.role ? ` · ${testimonialHighlight.role}` : ""}</p>
+            </div>
+          ) : null}
         </aside>
       </section>
+
+      {upsellRecommendations.length > 0 ? (
+        <section className="space-y-4 rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Recommended bundles</h2>
+              <p className="text-sm text-white/60">Contextual upsells tuned to your cart configuration.</p>
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {upsellRecommendations.map((recommendation) => (
+              <div key={recommendation.id} className="flex flex-col justify-between rounded-2xl border border-white/10 bg-black/20 p-5">
+                <div className="space-y-2">
+                  <p className="text-base font-semibold text-white">{recommendation.title}</p>
+                  <p className="text-sm text-white/70">{recommendation.description}</p>
+                  {recommendation.savings ? (
+                    <span className="inline-flex w-fit items-center rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-100">
+                      {recommendation.savings}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-4 flex items-center gap-3">
+                  <Link
+                    href={recommendation.href}
+                    onClick={() => void recordOfferEvent("cta_click", recommendation)}
+                    className="inline-flex flex-1 items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-white/90"
+                  >
+                    Review bundle
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </main>
   );
 }
