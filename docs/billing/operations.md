@@ -56,18 +56,19 @@ API tooling. Operators should:
 1. **Filter context** – Select the workspace, processor provider, and replay status from the filter
    controls. Use the correlation search box for invoice IDs or partial correlation IDs. Setting the
    workspace selector updates the API queries to respect tenant isolation.
-2. **Live monitoring** – The console polls the replay API every few seconds using the `since` cursor to
-   surface new events and status transitions without requiring manual refreshes. Connection failures are
-   surfaced inline so operators can retry or fall back to manual fetches.
+2. **Live monitoring** – The console now maintains a server-sent events stream against
+   `/api/v1/billing/replays/stream`, pushing updates as soon as processor entries change. If the
+   connection drops the UI automatically falls back to the legacy polling loop (still using the `since`
+   cursor) and surfaces inline warnings so operators can continue triage without losing visibility.
 3. **Inspect history** – Choose **Inspect event** to open the investigative drawer. The drawer shows the
    full replay timeline, attempt metadata, error payloads, and invoice snapshot so operators can confirm
    downstream impact before triggering another replay.
 4. **Trigger replay** – Use **Trigger replay** to queue another attempt. The UI optimistically updates
    status badges and shows confirmation. Operators can still issue a **Force replay** when a 409
    (`Replay limit reached`) response is returned and the payload has been vetted.
-5. **Verify** – Confirm the drawer timeline reflects new attempts or eventual success. The live polling
-   loop will merge newly completed events, but the **Refresh** control remains available via the browser
-   for manual reconciliation.
+5. **Verify** – Confirm the drawer timeline reflects new attempts or eventual success. The streaming
+   feed merges newly completed events, and the fallback polling loop ensures the list remains fresh even
+   during transient network issues.
 
 Screenshots and walkthroughs are maintained in the admin README to align with evolving UI patterns.
 
