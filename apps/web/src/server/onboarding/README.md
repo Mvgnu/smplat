@@ -8,5 +8,8 @@ Exports:
 - `ensureOnboardingJourney(orderId, payload)` – idempotently hydrates journeys after checkout.
 - `toggleOnboardingTask(orderId, taskId, completed)` – updates task completion via the typed API.
 - `recordOnboardingReferral(orderId, referralCode)` – records referral copy events for analytics.
+- `fetchOperatorJourneys(params)` – loads operator-facing journey summaries with aggregates for the admin console.
+- `fetchOperatorJourneyDetail(journeyId)` – retrieves journey detail including tasks, artifacts, interactions, and nudge opportunities.
+- `dispatchOperatorManualNudge(journeyId, payload)` – dispatches a manual concierge nudge via the operator API surface.
 
 > meta: docs: onboarding-journey-client

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -244,6 +245,30 @@ def render_weekly_digest(
     </ul>{pending_section}
     <p>Visit the dashboard for deeper analytics.</p>
     <p>See you next week,<br />The SMPLAT Team</p>
+  </body>
+</html>"""
+
+    return RenderedTemplate(subject=subject, text_body=text_body, html_body=html_body)
+
+
+def render_onboarding_concierge_nudge(
+    order: Order,
+    *,
+    contact_name: str | None,
+    subject: str,
+    message_text: str,
+) -> RenderedTemplate:
+    """Render manual or automated onboarding concierge nudges."""
+
+    greeting = f"Hi {contact_name}," if contact_name else "Hi there,"
+    text_body = f"{greeting}\n\n{message_text}\n\nWe're standing by if you need anything.\nThe SMPLAT Team"
+
+    paragraphs = [greeting] + message_text.split("\n\n") + ["We're standing by if you need anything.", "The SMPLAT Team"]
+    html_paragraphs = "".join(f"<p>{html.escape(paragraph)}</p>" for paragraph in paragraphs if paragraph)
+    html_body = f"""<html>
+  <body>
+    {html_paragraphs}
+    <p><small>Order {html.escape(order.order_number)}</small></p>
   </body>
 </html>"""
 

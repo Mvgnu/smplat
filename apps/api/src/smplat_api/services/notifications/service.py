@@ -24,6 +24,7 @@ from .templates import (
     render_invoice_overdue,
     render_fulfillment_completion,
     render_fulfillment_retry,
+    render_onboarding_concierge_nudge,
     render_payment_success,
     render_weekly_digest,
 )
@@ -317,6 +318,47 @@ class NotificationService:
         backend = InMemoryEmailBackend()
         self._backend = backend
         return backend
+
+    async def send_onboarding_concierge_nudge(
+        self,
+        order: Order,
+        *,
+        subject: str,
+        message_text: str,
+        triggered_by: str,
+    ) -> bool:
+        """Deliver concierge nudges while honoring notification opt-ins."""
+
+        if self._backend is None:
+            return False
+
+        contact = await self._resolve_order_contact(order)
+        if contact is None:
+            return False
+
+        preferences = await self._get_preferences(order.user_id)
+        if not preferences.order_updates:
+            return False
+
+        template = render_onboarding_concierge_nudge(
+            order,
+            contact_name=contact.display_name,
+            subject=subject,
+            message_text=message_text,
+        )
+        metadata = {
+            "order_id": str(order.id),
+            "order_number": order.order_number,
+            "triggered_by": triggered_by,
+            "subject": subject,
+        }
+        await self._deliver(
+            contact,
+            template,
+            event_type="onboarding_concierge_nudge",
+            metadata=metadata,
+        )
+        return True
 
     def _build_default_backend(self) -> Optional[EmailBackend]:
         settings = get_settings()
