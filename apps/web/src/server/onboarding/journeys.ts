@@ -28,6 +28,95 @@ export type OnboardingJourneyPayload = {
   tasks: OnboardingTaskPayload[];
 };
 
+export type OperatorJourneySummary = {
+  journeyId: string;
+  orderId: string;
+  orderNumber: string | null;
+  status: string;
+  riskLevel: string;
+  progressPercentage: number;
+  referralCode: string | null;
+  startedAt: string | null;
+  updatedAt: string | null;
+  lastInteractionAt: string | null;
+  totalTasks: number;
+  completedTasks: number;
+  overdueTasks: number;
+  awaitingArtifacts: number;
+};
+
+export type OperatorJourneyAggregates = {
+  total: number;
+  active: number;
+  stalled: number;
+  completed: number;
+  withReferrals: number;
+};
+
+export type OperatorArtifact = {
+  id: string;
+  label: string;
+  required: boolean;
+  receivedAt: string | null;
+  url: string | null;
+};
+
+export type OperatorTask = {
+  id: string;
+  slug: string;
+  title: string;
+  status: string;
+  dueAt: string | null;
+  completedAt: string | null;
+  updatedAt: string | null;
+};
+
+export type OperatorInteraction = {
+  id: string;
+  actor: string;
+  channel: string;
+  summary: string | null;
+  details: string | null;
+  createdAt: string;
+  metadata: Record<string, unknown> | null;
+};
+
+export type OperatorNudgeOpportunity = {
+  journeyId: string;
+  orderId: string;
+  orderNumber: string | null;
+  taskId: string | null;
+  taskSlug: string | null;
+  reason: string;
+  dedupeKey: string;
+  idleHours: number;
+  recommendedChannel: string;
+  slaExpiresAt: string;
+  subject: string;
+  message: string;
+};
+
+export type OperatorJourneyDetail = {
+  journeyId: string;
+  orderId: string;
+  orderNumber: string | null;
+  status: string;
+  riskLevel: string;
+  progressPercentage: number;
+  referralCode: string | null;
+  startedAt: string | null;
+  updatedAt: string | null;
+  tasks: OperatorTask[];
+  artifacts: OperatorArtifact[];
+  interactions: OperatorInteraction[];
+  nudgeOpportunities: OperatorNudgeOpportunity[];
+};
+
+export type OperatorJourneySummaryResponse = {
+  summaries: OperatorJourneySummary[];
+  aggregates: OperatorJourneyAggregates;
+};
+
 const defaultHeaders = checkoutApiKey
   ? { "X-API-Key": checkoutApiKey, "Content-Type": "application/json" }
   : { "Content-Type": "application/json" };
@@ -125,5 +214,105 @@ export async function recordOnboardingReferral(
 
   if (!response.ok) {
     throw new Error(`Failed to record onboarding referral: ${response.statusText}`);
+  }
+}
+
+export async function fetchOperatorJourneys(
+  params: {
+    status?: string[];
+    stalled?: boolean;
+    referrals?: boolean;
+    search?: string | null;
+    limit?: number;
+  } = {}
+): Promise<OperatorJourneySummaryResponse> {
+  if (!checkoutApiKey) {
+    throw new Error("CHECKOUT_API_KEY must be configured for operator onboarding queries");
+  }
+
+  const url = new URL(`${apiBaseUrl}/api/v1/operators/onboarding/journeys`);
+  if (params.status?.length) {
+    params.status.forEach((value) => url.searchParams.append("status", value));
+  }
+  if (params.stalled) {
+    url.searchParams.set("stalled", "true");
+  }
+  if (params.referrals) {
+    url.searchParams.set("referrals", "true");
+  }
+  if (params.search) {
+    url.searchParams.set("search", params.search);
+  }
+  if (params.limit) {
+    url.searchParams.set("limit", String(params.limit));
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: defaultHeaders,
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to load operator onboarding journeys: ${response.statusText}`);
+  }
+
+  return (await response.json()) as OperatorJourneySummaryResponse;
+}
+
+export async function fetchOperatorJourneyDetail(journeyId: string): Promise<OperatorJourneyDetail> {
+  if (!checkoutApiKey) {
+    throw new Error("CHECKOUT_API_KEY must be configured for operator onboarding queries");
+  }
+
+  const response = await fetch(
+    `${apiBaseUrl}/api/v1/operators/onboarding/journeys/${journeyId}`,
+    {
+      headers: defaultHeaders,
+      cache: "no-store"
+    }
+  );
+
+  if (response.status === 404) {
+    throw new Error("Journey not found");
+  }
+
+  if (!response.ok) {
+    throw new Error(`Failed to load journey detail: ${response.statusText}`);
+  }
+
+  return (await response.json()) as OperatorJourneyDetail;
+}
+
+export async function dispatchOperatorManualNudge(
+  journeyId: string,
+  payload: {
+    channel: string;
+    subject: string;
+    message: string;
+    taskId?: string | null;
+    triggeredBy: string;
+  }
+): Promise<void> {
+  if (!checkoutApiKey) {
+    throw new Error("CHECKOUT_API_KEY must be configured for operator onboarding mutations");
+  }
+
+  const response = await fetch(
+    `${apiBaseUrl}/api/v1/operators/onboarding/journeys/${journeyId}/nudges/manual`,
+    {
+      method: "POST",
+      headers: defaultHeaders,
+      body: JSON.stringify({
+        channel: payload.channel,
+        subject: payload.subject,
+        message: payload.message,
+        taskId: payload.taskId ?? null,
+        triggeredBy: payload.triggeredBy
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to dispatch manual nudge: ${response.statusText}`);
   }
 }

@@ -137,7 +137,7 @@ This document outlines the immediate implementation plan to transform SMPLAT fro
   - Embed proof-driven content (case study highlights, before/after metrics) and satisfaction guarantees to reinforce buying confidence.
   - Offer loyalty incentives (referral codes, upgrade coupons) once onboarding checklist hits key milestones with referral events persisted server-side for operator review.
   - Persist onboarding state for operators with dashboard visibility; Slack/email nudges reuse notification services next.
-- **Status**: In progress — API + customer surfaces shipped; operator-triggered nudges and concierge automation remain.
+- **Status**: Operator command center is live at `/admin/onboarding` with journey filters, risk scoring, artifact visibility, manual nudge rails, and automated idle-task detection (cronable via `tooling/scripts/onboarding_nudges.py`). Remaining scope: concierge playbooks for social proof hand-offs and richer referral analytics.
 
 #### 12. Social Proof & Community Layer
 - **Files**: `apps/web/src/app/(storefront)/products/[slug]/`, `apps/web/src/components/storefront/testimonials/`, `apps/api/src/smplat_api/services/content/case_studies.py`

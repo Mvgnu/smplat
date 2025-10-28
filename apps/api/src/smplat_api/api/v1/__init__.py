@@ -13,6 +13,7 @@ from .endpoints import (
     observability,
     orders,
     onboarding,
+    operator_onboarding,
     payments,
     products,
 )
@@ -23,6 +24,7 @@ router.include_router(products.router)
 router.include_router(payments.router)
 router.include_router(orders.router)
 router.include_router(onboarding.router)
+router.include_router(operator_onboarding.router)
 router.include_router(billing.router)
 router.include_router(billing_sessions.router)
 router.include_router(billing_reports.router)
