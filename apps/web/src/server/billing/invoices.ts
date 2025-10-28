@@ -9,6 +9,7 @@ import type {
   BillingInvoiceLineItem,
   BillingSummary,
   CampaignInsight,
+  HostedSessionReport,
 } from "./types";
 
 const apiBaseUrl =
@@ -88,6 +89,28 @@ const emptyPayload: BillingCenterPayload = {
     ninetyPlus: 0,
   },
   insights: [],
+  sessionsReport: null,
+};
+
+type RawHostedSessionReport = {
+  workspaceId: string;
+  generatedAt: string;
+  windowStart: string;
+  windowEnd: string;
+  lookbackDays: number;
+  metrics: {
+    total: number;
+    statusCounts: Record<string, number>;
+    conversionRate: number;
+    abandonmentRate: number;
+    averageCompletionSeconds: number | null;
+    averageRetryCount: number;
+    sessionsWithRetries: number;
+    averageRetryLatencySeconds: number | null;
+    pendingRegeneration: number;
+  };
+  abandonmentReasons: Array<{ reason: string; count: number }>;
+  invoiceStatuses: Array<{ status: string; count: number }>;
 };
 
 export async function fetchBillingCenterPayload({
@@ -105,32 +128,44 @@ export async function fetchBillingCenterPayload({
   }
 
   try {
-    const response = await fetch(
-      `${apiBaseUrl}/api/v1/billing/invoices?workspace_id=${encodeURIComponent(workspaceId)}`,
-      {
-        headers: {
-          "X-API-Key": checkoutApiKey,
+    const [invoicesResponse, sessionsResponse] = await Promise.all([
+      fetch(
+        `${apiBaseUrl}/api/v1/billing/invoices?workspace_id=${encodeURIComponent(workspaceId)}`,
+        {
+          headers: {
+            "X-API-Key": checkoutApiKey,
+          },
+          cache: "no-store",
         },
-        cache: "no-store",
-      },
-    );
+      ),
+      fetch(
+        `${apiBaseUrl}/api/v1/billing/reports?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          headers: {
+            "X-API-Key": checkoutApiKey,
+          },
+          cache: "no-store",
+        },
+      ),
+    ]);
 
-    if (!response.ok) {
-      if (response.status !== 404) {
-        console.warn("Failed to fetch billing invoices", response.status);
+    if (!invoicesResponse.ok) {
+      if (invoicesResponse.status !== 404) {
+        console.warn("Failed to fetch billing invoices", invoicesResponse.status);
       }
       return emptyPayload;
     }
 
-    const payload = (await response.json()) as RawInvoiceResponse;
+    const payload = (await invoicesResponse.json()) as RawInvoiceResponse;
     const invoices = payload.invoices.map((invoice) =>
       normalizeInvoice(invoice, workspaceId),
     );
     const summary = normalizeSummary(payload.summary);
     const aging = normalizeAging(payload.aging);
     const insights = buildInsights(invoices, orders, instagram);
+    const sessionsReport = await normalizeHostedSessionsReport(sessionsResponse);
 
-    return { invoices, summary, aging, insights };
+    return { invoices, summary, aging, insights, sessionsReport };
   } catch (error) {
     console.warn("Unexpected error fetching billing data", error);
     return emptyPayload;
@@ -317,4 +352,42 @@ function buildCommentary({
   return `${campaignName} captured ${reachDescriptor} and ${successPercent}% fulfillment success (${fulfillmentSummary}). Spend tracked: €${invoiceTotal.toFixed(
     2,
   )}.`;
+}
+
+async function normalizeHostedSessionsReport(
+  response: Response,
+): Promise<HostedSessionReport | null> {
+  if (!response.ok) {
+    if (response.status !== 404) {
+      console.warn("Failed to fetch hosted session report", response.status);
+    }
+    return null;
+  }
+
+  try {
+    const raw = (await response.json()) as RawHostedSessionReport;
+    return {
+      workspaceId: raw.workspaceId,
+      generatedAt: raw.generatedAt,
+      windowStart: raw.windowStart,
+      windowEnd: raw.windowEnd,
+      lookbackDays: raw.lookbackDays,
+      metrics: {
+        total: raw.metrics.total,
+        statusCounts: raw.metrics.statusCounts,
+        conversionRate: raw.metrics.conversionRate,
+        abandonmentRate: raw.metrics.abandonmentRate,
+        averageCompletionSeconds: raw.metrics.averageCompletionSeconds,
+        averageRetryCount: raw.metrics.averageRetryCount,
+        sessionsWithRetries: raw.metrics.sessionsWithRetries,
+        averageRetryLatencySeconds: raw.metrics.averageRetryLatencySeconds,
+        pendingRegeneration: raw.metrics.pendingRegeneration,
+      },
+      abandonmentReasons: raw.abandonmentReasons,
+      invoiceStatuses: raw.invoiceStatuses,
+    } satisfies HostedSessionReport;
+  } catch (error) {
+    console.warn("Failed to parse hosted session report", error);
+    return null;
+  }
 }
