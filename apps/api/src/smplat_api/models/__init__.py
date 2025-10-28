@@ -21,6 +21,10 @@ from .fulfillment import (  # noqa: F401
     InstagramAnalyticsSnapshot,
     ServiceCampaign,
 )
+from .hosted_checkout_session import (  # noqa: F401
+    HostedCheckoutSession,
+    HostedCheckoutSessionStatusEnum,
+)
 from .invoice import Invoice, InvoiceLineItem, InvoiceStatusEnum  # noqa: F401
 from .notification import Notification, NotificationChannelEnum, NotificationStatusEnum  # noqa: F401
 from .order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum  # noqa: F401
