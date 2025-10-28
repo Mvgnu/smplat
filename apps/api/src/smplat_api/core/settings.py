@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     stripe_public_key: str = ""
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
-    
+    stripe_secret_cache_ttl_seconds: int = 300
+
     # Application URLs
     frontend_url: str = "http://localhost:3000"
     api_base_url: str = "http://localhost:8000"
@@ -56,6 +57,13 @@ class Settings(BaseSettings):
     weekly_digest_enabled: bool = False
     weekly_digest_interval_seconds: int = 7 * 24 * 60 * 60
     weekly_digest_dry_run: bool = False
+
+    # Vault configuration
+    vault_addr: str | None = None
+    vault_token: str | None = None
+    vault_namespace: str | None = None
+    vault_timeout_seconds: float = 5.0
+    vault_stripe_mount_path: str | None = None
 
 
 @lru_cache

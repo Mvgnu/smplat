@@ -9,22 +9,22 @@ This guide documents how to connect a production-grade payment processor to SMPL
 
 ## Credential Provisioning
 1. Generate a **restricted secret key** in Stripe limited to PaymentIntents, Refunds, and Checkout Sessions.
-2. Store the key in the platform's secret manager under `STRIPE_SECRET_KEY`; never commit it to Git. The FastAPI service loads it via `settings.stripe_secret_key`.
-3. Create a Webhook Signing Secret scoped to the `payment_intent.*` and `charge.*` events and set it as `STRIPE_WEBHOOK_SECRET`.
-4. Provide a publishable key for the web client using `STRIPE_PUBLIC_KEY` if hosted checkout telemetry is required.
+2. Store the key in Vault under `kv/stripe/workspaces/<workspaceId>` with `api_key` and `webhook_secret` fields. The FastAPI service resolves credentials per workspace at runtime using the Vault-backed resolver.
+3. Provide a publishable key for the web client using `STRIPE_PUBLIC_KEY` if hosted checkout telemetry is required.
 
 ## Environment Configuration
 Update the API deployment with the following variables:
 
 ```env
-STRIPE_SECRET_KEY=sk_live_xxx
+VAULT_ADDR=https://vault.example.com
+VAULT_TOKEN=<service token>
+VAULT_STRIPE_MOUNT_PATH=kv/stripe/workspaces
 STRIPE_PUBLIC_KEY=pk_live_xxx
-STRIPE_WEBHOOK_SECRET=whsec_xxx
 BILLING_ROLLOUT_STAGE=ga
 BILLING_ROLLOUT_WORKSPACES=<comma-separated workspace UUIDs>
 ```
 
-Restart the API service after updating credentials. The `StripeBillingProvider` lazily loads keys from configuration on instantiation.
+Development environments without Vault can fall back to `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`, but production deployments should rely on Vault to enable credential rotation without redeployments.
 
 ## Webhook Endpoint Registration
 - Configure Stripe to target `POST {API_BASE_URL}/api/v1/billing/webhooks/stripe`.

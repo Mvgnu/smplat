@@ -81,6 +81,14 @@ class BillingLedgerReconciliationWorker:
                         }
                     )
 
+                    workspace_disputes = await ingestion.sync_disputes(
+                        workspace_id=workspace_scope,
+                        created_gte=window_start,
+                    )
+                    if workspace_disputes:
+                        disputes_logged += len(workspace_disputes)
+                        should_commit = True
+
                 if aggregated_statements:
                     await reconcile_statements(
                         managed_session,
@@ -90,11 +98,6 @@ class BillingLedgerReconciliationWorker:
                     should_commit = True
 
                 if aggregated_staged or aggregated_removed:
-                    should_commit = True
-
-                disputes = await ingestion.sync_disputes(created_gte=window_start)
-                disputes_logged = len(disputes)
-                if disputes_logged:
                     should_commit = True
 
                 stmt = (

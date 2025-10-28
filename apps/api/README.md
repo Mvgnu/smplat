@@ -22,3 +22,4 @@ See `/docs` for full architecture decisions.
 - Reconciliation endpoints under `/api/v1/billing/reconciliation` expose runs, discrepancies, and resolution actions for finance teams.
 - Durable ingestion cursors are persisted in the `billing_sync_cursors` table. Each reconciliation run logs per-workspace cursor checkpoints so operators can monitor ingestion progress (see `docs/billing/reconciliation.md`).
 - Run `poetry run pytest apps/api/tests/test_billing_gateway.py` before deployments touching billing flows.
+- Stripe credentials are resolved per workspace through the Vault-backed resolver in `smplat_api.services.secrets.stripe`. Configure `VAULT_ADDR`, `VAULT_TOKEN`, and `VAULT_STRIPE_MOUNT_PATH` for secure multi-tenant rollouts; development environments fall back to `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`.

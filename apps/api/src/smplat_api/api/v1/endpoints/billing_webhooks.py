@@ -23,7 +23,7 @@ from smplat_api.models.processor_event import (
 from smplat_api.models.webhook_event import WebhookProviderEnum
 from smplat_api.services.billing.event_handlers import handle_stripe_event
 from smplat_api.workers.processor_events import ProcessorEventReplayWorker
-from smplat_api.services.billing.providers import StripeBillingProvider
+from smplat_api.services.secrets.stripe import build_default_stripe_secrets_resolver
 
 router = APIRouter(prefix="/billing/webhooks", tags=["billing-webhooks"])
 
@@ -49,11 +49,6 @@ def _enqueue_replay_processing() -> None:
 async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_session)) -> dict[str, str]:
     """Handle Stripe webhook callbacks, persisting the ledger and triggering reconciliation."""
 
-    provider = StripeBillingProvider.from_settings()
-    secret = provider.webhook_secret
-    if not secret:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe webhook secret not configured")
-
     payload_bytes = await request.body()
     payload_text = payload_bytes.decode("utf-8")
     payload_hash = hashlib.sha256(payload_bytes).hexdigest()
@@ -62,14 +57,36 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_sessio
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Stripe signature header")
 
     try:
-        event = stripe.Webhook.construct_event(payload=payload_text, sig_header=signature, secret=secret)
-    except stripe.error.SignatureVerificationError as exc:  # type: ignore[attr-defined]
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe signature") from exc
-
-    try:
         payload_dict = json.loads(payload_text)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload body") from exc
+
+    workspace_hint = (
+        payload_dict.get("data", {})
+        .get("object", {})
+        .get("metadata", {})
+        .get("workspace_id")
+    )
+    workspace_id: UUID | None = None
+    if workspace_hint:
+        try:
+            workspace_id = UUID(str(workspace_hint))
+        except ValueError:
+            workspace_id = None
+
+    resolver = build_default_stripe_secrets_resolver()
+    secrets = await resolver.get(workspace_id)
+    if secrets is None or not secrets.webhook_secret:
+        # Fall back to globally configured credentials when workspace-specific secrets are absent.
+        secrets = await resolver.get(None)
+    secret = secrets.webhook_secret if secrets else None
+    if not secret:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Stripe webhook secret not configured")
+
+    try:
+        event = stripe.Webhook.construct_event(payload=payload_text, sig_header=signature, secret=secret)
+    except stripe.error.SignatureVerificationError as exc:  # type: ignore[attr-defined]
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe signature") from exc
 
     event_id = str(event["id"])
     event_type = event["type"]
