@@ -1,6 +1,11 @@
 """SQLAlchemy models package."""
 
 # Import all models
+from .catalog import (  # noqa: F401
+    CatalogBundle,
+    CatalogBundleAcceptanceMetric,
+    CatalogRecommendationCache,
+)
 from .billing_reconciliation import (  # noqa: F401
     BillingDiscrepancy,
     BillingDiscrepancyStatus,

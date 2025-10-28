@@ -4,6 +4,7 @@ import type { ResolvingMetadata } from "next";
 
 import { getCheckoutTrustExperience } from "@/server/cms/trust";
 import { getPageBySlug } from "@/server/cms/loaders";
+import { fetchCatalogBundleRecommendations } from "@/server/catalog/recommendations";
 import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import type { PageDocument } from "@/server/cms/types";
 import { ProductDetail } from "@/types/product";
@@ -347,6 +348,14 @@ export default async function ProductDetailPage({ params }: PageProps) {
   const fallback = marketingFallbacks[product.slug] ?? defaultMarketing;
   const trustExperience = await getCheckoutTrustExperience();
   const marketing = integrateTrustSignals(mergeMarketingContent(fallback, page), trustExperience);
+  const recommendationSnapshot = await fetchCatalogBundleRecommendations(product.slug);
 
-  return <ProductDetailClient product={product} marketing={marketing} />;
+  return (
+    <ProductDetailClient
+      product={product}
+      marketing={marketing}
+      recommendations={recommendationSnapshot.recommendations}
+      recommendationFallback={recommendationSnapshot.fallbackCopy}
+    />
+  );
 }

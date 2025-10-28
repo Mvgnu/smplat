@@ -7,6 +7,7 @@ from .endpoints import (
     billing_sessions,
     billing_replay,
     billing_webhooks,
+    catalog_recommendations,
     fulfillment,
     health,
     instagram,
@@ -32,6 +33,7 @@ router.include_router(billing_reports.router)
 router.include_router(billing_reconciliation.router)
 router.include_router(billing_replay.router)
 router.include_router(billing_webhooks.router)
+router.include_router(catalog_recommendations.router)
 router.include_router(observability.router)
 router.include_router(fulfillment.router, tags=["Fulfillment"])
 router.include_router(instagram.router)

@@ -3,7 +3,11 @@
     "target": "es2019",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "lib": ["dom", "dom.iterable", "es2021"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "es2021"
+    ],
     "allowJs": false,
     "skipLibCheck": true,
     "strict": true,
@@ -14,7 +18,12 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
-      "@smplat/shared": ["./packages/shared/src/index.ts"]
+      "@smplat/shared": [
+        "./packages/shared/src/index.ts"
+      ],
+      "@smplat/types": [
+        "./packages/types/src/index.ts"
+      ]
     }
   }
 }
