@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
@@ -12,8 +13,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smplat_api.db.session import async_session, get_session
+from smplat_api.models.invoice import Invoice
 from smplat_api.models.processor_event import (
     ProcessorEvent,
+    ProcessorEventReplayAttempt,
+    fetch_replay_attempts,
     mark_replay_requested,
 )
 from smplat_api.models.webhook_event import WebhookProviderEnum
@@ -46,6 +50,25 @@ class TriggerReplayRequest(BaseModel):
     """Payload controlling replay invocation semantics."""
 
     force: bool = Field(default=False, description="Force immediate replay even if attempts exceeded")
+
+
+class ReplayAttemptResponse(BaseModel):
+    """Serialized replay attempt information."""
+
+    id: UUID
+    attempted_at: datetime = Field(alias="attemptedAt")
+    status: str
+    error: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class ProcessorEventDetailResponse(ProcessorEventResponse):
+    """Extended event view including replay history and invoice details."""
+
+    attempts: list[ReplayAttemptResponse]
+    invoice_snapshot: dict | None = Field(default=None, alias="invoiceSnapshot")
 
 
 def _enqueue_worker() -> None:
@@ -88,6 +111,8 @@ async def list_processor_events(
     provider: WebhookProviderEnum | None = Query(default=None),
     requested_only: bool = Query(default=True, alias="requestedOnly"),
     limit: int = Query(default=50, ge=1, le=200),
+    workspace_id: UUID | None = Query(default=None, alias="workspaceId"),
+    since: datetime | None = Query(default=None),
 ) -> list[ProcessorEventResponse]:
     """Return ledger entries with optional filtering."""
 
@@ -96,6 +121,10 @@ async def list_processor_events(
         stmt = stmt.where(ProcessorEvent.provider == provider)
     if requested_only:
         stmt = stmt.where(ProcessorEvent.replay_requested.is_(True))
+    if workspace_id is not None:
+        stmt = stmt.where(ProcessorEvent.workspace_id == workspace_id)
+    if since is not None:
+        stmt = stmt.where(ProcessorEvent.received_at >= since)
     results = await session.execute(stmt)
     events = results.scalars().all()
     return [_serialize_event(event) for event in events]
@@ -107,11 +136,15 @@ async def trigger_replay(
     event_id: UUID,
     payload: TriggerReplayRequest = Body(default_factory=TriggerReplayRequest),
     session: AsyncSession = Depends(get_session),
+    workspace_id: UUID | None = Query(default=None, alias="workspaceId"),
 ) -> ProcessorEventResponse:
     """Mark an event for replay and optionally run it immediately."""
 
     event = await session.get(ProcessorEvent, event_id)
     if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    if workspace_id is not None and event.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
     now = datetime.now(timezone.utc)
@@ -131,3 +164,57 @@ async def trigger_replay(
     refreshed = await session.get(ProcessorEvent, event_id)
     assert refreshed is not None
     return _serialize_event(refreshed)
+
+
+def _serialize_attempt(attempt: ProcessorEventReplayAttempt) -> ReplayAttemptResponse:
+    return ReplayAttemptResponse.model_validate(
+        {
+            "id": attempt.id,
+            "attemptedAt": attempt.attempted_at,
+            "status": attempt.status,
+            "error": attempt.error,
+            "metadata": attempt.metadata_snapshot,
+        }
+    )
+
+
+@router.get("/{event_id}", response_model=ProcessorEventDetailResponse)
+async def get_processor_event(
+    *,
+    event_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    workspace_id: UUID | None = Query(default=None, alias="workspaceId"),
+) -> ProcessorEventDetailResponse:
+    """Return detail for a processor event including replay history."""
+
+    event = await session.get(ProcessorEvent, event_id)
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    if workspace_id is not None and event.workspace_id != workspace_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    attempts = await fetch_replay_attempts(session, event_id=event_id, limit=50)
+    invoice_snapshot: dict[str, Any] | None = None
+    if event.invoice_id is not None:
+        invoice = await session.get(Invoice, event.invoice_id)
+        if invoice is not None:
+            invoice_snapshot = {
+                "id": str(invoice.id),
+                "number": invoice.invoice_number,
+                "status": invoice.status.value if hasattr(invoice.status, "value") else invoice.status,
+                "total": float(invoice.total),
+                "currency": invoice.currency.value if hasattr(invoice.currency, "value") else invoice.currency,
+                "issuedAt": invoice.issued_at,
+                "dueAt": invoice.due_at,
+            }
+
+    serialized_event = _serialize_event(event)
+    return ProcessorEventDetailResponse.model_validate(
+        {
+            **serialized_event.model_dump(mode="json"),
+            "attempts": [_serialize_attempt(attempt).model_dump(mode="json") for attempt in attempts],
+            "invoiceSnapshot": invoice_snapshot,
+        }
+    )
+

@@ -2,7 +2,13 @@ import "server-only";
 
 import { readFile } from "node:fs/promises";
 
-import { ProcessorReplayEvent, ProcessorReplayFilters, ProcessorReplayStatus } from "./types";
+import {
+  ProcessorReplayAttempt,
+  ProcessorReplayDetail,
+  ProcessorReplayEvent,
+  ProcessorReplayFilters,
+  ProcessorReplayStatus,
+} from "./types";
 
 const apiBaseUrl =
   process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -23,6 +29,19 @@ type RawProcessorReplayEvent = {
   lastReplayError: string | null;
   receivedAt: string;
   createdAt: string;
+};
+
+type RawProcessorReplayAttempt = {
+  id: string;
+  attemptedAt: string;
+  status: string;
+  error: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+type RawProcessorReplayDetail = RawProcessorReplayEvent & {
+  attempts: RawProcessorReplayAttempt[];
+  invoiceSnapshot: ProcessorReplayDetail["invoiceSnapshot"];
 };
 
 type FetchReplayOptions = ProcessorReplayFilters & {
@@ -69,6 +88,14 @@ export async function fetchProcessorReplays(
     params.set("requestedOnly", "false");
   }
 
+  if (filters.workspaceId && filters.workspaceId !== "all") {
+    params.set("workspaceId", filters.workspaceId);
+  }
+
+  if (filters.since) {
+    params.set("since", filters.since);
+  }
+
   const upstreamUrl = `${apiBaseUrl}/api/v1/billing/replays?${params.toString()}`;
 
   try {
@@ -91,6 +118,64 @@ export async function fetchProcessorReplays(
     console.warn("Failed to load processor replay events", error);
     return emptyList;
   }
+}
+
+export async function fetchProcessorReplayDeltas(
+  since: string,
+  filters: FetchReplayOptions = {},
+): Promise<ProcessorReplayEvent[]> {
+  return fetchProcessorReplays({ ...filters, since });
+}
+
+export async function fetchProcessorReplayDetail(
+  eventId: string,
+  filters: Pick<FetchReplayOptions, "workspaceId"> = {},
+): Promise<ProcessorReplayDetail | null> {
+  if (!checkoutApiKey) {
+    console.warn("Missing CHECKOUT_API_KEY; replay dashboard disabled.");
+    return null;
+  }
+
+  const params = new URLSearchParams();
+  if (filters.workspaceId && filters.workspaceId !== "all") {
+    params.set("workspaceId", filters.workspaceId);
+  }
+
+  const upstreamUrl = `${apiBaseUrl}/api/v1/billing/replays/${eventId}?${params.toString()}`;
+
+  try {
+    const response = await fetch(upstreamUrl, {
+      headers: {
+        "X-API-Key": checkoutApiKey,
+      },
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      console.warn("Failed to fetch processor replay detail", response.status);
+      return null;
+    }
+
+    const payload = (await response.json()) as RawProcessorReplayDetail;
+    return {
+      ...normalizeReplayEvent(payload),
+      attempts: payload.attempts.map((attempt) => normalizeReplayAttempt(attempt)),
+      invoiceSnapshot: payload.invoiceSnapshot,
+    } satisfies ProcessorReplayDetail;
+  } catch (error) {
+    console.warn("Failed to load processor replay detail", error);
+    return null;
+  }
+}
+
+function normalizeReplayAttempt(attempt: RawProcessorReplayAttempt): ProcessorReplayAttempt {
+  return {
+    id: attempt.id,
+    attemptedAt: attempt.attemptedAt,
+    status: attempt.status,
+    error: attempt.error,
+    metadata: attempt.metadata ?? null,
+  } satisfies ProcessorReplayAttempt;
 }
 
 function normalizeReplayEvent(event: RawProcessorReplayEvent): ProcessorReplayEvent {
@@ -121,6 +206,15 @@ function applyClientSideFilters(
   filters: ProcessorReplayFilters,
 ): ProcessorReplayEvent[] {
   return events.filter((event) => {
+    if (filters.workspaceId && filters.workspaceId !== "all") {
+      if (filters.workspaceId === "__unassigned__" && event.workspaceId) {
+        return false;
+      }
+      if (filters.workspaceId !== "__unassigned__" && event.workspaceId !== filters.workspaceId) {
+        return false;
+      }
+    }
+
     if (filters.status && filters.status !== "all" && event.status !== filters.status) {
       return false;
     }
@@ -151,12 +245,18 @@ export async function triggerProcessorReplay(
   eventId: string,
   options: TriggerReplayOptions = {},
   extraHeaders: HeaderReader | null = null,
+  context: Pick<FetchReplayOptions, "workspaceId"> = {},
 ): Promise<TriggerProcessorReplayResult> {
   if (!checkoutApiKey) {
     return { ok: false, status: 503, error: "Replay console disabled." };
   }
+  const params = new URLSearchParams();
+  if (context.workspaceId && context.workspaceId !== "all") {
+    params.set("workspaceId", context.workspaceId);
+  }
 
-  const upstreamUrl = `${apiBaseUrl}/api/v1/billing/replays/${eventId}/trigger`;
+  const query = params.toString();
+  const upstreamUrl = `${apiBaseUrl}/api/v1/billing/replays/${eventId}/trigger${query ? `?${query}` : ""}`;
 
   const headers = new Headers({
     "X-API-Key": checkoutApiKey,

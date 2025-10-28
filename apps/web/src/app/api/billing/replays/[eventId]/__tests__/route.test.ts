@@ -7,9 +7,11 @@ jest.mock("next/headers", () => ({
 }));
 
 const triggerProcessorReplay = jest.fn();
+const fetchProcessorReplayDetail = jest.fn();
 
 jest.mock("@/server/billing/replays", () => ({
   triggerProcessorReplay: (...args: unknown[]) => triggerProcessorReplay(...args),
+  fetchProcessorReplayDetail: (...args: unknown[]) => fetchProcessorReplayDetail(...args),
 }));
 
 class TestResponse {
@@ -41,10 +43,11 @@ class TestResponse {
 }
 
 if (typeof globalThis.Response === "undefined") {
-  (globalThis as typeof globalThis & { Response: typeof TestResponse }).Response = TestResponse as unknown as typeof Response;
+  (globalThis as typeof globalThis & { Response: typeof TestResponse }).Response =
+    TestResponse as unknown as typeof Response;
 }
 
-const createRequest = (url: string, body?: unknown) => {
+const createPostRequest = (url: string, body?: unknown) => {
   return {
     method: "POST",
     url,
@@ -60,6 +63,17 @@ const createRequest = (url: string, body?: unknown) => {
   } as unknown as Request;
 };
 
+const createGetRequest = (url: string) => {
+  return {
+    method: "GET",
+    url,
+    headers: {
+      get: () => null,
+    },
+    json: async () => ({}),
+  } as unknown as Request;
+};
+
 describe("POST /api/billing/replays/[eventId]", () => {
   const importRoute = async () => {
     const routeModule = await import("../route");
@@ -68,7 +82,7 @@ describe("POST /api/billing/replays/[eventId]", () => {
 
   it("forwards replay trigger responses", async () => {
     const POST = await importRoute();
-    mockHeaders.mockReturnValue(new Headers({ "traceparent": "00-test" }));
+    mockHeaders.mockReturnValue(new Headers({ traceparent: "00-test" }));
     triggerProcessorReplay.mockResolvedValue({
       ok: true,
       status: 202,
@@ -90,14 +104,19 @@ describe("POST /api/billing/replays/[eventId]", () => {
       },
     });
 
-    const request = createRequest("http://localhost/api/billing/replays/evt-123", { force: true });
+    const request = createPostRequest("http://localhost/api/billing/replays/evt-123", { force: true });
 
     const response = await POST(request, { params: { eventId: "evt-123" } });
     const json = (await response.json()) as { event: { id: string } };
 
     expect(response.status).toBe(202);
     expect(json.event.id).toBe("evt-123");
-    expect(triggerProcessorReplay).toHaveBeenCalledWith("evt-123", { force: true }, expect.any(Headers));
+    expect(triggerProcessorReplay).toHaveBeenCalledWith(
+      "evt-123",
+      { force: true },
+      expect.any(Headers),
+      { workspaceId: undefined },
+    );
   });
 
   it("returns error payloads when upstream fails", async () => {
@@ -109,7 +128,7 @@ describe("POST /api/billing/replays/[eventId]", () => {
       error: "Replay limit reached",
     });
 
-    const request = createRequest("http://localhost/api/billing/replays/evt-123", { force: false });
+    const request = createPostRequest("http://localhost/api/billing/replays/evt-123", { force: false });
 
     const response = await POST(request, { params: { eventId: "evt-123" } });
     const json = (await response.json()) as { error: string };
@@ -142,11 +161,46 @@ describe("POST /api/billing/replays/[eventId]", () => {
       },
     });
 
-    const request = createRequest("http://localhost/api/billing/replays/evt-200");
+    const request = createPostRequest("http://localhost/api/billing/replays/evt-200");
 
     const response = await POST(request, { params: { eventId: "evt-200" } });
 
-    expect(triggerProcessorReplay).toHaveBeenCalledWith("evt-200", { force: false }, expect.any(Headers));
+    expect(triggerProcessorReplay).toHaveBeenCalledWith(
+      "evt-200",
+      { force: false },
+      expect.any(Headers),
+      { workspaceId: undefined },
+    );
     expect(response.status).toBe(202);
+  });
+});
+
+describe("GET /api/billing/replays/[eventId]", () => {
+  const importRoute = async () => {
+    const routeModule = await import("../route");
+    return routeModule.GET;
+  };
+
+  it("returns replay detail payloads", async () => {
+    const GET = await importRoute();
+    fetchProcessorReplayDetail.mockResolvedValue({ id: "evt-1" });
+
+    const request = createGetRequest("http://localhost/api/billing/replays/evt-1?workspaceId=ws-1");
+    const response = await GET(request, { params: { eventId: "evt-1" } });
+    const json = (await response.json()) as { event: { id: string } };
+
+    expect(fetchProcessorReplayDetail).toHaveBeenCalledWith("evt-1", { workspaceId: "ws-1" });
+    expect(response.status).toBe(200);
+    expect(json.event.id).toBe("evt-1");
+  });
+
+  it("returns 404 when no detail is available", async () => {
+    const GET = await importRoute();
+    fetchProcessorReplayDetail.mockResolvedValue(null);
+
+    const request = createGetRequest("http://localhost/api/billing/replays/evt-missing");
+    const response = await GET(request, { params: { eventId: "evt-missing" } });
+
+    expect(response.status).toBe(404);
   });
 });
