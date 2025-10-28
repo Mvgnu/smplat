@@ -9,6 +9,7 @@ import pytest
 
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.models.fulfillment import (
+    FulfillmentStaffingShift,
     FulfillmentTask,
     FulfillmentTaskStatusEnum,
     FulfillmentTaskTypeEnum,
@@ -324,6 +325,81 @@ async def test_staffing_coverage_measures_completed_vs_scheduled(session_factory
         assert resolved.value == pytest.approx(0.75, abs=0.05)
         assert resolved.formatted_value == "75%"
         assert resolved.provenance.cache_layer == "computed"
+
+
+@pytest.mark.asyncio
+async def test_delivery_sla_forecast_projects_backlog_and_staffing(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        history_start = now - timedelta(hours=6)
+
+        for duration in (45, 60, 90):
+            session.add(
+                FulfillmentTask(
+                    order_item_id=item.id,
+                    task_type=FulfillmentTaskTypeEnum.CAMPAIGN_OPTIMIZATION,
+                    status=FulfillmentTaskStatusEnum.COMPLETED,
+                    title=f"Historical task {duration}",
+                    scheduled_at=history_start,
+                    started_at=history_start,
+                    completed_at=history_start + timedelta(minutes=duration),
+                )
+            )
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ENGAGEMENT_BOOST,
+                status=FulfillmentTaskStatusEnum.PENDING,
+                title="Queued backlog",
+                scheduled_at=now + timedelta(minutes=30),
+            )
+        )
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ENGAGEMENT_BOOST,
+                status=FulfillmentTaskStatusEnum.IN_PROGRESS,
+                title="Active backlog",
+                scheduled_at=now - timedelta(minutes=15),
+            )
+        )
+
+        session.add(
+            FulfillmentStaffingShift(
+                sku="trust-suite",
+                starts_at=now - timedelta(minutes=10),
+                ends_at=now + timedelta(hours=3),
+                hourly_capacity=4,
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_delivery_sla_forecast")]
+        )
+
+        assert resolved.metric_id == "fulfillment_delivery_sla_forecast"
+        assert resolved.sample_size == 3
+        assert resolved.metadata["observed_tasks"] == 3
+        assert resolved.metadata["overall_percentile_bands"]["p50"] is not None
+        assert resolved.provenance.cache_layer == "computed"
+        assert resolved.forecast is not None
+        forecast = resolved.forecast
+        assert isinstance(forecast, dict)
+        assert forecast.get("skus")
+        trust_suite = next(
+            (sku for sku in forecast["skus"] if sku.get("sku") == "trust-suite"),
+            None,
+        )
+        assert trust_suite is not None
+        assert trust_suite["backlog_tasks"] == 2
+        assert trust_suite["windows"]
+        assert trust_suite["unsupported_reason"] is None
 
 
 @pytest.mark.asyncio

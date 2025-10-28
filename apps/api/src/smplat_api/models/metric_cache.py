@@ -23,6 +23,7 @@ class FulfillmentMetricCache(Base):
     computed_at = Column(DateTime(timezone=True), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     metadata_json = Column("metadata", JSON, nullable=False, default=dict)
+    forecast_json = Column("forecast", JSON, nullable=True)
 
     @classmethod
     def from_snapshot(cls, snapshot: "MetricSnapshot", expires_at: datetime) -> "FulfillmentMetricCache":
@@ -36,6 +37,7 @@ class FulfillmentMetricCache(Base):
             computed_at=snapshot.computed_at,
             expires_at=expires_at,
             metadata_json=snapshot.metadata,
+            forecast_json=snapshot.forecast,
         )
         return instance
 
@@ -59,4 +61,5 @@ class FulfillmentMetricCache(Base):
             computed_at=computed_at,
             sample_size=self.sample_size,
             metadata=metadata,
+            forecast=self.forecast_json if isinstance(self.forecast_json, dict) else None,
         )

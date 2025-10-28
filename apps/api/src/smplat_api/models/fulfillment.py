@@ -170,17 +170,32 @@ class CampaignActivity(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     campaign_id = Column(UUID(as_uuid=True), ForeignKey("service_campaigns.id", ondelete="CASCADE"), nullable=False)
-    
+
     activity_type = Column(String, nullable=False)  # follow, like, comment, story_view, etc.
     target_username = Column(String, nullable=True)
     target_post_url = Column(String, nullable=True)
     action_result = Column(String, nullable=False)  # success, failed, skipped
-    
+
     # Activity details
     activity_data = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
-    
+
     performed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
     campaign = relationship("ServiceCampaign", back_populates="campaign_activities")
+
+
+class FulfillmentStaffingShift(Base):
+    """Operator staffing coverage windows for delivery forecasting."""
+
+    __tablename__ = "fulfillment_staffing_shifts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    sku = Column(String, nullable=False)
+    starts_at = Column(DateTime(timezone=True), nullable=False)
+    ends_at = Column(DateTime(timezone=True), nullable=False)
+    hourly_capacity = Column(Integer, nullable=False, server_default="0")
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
