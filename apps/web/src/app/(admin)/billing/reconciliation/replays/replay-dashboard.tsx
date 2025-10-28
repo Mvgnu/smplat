@@ -41,6 +41,11 @@ type ReplayActionMap = Record<string, ActionState | undefined>;
 
 type PendingState = Record<string, boolean>;
 
+type ReplayStreamFrame = {
+  cursor: string | null;
+  events?: ProcessorReplayEvent[];
+};
+
 export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
   const router = useRouter();
   const [events, setEvents] = useState<ProcessorReplayEvent[]>(initialEvents);
@@ -51,7 +56,9 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
   const [isPending, startTransition] = useTransition();
   const [workspaceId, setWorkspaceId] = useState<string>("all");
   const latestTimestampRef = useRef<string | null>(null);
-  const pollingControllerRef = useRef<AbortController | null>(null);
+  const cursorRef = useRef<string | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const fallbackIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ProcessorReplayDetail | null>(null);
@@ -67,12 +74,13 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
         return;
       }
 
+      const baseline = cursorRef.current ?? latestTimestampRef.current;
       const nextLatest = incoming.reduce<string | null>((acc, event) => {
         if (!acc) {
           return event.receivedAt;
         }
         return acc > event.receivedAt ? acc : event.receivedAt;
-      }, latestTimestampRef.current);
+      }, baseline);
 
       setEvents((prev) => {
         const base = replace ? [] : prev;
@@ -86,6 +94,7 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
       });
 
       latestTimestampRef.current = nextLatest;
+      cursorRef.current = nextLatest;
     },
     [],
   );
@@ -97,8 +106,9 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
         return event.receivedAt;
       }
       return acc > event.receivedAt ? acc : event.receivedAt;
-    }, latestTimestampRef.current);
+    }, cursorRef.current ?? latestTimestampRef.current);
     latestTimestampRef.current = latest;
+    cursorRef.current = latest;
   }, [initialEvents]);
 
   useEffect(() => {
@@ -115,18 +125,8 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
     }
   }, [searchTerm]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setPollError(null);
-    pollingControllerRef.current?.abort();
-    const controller = new AbortController();
-    pollingControllerRef.current = controller;
-    latestTimestampRef.current = null;
-
-    const buildParams = (includeSince: boolean) => {
-      if (includeSince && !latestTimestampRef.current) {
-        return null;
-      }
+  const buildParams = useCallback(
+    (includeSince: boolean) => {
       const params = new URLSearchParams();
       params.set("limit", "200");
       params.set("requestedOnly", "false");
@@ -142,76 +142,125 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
       if (correlationFilter) {
         params.set("correlationId", correlationFilter);
       }
-      if (includeSince && latestTimestampRef.current) {
-        params.set("since", latestTimestampRef.current);
+      if (includeSince && cursorRef.current) {
+        params.set("since", cursorRef.current);
       }
       return params;
-    };
+    },
+    [workspaceId, providerFilter, statusFilter, correlationFilter],
+  );
 
-    const fetchInitial = async () => {
+  const fetchSnapshot = useCallback(
+    async (replace: boolean) => {
+      if (!replace && !cursorRef.current) {
+        return;
+      }
+      const params = buildParams(!replace);
+      const url = `/api/billing/replays?${params.toString()}`;
       try {
-        const params = buildParams(false);
-        if (!params) {
-          return;
-        }
-        const response = await fetch(`/api/billing/replays?${params.toString()}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
+        const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) {
           throw new Error(`Upstream responded with ${response.status}`);
         }
         const body = (await response.json()) as { events: ProcessorReplayEvent[] };
-        if (cancelled) {
-          return;
-        }
-        mergeEvents(body.events, true);
+        mergeEvents(body.events, replace);
         setPollError(null);
       } catch (error) {
-        if (cancelled) {
-          return;
-        }
         const message = error instanceof Error ? error.message : "Unable to refresh replays.";
-        setPollError(message);
+        if (replace) {
+          setPollError(message);
+        }
       }
-    };
+    },
+    [buildParams, mergeEvents],
+  );
 
-    const fetchDeltas = async () => {
+  const stopFallback = useCallback(() => {
+    if (fallbackIntervalRef.current) {
+      clearInterval(fallbackIntervalRef.current);
+      fallbackIntervalRef.current = null;
+    }
+  }, []);
+
+  const startFallback = useCallback(() => {
+    if (fallbackIntervalRef.current) {
+      return;
+    }
+    fetchSnapshot(true).catch((error) => {
+      const message = error instanceof Error ? error.message : "Unable to refresh replays.";
+      setPollError(message);
+    });
+    fallbackIntervalRef.current = setInterval(() => {
+      fetchSnapshot(false).catch(() => undefined);
+    }, 8000);
+  }, [fetchSnapshot]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPollError(null);
+    stopFallback();
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    cursorRef.current = null;
+    latestTimestampRef.current = null;
+
+    const params = buildParams(false);
+    const url = `/api/billing/replays/stream?${params.toString()}`;
+
+    const source = new EventSource(url);
+    eventSourceRef.current = source;
+
+    const handleFrame = (event: MessageEvent<string>, replace: boolean) => {
+      if (cancelled) {
+        return;
+      }
       try {
-        const params = buildParams(true);
-        if (!params) {
-          return;
+        const payload = JSON.parse(event.data) as ReplayStreamFrame;
+        if (payload.cursor) {
+          cursorRef.current = payload.cursor;
+          latestTimestampRef.current = payload.cursor;
         }
-        const response = await fetch(`/api/billing/replays?${params.toString()}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`Upstream responded with ${response.status}`);
-        }
-        const body = (await response.json()) as { events: ProcessorReplayEvent[] };
-        if (cancelled) {
-          return;
-        }
-        mergeEvents(body.events, false);
+        mergeEvents(payload.events ?? [], replace);
+        setPollError(null);
       } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : "Unable to refresh replays.";
-        setPollError(message);
+        console.error("Failed to parse replay stream payload", error);
       }
     };
 
-    fetchInitial();
-    const interval = setInterval(fetchDeltas, 8000);
+    source.addEventListener("snapshot", (event) => handleFrame(event as MessageEvent<string>, true));
+    source.addEventListener("update", (event) => handleFrame(event as MessageEvent<string>, false));
+    source.addEventListener("heartbeat", (event) => {
+      if (cancelled) {
+        return;
+      }
+      try {
+        const payload = JSON.parse((event as MessageEvent<string>).data) as ReplayStreamFrame;
+        if (payload.cursor) {
+          cursorRef.current = payload.cursor;
+          latestTimestampRef.current = payload.cursor;
+        }
+      } catch (_error) {
+        // Ignore malformed heartbeat payloads.
+      }
+    });
+
+    source.onerror = () => {
+      if (cancelled) {
+        return;
+      }
+      source.close();
+      eventSourceRef.current = null;
+      setPollError("Stream disconnected; falling back to polling.");
+      startFallback();
+    };
 
     return () => {
       cancelled = true;
-      controller.abort();
-      clearInterval(interval);
+      source.close();
+      eventSourceRef.current = null;
+      stopFallback();
     };
-  }, [workspaceId, providerFilter, statusFilter, correlationFilter, mergeEvents]);
+  }, [buildParams, mergeEvents, startFallback, stopFallback]);
 
   useEffect(() => {
     if (!selectedEventId) {
@@ -294,41 +343,7 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
     return [{ label: "All workspaces", value: "all" as const }, ...options];
   }, [events]);
 
-  const filteredEvents = useMemo(() => {
-    return events.filter((event) => {
-      if (workspaceId !== "all") {
-        if (workspaceId === "__unassigned__" && event.workspaceId) {
-          return false;
-        }
-        if (workspaceId !== "__unassigned__" && event.workspaceId !== workspaceId) {
-          return false;
-        }
-      }
-
-      if (filters.provider && filters.provider !== "all") {
-        if (event.provider.toLowerCase() !== filters.provider.toLowerCase()) {
-          return false;
-        }
-      }
-
-      if (filters.status && filters.status !== "all" && event.status !== filters.status) {
-        return false;
-      }
-
-      if (filters.correlationId) {
-        const normalized = filters.correlationId.trim().toLowerCase();
-        if (
-          normalized &&
-          !event.correlationId?.toLowerCase().includes(normalized) &&
-          !event.invoiceId?.toLowerCase().includes(normalized)
-        ) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-  }, [events, filters, workspaceId]);
+  const visibleEvents = events;
 
   const updateEvent = (event: ProcessorReplayEvent) => {
     setEvents((prev) => {
@@ -536,14 +551,14 @@ export function ReplayDashboardView({ initialEvents }: ReplayDashboardProps) {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5 text-sm text-white/90">
-            {filteredEvents.length === 0 ? (
+            {visibleEvents.length === 0 ? (
               <tr>
                 <td className="px-4 py-6 text-center text-white/50" colSpan={8}>
                   No processor events match the current filters.
                 </td>
               </tr>
             ) : (
-              filteredEvents.map((event) => {
+              visibleEvents.map((event) => {
                 const action = actions[event.id];
                 const isEventPending = pending[event.id] || isPending;
                 return (

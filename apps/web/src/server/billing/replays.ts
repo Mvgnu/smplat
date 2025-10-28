@@ -29,6 +29,7 @@ type RawProcessorReplayEvent = {
   lastReplayError: string | null;
   receivedAt: string;
   createdAt: string;
+  status: ProcessorReplayStatus;
 };
 
 type RawProcessorReplayAttempt = {
@@ -67,8 +68,7 @@ export async function fetchProcessorReplays(
     try {
       const file = await readFile(mockPath, "utf-8");
       const payload = JSON.parse(file) as RawProcessorReplayEvent[];
-      const normalized = payload.map((event) => normalizeReplayEvent(event));
-      return applyClientSideFilters(normalized, filters);
+      return payload.map((event) => normalizeReplayEvent(event));
     } catch (error) {
       console.warn("Failed to load processor replay mock", error);
     }
@@ -84,16 +84,22 @@ export async function fetchProcessorReplays(
 
   if (filters.requestedOnly !== undefined) {
     params.set("requestedOnly", String(filters.requestedOnly));
-  } else if (filters.status && filters.status !== "pending") {
-    params.set("requestedOnly", "false");
   }
 
   if (filters.workspaceId && filters.workspaceId !== "all") {
     params.set("workspaceId", filters.workspaceId);
   }
 
+  if (filters.status && filters.status !== "all") {
+    params.set("status", filters.status);
+  }
+
   if (filters.since) {
     params.set("since", filters.since);
+  }
+
+  if (filters.correlationId) {
+    params.set("correlationId", filters.correlationId);
   }
 
   const upstreamUrl = `${apiBaseUrl}/api/v1/billing/replays?${params.toString()}`;
@@ -112,8 +118,7 @@ export async function fetchProcessorReplays(
     }
 
     const payload = (await response.json()) as RawProcessorReplayEvent[];
-    const normalized = payload.map((event) => normalizeReplayEvent(event));
-    return applyClientSideFilters(normalized, filters);
+    return payload.map((event) => normalizeReplayEvent(event));
   } catch (error) {
     console.warn("Failed to load processor replay events", error);
     return emptyList;
@@ -181,53 +186,8 @@ function normalizeReplayAttempt(attempt: RawProcessorReplayAttempt): ProcessorRe
 function normalizeReplayEvent(event: RawProcessorReplayEvent): ProcessorReplayEvent {
   return {
     ...event,
-    status: deriveStatus(event),
+    status: event.status,
   } satisfies ProcessorReplayEvent;
-}
-
-function deriveStatus(event: RawProcessorReplayEvent): ProcessorReplayStatus {
-  if (event.replayedAt) {
-    return "succeeded";
-  }
-  if (event.lastReplayError) {
-    return "failed";
-  }
-  if (event.replayRequested && event.replayAttempts > 0) {
-    return "in-progress";
-  }
-  if (event.replayRequested) {
-    return "queued";
-  }
-  return "pending";
-}
-
-function applyClientSideFilters(
-  events: ProcessorReplayEvent[],
-  filters: ProcessorReplayFilters,
-): ProcessorReplayEvent[] {
-  return events.filter((event) => {
-    if (filters.workspaceId && filters.workspaceId !== "all") {
-      if (filters.workspaceId === "__unassigned__" && event.workspaceId) {
-        return false;
-      }
-      if (filters.workspaceId !== "__unassigned__" && event.workspaceId !== filters.workspaceId) {
-        return false;
-      }
-    }
-
-    if (filters.status && filters.status !== "all" && event.status !== filters.status) {
-      return false;
-    }
-
-    if (filters.correlationId) {
-      const normalized = filters.correlationId.trim().toLowerCase();
-      if (normalized && !event.correlationId?.toLowerCase().includes(normalized)) {
-        return false;
-      }
-    }
-
-    return true;
-  });
 }
 
 export type TriggerProcessorReplayResult = {
