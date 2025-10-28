@@ -28,6 +28,21 @@ Each metric definition includes a default freshness window that also governs the
 
 If the storefront reports a `stale` badge, verify whether the freshness window should be tightened or whether the cache needs to be invalidated.
 
+### Forecast alert taxonomy
+
+`fulfillment_delivery_sla_forecast` now emits alert codes that the storefront surfaces as badges/tooltips:
+
+- `sla_watch` – projected clearance >120 minutes. Verify staffing coverage and confirm concierge is notifying customers.
+- `sla_breach_risk` – projected clearance >240 minutes. Escalate to the fulfillment desk and update guarantee copy in Payload if resolution exceeds the SLA.
+- `limited_history` – fewer than five recent completions. Validate ingestion pipelines and backfill missing completion timestamps.
+- `no_staffing_capacity` – no future staffing shifts scheduled. Confirm shift ingestion and operator availability, then re-run the queue planner.
+- `partial_support` – at least one SKU lacks staffed coverage. Update shift assignments and confirm fallback copy in Payload references the affected bundles.
+- `forecast_unavailable` – forecast service could not compute a clearance target. Treat as an outage; notify operators and rely on fallback assurance copy until resolved.
+
+The API response includes `fallback_copy`, which storefronts display when alerts are active. Operators can update the fallback narrative in Payload while engineering investigates underlying issues. Alert codes are persisted in the cache to ensure observability aligns between warm-started workers and the storefront.
+
+Operator dashboards should subscribe to these codes for proactive paging (e.g., send a Slack alert when `sla_breach_risk` is emitted for longer than two fetch cycles).
+
 ## Regenerating metrics
 
 1. Call `POST /api/v1/trust/metrics/purge` with the relevant `metric_id` (or omit the field to flush all metrics). The endpoint responds with the purged identifiers.

@@ -12,6 +12,22 @@ const checkoutApiKey = process.env.CHECKOUT_API_KEY ?? "";
 const metricPreviewStates = ["fresh", "stale", "missing"] as const;
 type MetricPreviewState = (typeof metricPreviewStates)[number];
 
+const alertDescriptions: Record<string, string> = {
+  sla_breach_risk: "Projected clearance exceeds the guaranteed delivery SLA.",
+  sla_watch: "Operators are tracking elevated backlog depth.",
+  limited_history: "Forecast is calibrating from a limited completion sample.",
+  forecast_unavailable: "Forecast temporarily offline – showing fallback narrative.",
+  no_staffing_capacity: "No upcoming staffing capacity windows are scheduled.",
+  partial_support: "Only a subset of SKUs currently have staffed coverage.",
+};
+
+const unsupportedGuardNarratives: Record<string, string> = {
+  all_skus_unsupported:
+    "All staffing pods are offline for this bundle – concierge is reinforcing guarantee messaging.",
+  partial_sku_support:
+    "Some bundles are temporarily unsupported – fallback assurances highlighted for impacted SKUs.",
+};
+
 type MetricBindingInput = {
   metricId?: string | null;
   metricSource?: string | null;
@@ -42,6 +58,8 @@ export type CheckoutMetricVerification = {
   freshnessMinutesElapsed?: number | null;
   unsupportedGuard?: string | null;
   forecast?: CheckoutMetricForecast | null;
+  alerts?: string[] | null;
+  fallbackCopy?: string | null;
 };
 
 export type CheckoutMetricForecastWindow = {
@@ -366,6 +384,8 @@ type TrustMetricResolution = {
   freshness_minutes_elapsed?: number | null;
   unsupported_guard?: string | null;
   forecast?: unknown;
+  alerts?: string[] | null;
+  fallback_copy?: string | null;
 };
 
 type TrustMetricRequestPayload = {
@@ -535,6 +555,8 @@ const cloneMetric = (metric: CheckoutMetricVerification | undefined): CheckoutMe
           })),
         }
       : null,
+    alerts: metric.alerts ? [...metric.alerts] : null,
+    fallbackCopy: metric.fallbackCopy ?? null,
   } satisfies CheckoutMetricVerification;
 };
 
@@ -753,6 +775,8 @@ const applyMetricResolution = (
     metric.freshnessMinutesElapsed = metric.freshnessMinutesElapsed ?? null;
     metric.unsupportedGuard = metric.unsupportedGuard ?? null;
     metric.forecast = metric.forecast ?? null;
+    metric.alerts = metric.alerts ?? null;
+    metric.fallbackCopy = metric.fallbackCopy ?? null;
     return;
   }
 
@@ -790,6 +814,25 @@ const applyMetricResolution = (
   metric.unsupportedGuard =
     typeof resolution.unsupported_guard === "string" ? resolution.unsupported_guard : null;
   metric.forecast = normalizeForecast(resolution.forecast ?? null);
+  const alertList = Array.isArray(resolution.alerts)
+    ? resolution.alerts
+    : Array.isArray((resolution as Record<string, unknown>).alerts)
+      ? ((resolution as Record<string, unknown>).alerts as unknown[])
+      : [];
+  metric.alerts = alertList
+    .map((code) => (typeof code === "string" ? code : null))
+    .filter((code): code is string => Boolean(code && code.trim().length > 0));
+  if (metric.alerts.length === 0) {
+    metric.alerts = null;
+  }
+
+  const fallbackCopyRaw =
+    typeof resolution.fallback_copy === "string"
+      ? resolution.fallback_copy
+      : typeof (resolution as Record<string, unknown>).fallbackCopy === "string"
+        ? ((resolution as Record<string, unknown>).fallbackCopy as string)
+        : null;
+  metric.fallbackCopy = fallbackCopyRaw ?? null;
 
   const provenanceNotes = provenance?.notes ?? null;
   metric.provenanceNotes = provenanceNotes && provenanceNotes.length > 0 ? [...provenanceNotes] : null;
@@ -797,6 +840,12 @@ const applyMetricResolution = (
 
   if (metric.provenanceNotes?.length) {
     metric.provenanceNote = metric.provenanceNotes[0];
+  }
+  if (metric.fallbackCopy) {
+    metric.provenanceNote = metric.provenanceNote ?? metric.fallbackCopy;
+    const existing = new Set(metric.provenanceNotes ?? []);
+    existing.add(metric.fallbackCopy);
+    metric.provenanceNotes = [...existing];
   }
 
   if (metric.verificationState === "unsupported") {
@@ -868,6 +917,12 @@ const resolveExperienceMetrics = async (experience: CheckoutTrustExperience): Pr
       snapshot.value = resolution.formatted_value;
     } else if (snapshot.fallbackValue) {
       snapshot.value = snapshot.fallbackValue;
+    }
+
+    if (snapshot.metric?.fallbackCopy) {
+      snapshot.caption = snapshot.metric.fallbackCopy;
+    } else if (typeof resolution?.fallback_copy === "string" && !snapshot.caption) {
+      snapshot.caption = resolution.fallback_copy;
     }
 
     return snapshot;

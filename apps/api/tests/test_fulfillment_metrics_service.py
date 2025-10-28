@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from httpx import AsyncClient
 
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.models.fulfillment import (
@@ -23,6 +24,7 @@ from smplat_api.services.fulfillment.metrics import (
     _CACHE,
     _utcnow,
 )
+from smplat_api.core.settings import settings
 
 
 @pytest.fixture(autouse=True)
@@ -543,3 +545,150 @@ async def test_unsupported_metric_returns_guardrail_response(session_factory):
         assert resolved.metadata == {"source": "unknown"}
         assert resolved.sample_size == 0
         assert resolved.computed_at is None
+
+
+def test_percentile_interpolation_handles_sparse_values():
+    values = [12.0, 24.0, 48.0, 96.0]
+
+    p50 = FulfillmentMetricsService._percentile(values, 50)
+    p90 = FulfillmentMetricsService._percentile(values, 90)
+
+    assert p50 == pytest.approx(36.0)
+    assert p90 == pytest.approx(81.6, rel=1e-3)
+
+
+@pytest.mark.asyncio
+async def test_resolve_metric_marks_stale_when_outside_window(session_factory):
+    async with session_factory() as session:
+        now = datetime.now(timezone.utc)
+        stale_computed = now - timedelta(hours=3)
+
+        record = FulfillmentMetricCache(
+            metric_id="fulfillment_backlog_minutes",
+            value=120.0,
+            formatted_value="120m",
+            sample_size=5,
+            computed_at=stale_computed,
+            expires_at=now + timedelta(hours=2),
+            metadata_json={"source": "fulfillment"},
+            forecast_json=None,
+        )
+        session.add(record)
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics(
+            [
+                MetricRequest(
+                    metric_id="fulfillment_backlog_minutes",
+                    freshness_window_minutes=60,
+                )
+            ]
+        )
+
+        assert resolved.verification_state == "stale"
+        assert resolved.computed_at == stale_computed
+
+
+@pytest.mark.asyncio
+async def test_delivery_sla_forecast_emits_alerts_and_percentiles(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        # Seed backlog tasks
+        for idx in range(3):
+            session.add(
+                FulfillmentTask(
+                    order_item_id=item.id,
+                    task_type=FulfillmentTaskTypeEnum.CONTENT_PROMOTION,
+                    status=FulfillmentTaskStatusEnum.PENDING,
+                    title=f"Backlog task {idx}",
+                    scheduled_at=now - timedelta(hours=idx + 1),
+                )
+            )
+
+        # Historical completions for percentile and average calculations
+        for offset, duration_minutes in enumerate([45, 60, 75]):
+            session.add(
+                FulfillmentTask(
+                    order_item_id=item.id,
+                    task_type=FulfillmentTaskTypeEnum.ANALYTICS_COLLECTION,
+                    status=FulfillmentTaskStatusEnum.COMPLETED,
+                    title=f"Completed task {offset}",
+                    started_at=now - timedelta(hours=offset + 4),
+                    completed_at=now - timedelta(hours=offset + 4) + timedelta(minutes=duration_minutes),
+                )
+            )
+
+        session.add(
+            FulfillmentStaffingShift(
+                sku="trust-suite",
+                starts_at=now,
+                ends_at=now + timedelta(hours=1),
+                hourly_capacity=1,
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_delivery_sla_forecast")]
+        )
+
+        assert resolved.metric_id == "fulfillment_delivery_sla_forecast"
+        assert resolved.sample_size == 3
+        assert isinstance(resolved.metadata, dict)
+        percentiles = resolved.metadata.get("overall_percentile_bands")
+        assert percentiles
+        assert percentiles["p90"] == pytest.approx(72.0, rel=1e-6)
+        alerts = resolved.metadata.get("forecast_alerts")
+        assert isinstance(alerts, list)
+        assert "limited_history" in alerts
+        assert resolved.metadata.get("fallback_copy")
+        assert resolved.forecast is not None
+        assert resolved.forecast["skus"]
+
+
+@pytest.mark.asyncio
+async def test_trust_endpoint_surfaces_alerts_and_guardrail(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "trust-test-key"
+
+    try:
+        async with session_factory() as session:
+            _, item = await _seed_order_with_item(session)
+            now = datetime.now(timezone.utc)
+
+            session.add(
+                FulfillmentTask(
+                    order_item_id=item.id,
+                    task_type=FulfillmentTaskTypeEnum.CONTENT_PROMOTION,
+                    status=FulfillmentTaskStatusEnum.PENDING,
+                    title="Queued task",
+                    scheduled_at=now - timedelta(hours=2),
+                )
+            )
+
+            await session.commit()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/trust/experiences",
+                headers={"X-API-Key": "trust-test-key"},
+                json={
+                    "slug": "checkout",
+                    "metrics": [{"metric_id": "fulfillment_delivery_sla_forecast"}],
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        metric = body["metrics"][0]
+        assert metric["unsupported_guard"] == "all_skus_unsupported"
+        assert set(metric["alerts"]) >= {"forecast_unavailable", "limited_history", "no_staffing_capacity"}
+        assert metric["fallback_copy"]
+    finally:
+        settings.checkout_api_key = previous_key
