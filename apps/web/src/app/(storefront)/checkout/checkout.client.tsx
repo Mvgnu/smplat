@@ -3,10 +3,10 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
-import type { CheckoutTrustExperience } from "@/server/cms/trust";
+import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import { cartTotalSelector, useCartStore } from "@/store/cart";
 import { marketingFallbacks } from "../products/marketing-content";
-import { Clock, ShieldCheck, Users } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Clock, ShieldCheck, Users } from "lucide-react";
 
 function formatCurrency(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
@@ -33,6 +33,7 @@ type AssuranceDisplay = {
   title: string;
   description: string;
   evidence?: string;
+  metric?: CheckoutMetricVerification;
 };
 
 type UpsellRecommendation = {
@@ -43,6 +44,109 @@ type UpsellRecommendation = {
   savings?: string;
   href: string;
 };
+
+function metricTooltip(metric: CheckoutMetricVerification): string {
+  const segments: string[] = [`Metric: ${metric.metricId}`];
+  if (metric.source) {
+    segments.push(`Source: ${metric.source}`);
+  }
+  if (metric.sampleSize && metric.sampleSize > 0) {
+    segments.push(`Sample size: ${metric.sampleSize}`);
+  }
+  if (metric.computedAt) {
+    const parsed = new Date(metric.computedAt);
+    if (!Number.isNaN(parsed.getTime())) {
+      segments.push(`Computed: ${parsed.toLocaleString("en-US", { timeZone: "UTC" })}`);
+    }
+  }
+  if (metric.provenanceNote) {
+    segments.push(metric.provenanceNote);
+  }
+  if (metric.verificationState === "preview") {
+    segments.push("Operator preview value");
+  }
+  return segments.join(" • ");
+}
+
+function metricBadgeTone(metric: CheckoutMetricVerification): string {
+  switch (metric.verificationState) {
+    case "fresh":
+    case "preview":
+      return "border-emerald-400/40 bg-emerald-500/10 text-emerald-100";
+    case "stale":
+      return "border-amber-400/40 bg-amber-500/10 text-amber-100";
+    case "missing":
+    case "unsupported":
+      return "border-red-400/40 bg-red-500/10 text-red-100";
+    default:
+      return "border-white/20 bg-white/10 text-white/80";
+  }
+}
+
+function metricBadgeLabel(metric: CheckoutMetricVerification): string {
+  switch (metric.verificationState) {
+    case "fresh":
+      return "Verified";
+    case "preview":
+      return "Preview";
+    case "stale":
+      return "Stale";
+    case "missing":
+    case "unsupported":
+      return "Unavailable";
+    default:
+      return "Metric";
+  }
+}
+
+function metricNote(metric?: CheckoutMetricVerification): string | null {
+  if (!metric) {
+    return null;
+  }
+
+  switch (metric.verificationState) {
+    case "fresh":
+      return metric.provenanceNote ?? null;
+    case "preview":
+      return metric.provenanceNote
+        ? `${metric.provenanceNote} • Preview data`
+        : "Preview data supplied by operators.";
+    case "stale":
+      return metric.provenanceNote
+        ? `${metric.provenanceNote} • Refresh scheduled`
+        : "Refresh scheduled – showing last computed value.";
+    case "missing":
+    case "unsupported":
+      return "Live metric unavailable – showing fallback narrative.";
+    default:
+      return metric.provenanceNote ?? null;
+  }
+}
+
+function MetricBadge({ metric }: { metric?: CheckoutMetricVerification }) {
+  if (!metric) {
+    return null;
+  }
+
+  const tooltip = metricTooltip(metric);
+  const label = metricBadgeLabel(metric);
+  const tone = metricBadgeTone(metric);
+  const Icon =
+    metric.verificationState === "fresh" || metric.verificationState === "preview"
+      ? BadgeCheck
+      : AlertTriangle;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}
+      title={tooltip}
+      aria-label={tooltip}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </span>
+  );
+}
 
 export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
   const items = useCartStore((state) => state.items);
@@ -74,6 +178,7 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
     [items]
   );
 
+  // meta: trust-module: checkout-assurances
   const aggregatedAssurances = useMemo<AssuranceDisplay[]>(() => {
     const map = new Map<string, AssuranceDisplay>();
 
@@ -87,6 +192,7 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
         title,
         description: assurance.description.trim(),
         evidence: assurance.evidence,
+        metric: assurance.metric,
       });
     });
 
@@ -110,6 +216,7 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
     return Array.from(map.values()).slice(0, 4);
   }, [items, trustContent.assurances]);
 
+  // meta: trust-module: checkout-support
   const aggregatedSupportChannels = useMemo(() => {
     const map = new Map<string, CheckoutTrustExperience["supportChannels"][number]>();
 
@@ -136,6 +243,7 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
     return Array.from(map.values()).slice(0, 4);
   }, [items, trustContent.supportChannels]);
 
+  // meta: trust-module: checkout-timeline
   const aggregatedTimeline = useMemo(() => {
     const estimates = items
       .map((item) => item.deliveryEstimate)
@@ -198,7 +306,11 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
     return { minDays, maxDays, averageDays, confidence, narrative };
   }, [items, trustContent.guaranteeDescription]);
 
-  const performanceSnapshots = useMemo(() => trustContent.performanceSnapshots.slice(0, 3), [trustContent.performanceSnapshots]);
+  // meta: trust-module: checkout-performance
+  const performanceSnapshots = useMemo(
+    () => trustContent.performanceSnapshots.slice(0, 3),
+    [trustContent.performanceSnapshots]
+  );
   const testimonialHighlight = trustContent.testimonials[0];
 
   const upsellRecommendations = useMemo<UpsellRecommendation[]>(() => {
@@ -363,6 +475,7 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
       </header>
 
       <section className="grid gap-4 lg:grid-cols-3">
+        {/* meta: trust-module: checkout-guarantee */}
         <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white">
@@ -376,15 +489,22 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
           <ul className="mt-4 space-y-3 text-sm text-white/70">
             {aggregatedAssurances.map((assurance) => (
               <li key={assurance.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                <p className="font-semibold text-white">{assurance.title}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-semibold text-white">{assurance.title}</p>
+                  <MetricBadge metric={assurance.metric} />
+                </div>
                 <p>{assurance.description}</p>
                 {assurance.evidence ? (
                   <p className="text-xs text-white/50">Evidence: {assurance.evidence}</p>
+                ) : null}
+                {metricNote(assurance.metric) ? (
+                  <p className="text-xs text-white/50">{metricNote(assurance.metric)}</p>
                 ) : null}
               </li>
             ))}
           </ul>
         </article>
+        {/* meta: trust-module: checkout-timeline */}
         <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white">
@@ -413,6 +533,7 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
             <p className="mt-4 text-sm text-white/70">{aggregatedTimeline.narrative}</p>
           ) : null}
         </article>
+        {/* meta: trust-module: checkout-support */}
         <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white">
@@ -563,15 +684,22 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
             <div className="space-y-3 rounded-2xl border border-white/10 bg-black/20 p-4">
               <h3 className="text-xs uppercase tracking-wide text-white/50">Performance snapshots</h3>
               <div className="grid gap-3 sm:grid-cols-2">
-                {performanceSnapshots.map((snapshot) => (
-                  <div key={snapshot.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
-                    <p className="text-xs uppercase tracking-wide text-white/50">{snapshot.label}</p>
-                    <p className="text-lg font-semibold text-white">{snapshot.value}</p>
-                    {snapshot.caption ? (
-                      <p className="text-xs text-white/50">{snapshot.caption}</p>
-                    ) : null}
-                  </div>
-                ))}
+                {performanceSnapshots.map((snapshot) => {
+                  const note = metricNote(snapshot.metric);
+                  return (
+                    <div key={snapshot.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs uppercase tracking-wide text-white/50">{snapshot.label}</p>
+                        <MetricBadge metric={snapshot.metric} />
+                      </div>
+                      <p className="text-lg font-semibold text-white">{snapshot.value}</p>
+                      {snapshot.caption ? (
+                        <p className="text-xs text-white/50">{snapshot.caption}</p>
+                      ) : null}
+                      {note ? <p className="text-xs text-white/50">{note}</p> : null}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : null}

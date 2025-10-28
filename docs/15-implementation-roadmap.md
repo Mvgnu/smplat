@@ -118,6 +118,7 @@ This document outlines the immediate implementation plan to transform SMPLAT fro
   - Persistent support CTA (chat/email callback) with contextual payload (cart contents, workspace intent)
   - Checkout recap that highlights add-on value (priority support, onboarding concierge)
 - **Status**: Pending; requires CMS schema additions for assurance messaging, Next.js component work, and backend service hints for dynamic delivery estimates.
+- **Status**: In progress. Checkout now consumes the new `checkout-trust-experiences` CMS collection, resolves fulfillment metrics via `/api/v1/trust/experiences`, and surfaces provenance-aware badges plus staleness warnings. Remaining scope: dynamic delivery estimates tied to backlog data and richer support CTAs.
 
 #### 10. Dynamic Bundles & Targeted Upsells
 - **Files**: `apps/web/src/app/(storefront)/products/[slug]/`, `apps/web/src/components/storefront/bundles/`, `apps/api/src/smplat_api/services/catalog/recommendations.py`

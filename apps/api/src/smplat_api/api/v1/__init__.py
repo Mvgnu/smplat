@@ -16,6 +16,7 @@ from .endpoints import (
     operator_onboarding,
     payments,
     products,
+    trust,
 )
 
 router = APIRouter()
@@ -34,3 +35,4 @@ router.include_router(billing_webhooks.router)
 router.include_router(observability.router)
 router.include_router(fulfillment.router, tags=["Fulfillment"])
 router.include_router(instagram.router)
+router.include_router(trust.router)

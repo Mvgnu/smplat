@@ -8,6 +8,7 @@ import { buildConfig } from "payload";
 
 import { BlogPosts } from "@/collections/BlogPosts";
 import { CaseStudies } from "@/collections/CaseStudies";
+import { CheckoutTrustExperiences } from "@/collections/CheckoutTrustExperiences";
 import { Faqs } from "@/collections/Faqs";
 import { Pages } from "@/collections/Pages";
 import { PricingTiers } from "@/collections/PricingTiers";
@@ -43,7 +44,17 @@ export default buildConfig({
       })
     ]
   }),
-  collections: [Users, Pages, BlogPosts, Faqs, Testimonials, CaseStudies, PricingTiers, SiteSettings],
+  collections: [
+    Users,
+    Pages,
+    BlogPosts,
+    Faqs,
+    Testimonials,
+    CaseStudies,
+    PricingTiers,
+    SiteSettings,
+    CheckoutTrustExperiences,
+  ],
   cors: [WEB_ORIGIN],
   csrf: [WEB_ORIGIN],
   typescript: {
