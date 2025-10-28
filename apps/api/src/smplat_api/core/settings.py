@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     sendgrid_api_key: str | None = None
     sendgrid_sender_email: str | None = None
 
+    # Catalog experimentation guardrails
+    bundle_experiment_guardrail_worker_enabled: bool = False
+    bundle_experiment_guardrail_interval_seconds: int = 15 * 60
+    bundle_experiment_guardrail_email_recipients: list[str] = Field(default_factory=list)
+    bundle_experiment_guardrail_slack_webhook_url: str | None = None
+    bundle_experiment_guardrail_slack_channel: str | None = None
+
+    @field_validator("bundle_experiment_guardrail_email_recipients", mode="before")
+    @classmethod
+    def _parse_guardrail_recipients(cls, value: object) -> list[str]:
+        return cls._parse_rollout_list(value)
+
     # Email / notification settings
     smtp_host: str | None = None
     smtp_port: int = 587

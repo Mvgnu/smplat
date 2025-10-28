@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Iterable, Sequence
 
@@ -224,7 +224,7 @@ class CatalogExperimentService:
                     "variant_key": variant.key,
                     "bundle_slug": variant.bundle_slug,
                     "breaches": breaches,
-                    "latest_metric": latest_metric.__dict__ if latest_metric else None,
+                    "latest_metric": asdict(latest_metric) if latest_metric else None,
                 }
             )
 

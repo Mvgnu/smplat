@@ -18,11 +18,21 @@
 4. Publish overrides via "Publish overrides" button once draft is ready. Status flips to `running`.
 5. Confirm storefront loaders ingest the new overrides (payload provenance should include `catalog-experiment-service`).
 
+## Automation & Scheduling
+- **Backfill telemetry:** Run `python tooling/scripts/backfill_bundle_experiments.py --lookback-days 30` nightly (e.g., `0 2 * * *`) before publishing new overrides. Pass `--dry-run` during rehearsals.
+- **Guardrail worker:** Enable `bundle_experiment_guardrail_worker_enabled=true` in the API environment to evaluate experiments every `bundle_experiment_guardrail_interval_seconds` (default 900s). Configure `bundle_experiment_guardrail_email_recipients` and `bundle_experiment_guardrail_slack_webhook_url` for alert delivery.
+- **Storefront sync:** `ProductDetailPage` fetches experiments on each request; ensure `CHECKOUT_API_KEY` is populated wherever storefront pages render experiments.
+
+## QA Fixtures
+- Seed deterministic bundles + metrics via `python tooling/scripts/seed_bundle_experiments.py --slug qa-catalog` (supports `--dry-run`). The script rewires acceptance metrics, experiment variants, and guardrail flags for consistent demos.
+- Use Playwright smoke flows or the new storefront experiment overlay (product page) to confirm variants, guardrail badges, and acceptance telemetry display.
+
 ## Guardrail Configuration
 - `sample_size_guardrail`: minimum sample size before decisions. Aggregator flags guardrail breach when `sample_size < guardrail`.
 - `guardrail_config.min_acceptance_rate`: minimum acceptance rate (0-1). Breach when latest metric dips below threshold.
 - `guardrail_config.max_acceptance_rate`: optional ceiling (e.g., catch anomalous spikes).
 - Guardrail evaluation is exposed via `POST /api/v1/catalog/experiments/{slug}/evaluate` and surfaced in the admin UI. Breaches are highlighted per variant.
+- The `BundleExperimentGuardrailWorker` automatically pauses experiments when breaches persist and dispatches notifications. Review alerts before resuming.
 
 ## Monitoring & Dashboards
 - Metrics persisted each aggregation run (daily by default) with lift vs. control.
