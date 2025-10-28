@@ -108,12 +108,37 @@ export type HostedSessionReport = {
   invoiceStatuses: HostedSessionInvoiceRollup[];
 };
 
+export type HostedSessionRecoveryAttempt = {
+  attempt: number;
+  status: string;
+  scheduledAt: string;
+  nextRetryAt?: string | null;
+  notifiedAt?: string | null;
+};
+
+export type HostedSessionRecoverySession = {
+  sessionId: string;
+  status: string;
+  attempts: HostedSessionRecoveryAttempt[];
+  lastNotifiedAt?: string | null;
+  nextRetryAt?: string | null;
+  lastChannel?: string | null;
+};
+
+export type HostedSessionRecoveryTimeline = {
+  workspaceId: string;
+  generatedAt: string;
+  sessions: HostedSessionRecoverySession[];
+};
+
+
 export type BillingCenterPayload = {
   invoices: BillingInvoice[];
   summary: BillingSummary;
   aging: BillingAgingBuckets;
   insights: CampaignInsight[];
   sessionsReport: HostedSessionReport | null;
+  recoveryTimeline: HostedSessionRecoveryTimeline | null;
 };
 
 export type ReconciliationRunMetrics = {

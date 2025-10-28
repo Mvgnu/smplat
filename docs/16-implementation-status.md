@@ -13,6 +13,7 @@ _Last updated: 2025-10-18_
 - Billing center surfaces invoice history with CSV exports, staged rollout guardrails, and campaign intelligence overlays that correlate spend, fulfillment outcomes, and Instagram reach deltas.
 - Billing center now blends invoice history with hosted checkout analytics, exposing conversion funnels, retry cadences, abandonment insights, and operator quick actions within the dashboard experience.
 - Hosted Stripe checkout sessions now transition via webhook enrichment, scheduled expiry/abandonment sweeps, and operator APIs for regeneration, giving finance/support teams actionable lifecycle telemetry.
+- Hosted session recovery automation now schedules stalled sessions, dispatches communication stubs, and feeds the dashboard Recovery Timeline for end-to-end operator visibility.
 - Weekly digests aggregate order/fulfillment activity via `tooling/scripts/run_weekly_digest.py`, reusing NotificationService templates with marketing preference enforcement.
 
 ## Storefront & Checkout
@@ -27,7 +28,7 @@ _Last updated: 2025-10-18_
 **Outstanding**
 - Operationalize catalog insights with CMS-driven experiments (e.g., automated bundle updates) and fold the exported telemetry into merchandising review cadences.
 - Build analytics + alerting for checkout/webhook success rates (Dashboards, PagerDuty/Webhook to Slack) using the new telemetry fields.
-- Extend hosted session automation with proactive notifications (Slack/email webhooks) and telemetry-backed anomaly policies to complement the newly delivered dashboard analytics.
+- Extend hosted session automation with production-grade notification channels (Slack/email webhooks) and anomaly guardrails beyond the current email/SMS stubs.
 - Wire the new `tooling/scripts/smoke_checkout.py` into CI/CD once an environment can expose checkout + API key safely.
 
 ## Fulfillment & Operations
