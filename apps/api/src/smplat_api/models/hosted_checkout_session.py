@@ -86,3 +86,23 @@ class HostedCheckoutSession(Base):
         back_populates="hosted_sessions",
         foreign_keys=[invoice_id],
     )
+
+
+class HostedSessionRecoveryRun(Base):
+    """Execution log for hosted session recovery automation sweeps."""
+
+    # meta: hosted-session: recovery-run
+
+    __tablename__ = "hosted_session_recovery_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    triggered_by = Column(String(64), nullable=True)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(32), nullable=False, server_default="running")
+    scheduled_count = Column(Integer, nullable=False, server_default="0")
+    notified_count = Column(Integer, nullable=False, server_default="0")
+    metadata_json = Column("metadata", JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+

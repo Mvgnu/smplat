@@ -13,7 +13,10 @@ from smplat_api.models.hosted_checkout_session import (
     HostedCheckoutSessionStatusEnum,
 )
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
-from smplat_api.services.billing.recovery import HostedSessionRecoveryCommunicator
+from smplat_api.services.billing.recovery import (
+    HostedSessionRecoveryCommunicator,
+    RecoveryNotificationResult,
+)
 
 
 async def sweep_hosted_sessions(
@@ -118,19 +121,37 @@ async def schedule_hosted_session_recovery(
                 session, prior_attempts=prior_attempts, current_attempt=attempt_record
             )
             if should_notify:
-                notified = await communicator.dispatch_notification(
+                result = await communicator.dispatch_notification(
                     session, attempt_record
                 )
-                if notified:
+                provider = "unknown"
+                delivered = False
+                if isinstance(result, RecoveryNotificationResult):
+                    provider = result.provider
+                    delivered = result.delivered
+                elif isinstance(result, dict):
+                    provider = str(result.get("provider", provider))
+                    delivered = bool(result.get("delivered", delivered))
+                elif isinstance(result, str):
+                    provider = result
+                elif isinstance(result, bool):
+                    delivered = result
+
+                if delivered:
                     notifications += 1
-                    metadata = dict(session.metadata_json or {})
-                    metadata["last_notified_at"] = current_time.isoformat()
-                    automation_meta = dict(metadata.get("automation", {}))
-                    latest_attempt = dict(automation_meta.get("last_attempt", attempt_record))
-                    latest_attempt["notified_at"] = current_time.isoformat()
-                    automation_meta["last_attempt"] = latest_attempt
-                    metadata["automation"] = automation_meta
-                    session.metadata_json = metadata
+
+                metadata = dict(session.metadata_json or {})
+                metadata["last_notified_at"] = current_time.isoformat()
+                automation_meta = dict(metadata.get("automation", {}))
+                latest_attempt = dict(automation_meta.get("last_attempt", attempt_record))
+                latest_attempt["notified_at"] = current_time.isoformat()
+                latest_attempt["provider"] = provider
+                automation_meta["last_attempt"] = latest_attempt
+                metadata["automation"] = automation_meta
+                attempt_record["provider"] = provider
+                attempts_snapshot = list(metadata.get("recovery_attempts", []))
+                metadata["recovery_attempts"] = attempts_snapshot[-25:] if attempts_snapshot else []
+                session.metadata_json = metadata
 
     await db.flush()
     return {"scheduled": len(sessions), "notified": notifications}
