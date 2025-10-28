@@ -34,6 +34,28 @@ class TrustExperienceResolveRequest(BaseModel):
     metrics: list[TrustMetricRequest] = Field(default_factory=list)
 
 
+class TrustMetricProvenance(BaseModel):
+    """Traceability context for a trust metric."""
+
+    source: str | None = Field(default=None, description="Upstream data source for the metric")
+    cache_layer: str = Field(
+        ..., description="Layer that fulfilled the request (memory|persistent|computed|none|unknown)"
+    )
+    cache_refreshed_at: datetime | None = Field(
+        default=None, description="Timestamp when the cache layer refreshed the snapshot"
+    )
+    cache_expires_at: datetime | None = Field(
+        default=None, description="Timestamp when the cached snapshot will expire"
+    )
+    cache_ttl_minutes: int | None = Field(
+        default=None, description="Cache TTL in minutes for the persistent layer"
+    )
+    notes: list[str] = Field(default_factory=list, description="Human-readable provenance notes")
+    unsupported_reason: str | None = Field(
+        default=None, description="Diagnostic code if the metric is unsupported"
+    )
+
+
 class TrustMetricResponse(BaseModel):
     """Resolved metric payload."""
 
@@ -48,6 +70,9 @@ class TrustMetricResponse(BaseModel):
     )
     verification_state: str = Field(..., description="Freshness evaluation (fresh|stale|missing|unsupported)")
     metadata: dict[str, object] = Field(default_factory=dict, description="Additional provenance metadata")
+    provenance: TrustMetricProvenance = Field(
+        ..., description="Provenance metadata including cache layer diagnostics"
+    )
 
 
 class TrustExperienceResolveResponse(BaseModel):
@@ -55,6 +80,24 @@ class TrustExperienceResolveResponse(BaseModel):
 
     slug: str
     metrics: list[TrustMetricResponse]
+
+
+class TrustMetricPurgeRequest(BaseModel):
+    """Payload to purge metric cache entries."""
+
+    metric_id: str | None = Field(
+        default=None,
+        description="Optional metric identifier to purge. When omitted, clears all metrics.",
+    )
+
+
+class TrustMetricPurgeResponse(BaseModel):
+    """Response for cache purge operations."""
+
+    purged_metric_ids: list[str] = Field(
+        default_factory=list,
+        description="Identifiers of metrics that were invalidated.",
+    )
 
 
 @router.post(
@@ -89,8 +132,28 @@ async def resolve_trust_experience(
                 freshness_window_minutes=item.freshness_window_minutes,
                 verification_state=item.verification_state,
                 metadata=item.metadata,
+                provenance=TrustMetricProvenance(**item.provenance.as_dict()),
             )
             for item in resolved
         ],
     )
+
+
+@router.post(
+    "/metrics/purge",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_checkout_api_key)],
+    response_model=TrustMetricPurgeResponse,
+    summary="Purge fulfillment metric cache entries",
+)
+async def purge_metric_cache(
+    payload: TrustMetricPurgeRequest,
+    db: AsyncSession = Depends(get_session),
+) -> TrustMetricPurgeResponse:
+    """Allow operators to invalidate cached metric snapshots when backfills occur."""
+
+    service = FulfillmentMetricsService(db)
+    purged = await service.purge_cache(metric_id=payload.metric_id)
+
+    return TrustMetricPurgeResponse(purged_metric_ids=purged)
 

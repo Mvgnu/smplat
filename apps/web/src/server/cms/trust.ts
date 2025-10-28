@@ -31,6 +31,12 @@ export type CheckoutMetricVerification = {
   previewState?: MetricPreviewState | null;
   provenanceNote?: string | null;
   sampleSize?: number | null;
+  cacheLayer?: string | null;
+  cacheRefreshedAt?: string | null;
+  cacheExpiresAt?: string | null;
+  cacheTtlMinutes?: number | null;
+  unsupportedReason?: string | null;
+  provenanceNotes?: string[] | null;
 };
 
 export type CheckoutAssurancePoint = {
@@ -271,6 +277,15 @@ type TrustMetricResolution = {
   freshness_window_minutes: number | null;
   verification_state: "fresh" | "stale" | "missing" | "unsupported";
   metadata: Record<string, unknown> | null;
+  provenance: {
+    source: string | null;
+    cache_layer: string;
+    cache_refreshed_at: string | null;
+    cache_expires_at: string | null;
+    cache_ttl_minutes: number | null;
+    notes: string[] | null;
+    unsupported_reason: string | null;
+  } | null;
 };
 
 type TrustMetricRequestPayload = {
@@ -294,6 +309,12 @@ const cloneMetric = (metric: CheckoutMetricVerification | undefined): CheckoutMe
     previewState: metric.previewState ?? null,
     provenanceNote: metric.provenanceNote ?? null,
     sampleSize: metric.sampleSize ?? null,
+    cacheLayer: metric.cacheLayer ?? null,
+    cacheRefreshedAt: metric.cacheRefreshedAt ?? null,
+    cacheExpiresAt: metric.cacheExpiresAt ?? null,
+    cacheTtlMinutes: metric.cacheTtlMinutes ?? null,
+    unsupportedReason: metric.unsupportedReason ?? null,
+    provenanceNotes: metric.provenanceNotes ? [...metric.provenanceNotes] : null,
   } satisfies CheckoutMetricVerification;
 };
 
@@ -330,6 +351,12 @@ const createMetricVerification = (
     rawValue: null,
     computedAt: null,
     sampleSize: null,
+    cacheLayer: null,
+    cacheRefreshedAt: null,
+    cacheExpiresAt: null,
+    cacheTtlMinutes: null,
+    unsupportedReason: null,
+    provenanceNotes: null,
   } satisfies CheckoutMetricVerification;
 };
 
@@ -486,6 +513,16 @@ const applyMetricResolution = (
     } else {
       metric.verificationState = "missing";
     }
+    metric.formattedValue = metric.formattedValue ?? null;
+    metric.rawValue = metric.rawValue ?? null;
+    metric.computedAt = metric.computedAt ?? null;
+    metric.sampleSize = metric.sampleSize ?? null;
+    metric.cacheLayer = null;
+    metric.cacheRefreshedAt = null;
+    metric.cacheExpiresAt = null;
+    metric.cacheTtlMinutes = null;
+    metric.unsupportedReason = null;
+    metric.provenanceNotes = null;
     return;
   }
 
@@ -497,9 +534,34 @@ const applyMetricResolution = (
   metric.freshnessWindowMinutes =
     resolution.freshness_window_minutes ?? metric.freshnessWindowMinutes ?? null;
 
-  const resolvedSource = resolution.metadata?.source;
-  if (typeof resolvedSource === "string") {
-    metric.source = resolvedSource;
+  const provenance = resolution.provenance;
+  const resolvedSourceFromMetadata = resolution.metadata?.source;
+
+  if (provenance?.source) {
+    metric.source = provenance.source;
+  } else if (typeof resolvedSourceFromMetadata === "string") {
+    metric.source = resolvedSourceFromMetadata;
+  }
+
+  metric.cacheLayer = provenance?.cache_layer ?? null;
+  metric.cacheRefreshedAt = provenance?.cache_refreshed_at ?? null;
+  metric.cacheExpiresAt = provenance?.cache_expires_at ?? null;
+  metric.cacheTtlMinutes =
+    typeof provenance?.cache_ttl_minutes === "number" ? provenance.cache_ttl_minutes : null;
+  metric.unsupportedReason = provenance?.unsupported_reason ?? null;
+
+  const provenanceNotes = provenance?.notes ?? null;
+  metric.provenanceNotes = provenanceNotes && provenanceNotes.length > 0 ? [...provenanceNotes] : null;
+
+  if (metric.provenanceNotes?.length) {
+    metric.provenanceNote = metric.provenanceNotes[0];
+  }
+
+  if (metric.verificationState === "unsupported") {
+    metric.provenanceNote =
+      metric.provenanceNote ??
+      provenance?.notes?.[0] ??
+      "Metric not yet supported for this experience.";
   }
 };
 
