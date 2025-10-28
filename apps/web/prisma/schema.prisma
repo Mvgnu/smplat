@@ -354,3 +354,32 @@ model Payment {
 
   @@map("payments")
 }
+
+model CheckoutOfferEvent {
+  id              String   @id @default(uuid()) @db.Uuid
+  orderReference  String?  @map("order_reference")
+  eventType       String   @map("event_type")
+  selection       Json?    @map("selection")
+  metadata        Json?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("checkout_offer_events")
+  @@index([orderReference])
+  @@index([eventType])
+}
+
+model OnboardingJourneyEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  journeyId     String   @map("journey_id")
+  orderId       String   @map("order_id")
+  taskId        String?  @map("task_id")
+  eventType     String   @map("event_type")
+  statusBefore  String?  @map("status_before")
+  statusAfter   String?  @map("status_after")
+  metadata      Json?
+  occurredAt    DateTime @default(now()) @map("occurred_at")
+
+  @@map("onboarding_journey_events")
+  @@index([orderId])
+  @@index([eventType])
+}

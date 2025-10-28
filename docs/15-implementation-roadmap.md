@@ -130,14 +130,14 @@ This document outlines the immediate implementation plan to transform SMPLAT fro
 - **Status**: Pending; requires recommendation service, CMS authoring fields, and storefront UI hooks.
 
 #### 11. Post-Purchase Onboarding Journey
-- **Files**: `apps/web/src/app/(client)/onboarding/`, `apps/web/src/components/dashboard/onboarding/`, `apps/api/src/smplat_api/services/orders/onboarding.py`
+- **Files**: `apps/api/src/smplat_api/services/orders/onboarding.py`, `apps/api/src/smplat_api/api/v1/endpoints/onboarding.py`, `apps/web/src/app/(storefront)/checkout/success/page.tsx`, `apps/web/src/app/(client)/dashboard/page.tsx`, `apps/web/src/server/onboarding/journeys.ts`
 - **Components**: Welcome checklist, trust-building video modal, resource locker, referral nudge
 - **Features**:
-  - Immediately after checkout success, route customers through an onboarding wizard capturing business goals, required assets, and preferred communication cadence
-  - Embed proof-driven content (case study highlights, before/after metrics) and satisfaction guarantees to reinforce buying confidence
-  - Offer loyalty incentives (referral codes, upgrade coupons) once onboarding checklist hits key milestones
-  - Persist onboarding state for operators with Slack/email nudges when clients stall
-- **Status**: Pending; requires new API service for onboarding artifacts, dashboard UI, and notification triggers.
+  - Immediately after checkout success, the journey service hydrates durable tasks, referral codes, and contextual metadata which the success page renders live.
+  - Embed proof-driven content (case study highlights, before/after metrics) and satisfaction guarantees to reinforce buying confidence.
+  - Offer loyalty incentives (referral codes, upgrade coupons) once onboarding checklist hits key milestones with referral events persisted server-side for operator review.
+  - Persist onboarding state for operators with dashboard visibility; Slack/email nudges reuse notification services next.
+- **Status**: In progress — API + customer surfaces shipped; operator-triggered nudges and concierge automation remain.
 
 #### 12. Social Proof & Community Layer
 - **Files**: `apps/web/src/app/(storefront)/products/[slug]/`, `apps/web/src/components/storefront/testimonials/`, `apps/api/src/smplat_api/services/content/case_studies.py`
