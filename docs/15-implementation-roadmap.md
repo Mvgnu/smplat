@@ -100,10 +100,53 @@ This document outlines the immediate implementation plan to transform SMPLAT fro
 - **Files**: `apps/web/src/app/(admin)/orders/`
 - **Components**: Order oversight, manual interventions, customer communication
 - **Features**:
-  - Comprehensive order pipeline view
-  - Manual fulfillment controls and overrides
-  - Customer communication tools
-  - Revenue and performance analytics
+- Comprehensive order pipeline view
+- Manual fulfillment controls and overrides
+- Customer communication tools
+- Revenue and performance analytics
+
+### Phase 1D: Revenue-Driven Experience & Trust Layer (Week 4-6)
+**Priority: HIGH**
+
+#### 9. Confidence-Centric Checkout
+- **Files**: `apps/web/src/app/(storefront)/checkout/`, `apps/web/src/components/storefront/checkout/`, `apps/api/src/smplat_api/services/checkout/`
+- **Components**: Assurance badges, satisfaction guarantees, transparent pricing timelines, live support entry points
+- **Features**:
+  - Display audited trust signals (secure payment badges, guarantee copy, refund SLA) sourced from CMS with feature flags for rapid iteration
+  - Inline delivery timeline widget tied to selected package configuration and fulfillment backlog metrics
+  - Persistent support CTA (chat/email callback) with contextual payload (cart contents, workspace intent)
+  - Checkout recap that highlights add-on value (priority support, onboarding concierge)
+- **Status**: Pending; requires CMS schema additions for assurance messaging, Next.js component work, and backend service hints for dynamic delivery estimates.
+
+#### 10. Dynamic Bundles & Targeted Upsells
+- **Files**: `apps/web/src/app/(storefront)/products/[slug]/`, `apps/web/src/components/storefront/bundles/`, `apps/api/src/smplat_api/services/catalog/recommendations.py`
+- **Components**: Bundle composer, limited-time offers ribbon, personalized upsell modal
+- **Features**:
+  - Generate contextual bundles (e.g., "Instagram Growth + Content Studio") based on cart composition and CMS-configured campaigns
+  - Surface post-add-to-cart upsell modal with quantified ROI and testimonial snippets
+  - Track offer impressions/acceptance via lightweight analytics stored in Postgres for merchandising review (no third-party telemetry spam)
+  - Allow operations to schedule seasonal offers via CMS toggles with automatic expiry
+- **Status**: Pending; requires recommendation service, CMS authoring fields, and storefront UI hooks.
+
+#### 11. Post-Purchase Onboarding Journey
+- **Files**: `apps/web/src/app/(client)/onboarding/`, `apps/web/src/components/dashboard/onboarding/`, `apps/api/src/smplat_api/services/orders/onboarding.py`
+- **Components**: Welcome checklist, trust-building video modal, resource locker, referral nudge
+- **Features**:
+  - Immediately after checkout success, route customers through an onboarding wizard capturing business goals, required assets, and preferred communication cadence
+  - Embed proof-driven content (case study highlights, before/after metrics) and satisfaction guarantees to reinforce buying confidence
+  - Offer loyalty incentives (referral codes, upgrade coupons) once onboarding checklist hits key milestones
+  - Persist onboarding state for operators with Slack/email nudges when clients stall
+- **Status**: Pending; requires new API service for onboarding artifacts, dashboard UI, and notification triggers.
+
+#### 12. Social Proof & Community Layer
+- **Files**: `apps/web/src/app/(storefront)/products/[slug]/`, `apps/web/src/components/storefront/testimonials/`, `apps/api/src/smplat_api/services/content/case_studies.py`
+- **Components**: Rotating testimonial carousel, verified results gallery, community AMA scheduling block
+- **Features**:
+  - Feed storefront sections with CMS-tagged testimonial collections segmented by industry/goal
+  - Allow prospects to RSVP for live onboarding webinars or AMAs directly from the product page
+  - Publish anonymized performance snapshots (e.g., follower growth curves) generated from fulfilled orders with client consent
+  - Integrate trust badges (payment protection, compliance statements) maintained centrally in CMS and shared across storefront + checkout
+- **Status**: Pending; requires CMS collection definitions, frontend components, and opt-in data aggregation from fulfillment outcomes.
 
 ## Technical Implementation Standards
 
@@ -191,10 +234,10 @@ WEEKLY_DIGEST_DRY_RUN=true
 - **Regulatory compliance**: Legal review and compliance automation
 
 ## Next Steps
-1. Begin implementation with customer-facing storefront
-2. Integrate Stripe payment processing
-3. Build fulfillment automation system
-4. Create client dashboard and tracking
-5. Implement comprehensive monitoring and alerting
+1. Ship assurance-rich checkout enhancements with CMS-managed trust copy and dynamic delivery timelines.
+2. Launch dynamic bundles and contextual upsells wired into catalog services and storefront UI.
+3. Build the post-purchase onboarding journey with operator + customer visibility.
+4. Stand up social proof surfaces (testimonials, verified results, live events) across storefront touchpoints.
+5. Backfill supporting analytics (offer acceptance, onboarding completion) with lean Postgres reporting tables and update runbooks.
 
 This roadmap ensures systematic delivery of a production-ready social media services platform with enterprise-grade quality and comprehensive documentation.

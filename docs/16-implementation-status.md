@@ -26,10 +26,10 @@ _Last updated: 2025-10-18_
 - Catalog insights surface trending and zero-result searches in the storefront and can be exported via `tooling/scripts/export_catalog_insights.py` for merchandising hand-offs.
 
 **Outstanding**
-- Operationalize catalog insights with CMS-driven experiments (e.g., automated bundle updates) and fold the exported telemetry into merchandising review cadences.
-- Build analytics + alerting for checkout/webhook success rates (Dashboards, PagerDuty/Webhook to Slack) using the new telemetry fields.
-- Extend hosted session automation with production-grade notification channels (Slack/email webhooks) and anomaly guardrails beyond the current email/SMS stubs.
-- Wire the new `tooling/scripts/smoke_checkout.py` into CI/CD once an environment can expose checkout + API key safely.
+- Layer confidence-building elements into checkout (CMS-authored trust copy, delivery timeline widget, concierge support CTA) and wire dynamic estimates from fulfillment data.
+- Deliver contextual bundle & upsell flows (post-add-to-cart modal, seasonal offers, ROI storytelling) with lightweight acceptance analytics.
+- Seed storefront social proof modules (testimonial carousels, verified results gallery, live AMA scheduler) sourced from CMS collections.
+- Map the post-purchase onboarding journey (success redirect wizard, asset checklist, referral incentives) and expose operator visibility via dashboard components.
 
 ## Fulfillment & Operations
 **Delivered**
@@ -63,9 +63,10 @@ _Last updated: 2025-10-18_
 - Major gaps: `services/payments/payment_service.py` still needs staging-scale retry/backoff tests, `services/fulfillment/instagram_service.py` uses simulated Graph payloads rather than live calls, and `/api/v1/orders` reporting/logging paths remain to be validated once admin tooling arrives.
 
 ## Immediate Next Actions
-1. Enable the TaskProcessor in staging (set `FULFILLMENT_*` env vars), push metrics into the monitoring stack, and configure alerts for loop errors and dead-letter growth.
-2. Stand up checkout/webhook observability (dashboards + alerting) using the new delivery/retry metadata and integrate smoke scripts into CI for regression coverage.
-3. Expand storefront merchandising: ship CMS-authored bundles, refine catalog search/filter UX, and seed additional `product-<slug>` pages to exercise the gallery/preset experiences.
+1. Ship the assurance-rich checkout refresh, including CMS-managed guarantees, delivery timeline calculations, and concierge support entry points.
+2. Launch dynamic bundle and upsell experiments with CMS-configured campaigns and Postgres-backed acceptance metrics.
+3. Stand up the post-purchase onboarding flow with dashboard visibility, loyalty incentives, and operator nudges.
+4. Deploy social proof experiences (testimonial streams, verified performance snapshots, live events) tied to new CMS collections.
 
 ## Client Experience
 **Delivered**
