@@ -67,6 +67,11 @@ class Invoice(Base):
     processor_charge_id = Column(String, nullable=True)
     webhook_replay_token = Column(String, nullable=True)
     last_payment_error = Column(Text, nullable=True)
+    hosted_session_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("hosted_checkout_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     settlement_at = Column(DateTime(timezone=True), nullable=True)
     adjustments_total = Column(Numeric(12, 2), nullable=False, server_default="0")
     adjustments_json = Column("adjustments", JSON, nullable=True)
@@ -82,6 +87,17 @@ class Invoice(Base):
 
     # Relationships
     workspace = relationship("User")
+    hosted_session = relationship(
+        "HostedCheckoutSession",
+        uselist=False,
+        foreign_keys=[hosted_session_id],
+    )
+    hosted_sessions = relationship(
+        "HostedCheckoutSession",
+        primaryjoin="HostedCheckoutSession.invoice_id == Invoice.id",
+        foreign_keys="HostedCheckoutSession.invoice_id",
+        order_by="HostedCheckoutSession.created_at",
+    )
     line_items = relationship(
         "InvoiceLineItem",
         back_populates="invoice",

@@ -6,11 +6,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import MutableSequence
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smplat_api.core.settings import settings
+from smplat_api.models.hosted_checkout_session import (
+    HostedCheckoutSession,
+    HostedCheckoutSessionStatusEnum,
+)
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
 from smplat_api.services.billing.providers import StripeBillingProvider, StripeHostedSession
 from smplat_api.services.secrets.stripe import (
@@ -91,6 +95,20 @@ class BillingGatewayClient:
         if amount <= 0:
             raise ValueError("Invoice amount must be positive for hosted checkout")
         provider = await self._resolve_provider()
+        pending_session = HostedCheckoutSession(
+            session_id=f"pending-{uuid4()}",
+            workspace_id=self._workspace_id,
+            invoice_id=invoice.id,
+            status=HostedCheckoutSessionStatusEnum.INITIATED,
+            metadata_json={
+                "invoice_id": str(invoice.id),
+                "workspace_id": str(invoice.workspace_id),
+                "success_url": success_url,
+                "cancel_url": cancel_url,
+            },
+        )
+        self._db.add(pending_session)
+        await self._db.flush()
         session = await provider.create_checkout_session(
             invoice_number=invoice.invoice_number,
             amount=amount,
@@ -100,6 +118,18 @@ class BillingGatewayClient:
             cancel_url=cancel_url,
             metadata={"invoice_id": str(invoice.id), "workspace_id": str(invoice.workspace_id)},
         )
+        pending_session.session_id = session.session_id
+        pending_session.expires_at = session.expires_at
+        pending_session.metadata_json = {
+            "provider": "stripe",
+            "session_url": session.url,
+            "invoice_id": str(invoice.id),
+            "workspace_id": str(invoice.workspace_id),
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+        }
+        invoice.hosted_session_id = pending_session.id
+        await self._db.flush()
         return session
 
 

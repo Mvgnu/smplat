@@ -37,7 +37,7 @@ This document outlines the immediate implementation plan to transform SMPLAT fro
   - Support for one-time and subscription billing
   - Webhook event processing for order creation
   - Payment failure handling and retry logic
-- **Status**: Checkout session initiation, payment persistence, fulfillment hand-off, and frontend checkout orchestration implemented; webhook idempotency logging plus delivery/retry instrumentation live; API access protected via internal key; remaining work focuses on production monitoring hooks and failure analytics.
+- **Status**: Checkout session initiation, payment persistence, fulfillment hand-off, and frontend checkout orchestration implemented; webhook idempotency logging plus delivery/retry instrumentation live; API access protected via internal key; hosted checkout sessions now persist to Postgres for invoice linkage; remaining work focuses on production monitoring hooks, lifecycle transitions, and failure analytics.
 - **Observability**: `/api/v1/payments/observability` (secured via checkout API key) exposes checkout + webhook success/failure counters and recent failure metadata for dashboards and alert rules.
 
 #### 3. Order Processing Pipeline

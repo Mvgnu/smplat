@@ -11,6 +11,10 @@ from sqlalchemy import select
 
 from smplat_api.core.settings import settings
 from smplat_api.models.customer_profile import CurrencyEnum
+from smplat_api.models.hosted_checkout_session import (
+    HostedCheckoutSession,
+    HostedCheckoutSessionStatusEnum,
+)
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
 from smplat_api.models.processor_event import ProcessorEvent
 from smplat_api.models.user import User, UserRoleEnum
@@ -124,6 +128,39 @@ async def test_gateway_refund_updates_adjustments(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_gateway_checkout_persists_session(session_factory):
+    stub_provider = StubStripeProvider()
+    async with session_factory() as session:
+        invoice = Invoice(
+            workspace_id=uuid4(),
+            invoice_number="INV-5001",
+            status=InvoiceStatusEnum.ISSUED,
+            currency=CurrencyEnum.EUR,
+            subtotal=Decimal("120.00"),
+            tax=Decimal("0"),
+            total=Decimal("120.00"),
+            balance_due=Decimal("120.00"),
+            due_at=datetime.now(timezone.utc),
+        )
+        session.add(invoice)
+        await session.flush()
+
+        gateway = BillingGatewayClient(session, invoice.workspace_id, provider=stub_provider)
+        hosted_session = await gateway.create_hosted_session(
+            invoice,
+            success_url="https://app.test/success",
+            cancel_url="https://app.test/cancel",
+        )
+
+        assert hosted_session.session_id == "cs_test"
+        assert invoice.hosted_session_id is not None
+        stored = await session.get(HostedCheckoutSession, invoice.hosted_session_id)
+        assert stored is not None
+        assert stored.status == HostedCheckoutSessionStatusEnum.INITIATED
+        assert stored.metadata_json["session_url"] == "https://checkout.test"
+
+
+@pytest.mark.asyncio
 async def test_checkout_session_endpoint_returns_hosted_url(app_with_db, monkeypatch):
     app, session_factory = app_with_db
     previous_key = settings.checkout_api_key
@@ -169,6 +206,13 @@ async def test_checkout_session_endpoint_returns_hosted_url(app_with_db, monkeyp
         body = response.json()
         assert body["checkoutUrl"] == "https://checkout.test"
         assert body["sessionId"] == "cs_test"
+        async with session_factory() as session:
+            refreshed_invoice = await session.get(Invoice, invoice.id)
+            assert refreshed_invoice is not None
+            assert refreshed_invoice.hosted_session_id is not None
+            stored = await session.get(HostedCheckoutSession, refreshed_invoice.hosted_session_id)
+            assert stored is not None
+            assert stored.metadata_json["session_url"] == "https://checkout.test"
     finally:
         settings.checkout_api_key = previous_key
         settings.billing_rollout_stage = previous_stage
