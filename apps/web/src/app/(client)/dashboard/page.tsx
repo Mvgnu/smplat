@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import { CheckCircle2 } from "lucide-react";
 
 import { auth } from "@/server/auth";
 import { BillingCenter } from "@/components/dashboard/billing/BillingCenter";
@@ -8,6 +9,7 @@ import { fetchClientOrders } from "@/server/orders/client-orders";
 import { fetchOrderProgress } from "@/server/orders/progress";
 import { fetchInstagramAnalytics } from "@/server/instagram/analytics";
 import { getOrCreateNotificationPreferences, setLastSelectedOrder } from "@/server/notifications/preferences";
+import { fetchOnboardingJourney } from "@/server/onboarding/journeys";
 
 import { selectOrderAction, updateNotificationPreferencesAction } from "./actions";
 
@@ -82,6 +84,7 @@ export default async function ClientDashboardPage({ searchParams }: DashboardPag
 
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? null;
   const orderProgress = selectedOrderId ? await fetchOrderProgress(selectedOrderId) : null;
+  const onboardingJourney = selectedOrderId ? await fetchOnboardingJourney(selectedOrderId) : null;
 
   const currencyForSummary = selectedOrder?.currency ?? orders[0]?.currency ?? "EUR";
   const currencyFormatterForSummary = currencyFormatter(currencyForSummary);
@@ -215,6 +218,62 @@ export default async function ClientDashboardPage({ searchParams }: DashboardPag
                   </div>
                 )
               )}
+
+              {onboardingJourney ? (
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-6 text-sm text-white/70">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-white/40">Onboarding status</p>
+                      <p className="mt-1 text-white">
+                        {onboardingJourney.status?.toUpperCase() ?? "UNKNOWN"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-white/40">Checklist completion</p>
+                      <p className="mt-1 text-white">
+                        {`${Math.round(onboardingJourney.progress_percentage ?? 0)}%`}
+                      </p>
+                    </div>
+                    {onboardingJourney.referral_code ? (
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.3em] text-white/40">Referral code</p>
+                        <p className="mt-1 font-mono text-white">
+                          {onboardingJourney.referral_code}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <ul className="mt-4 space-y-3">
+                    {[...onboardingJourney.tasks]
+                      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+                      .map((task) => {
+                        const isComplete = task.status?.toLowerCase() === "completed";
+                        return (
+                          <li
+                            key={task.id}
+                            className="flex items-start justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3"
+                          >
+                            <div className="flex-1 space-y-1">
+                              <p className="font-semibold text-white">{task.title}</p>
+                              {task.description ? (
+                                <p className="text-xs text-white/60">{task.description}</p>
+                              ) : null}
+                            </div>
+                            <CheckCircle2
+                              className={`h-5 w-5 flex-shrink-0 ${isComplete ? "text-emerald-300" : "text-white/30"}`}
+                            />
+                          </li>
+                        );
+                      })}
+                    {onboardingJourney.tasks.length === 0 ? (
+                      <li className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-3 text-xs text-white/50">
+                        Operators are provisioning your onboarding tasks.
+                      </li>
+                    ) : null}
+                  </ul>
+                </div>
+              ) : null}
 
               <OrderTable orders={orders.slice(0, 6)} selectedOrderId={selectedOrderId} />
             </>

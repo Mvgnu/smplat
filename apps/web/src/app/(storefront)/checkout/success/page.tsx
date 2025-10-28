@@ -7,42 +7,48 @@ import { CheckCircle2, Gift, Sparkles } from "lucide-react";
 
 import { useCartStore } from "@/store/cart";
 
+type RemoteOnboardingTask = {
+  id: string;
+  slug: string;
+  title: string;
+  description: string | null;
+  status: string;
+  sort_order: number;
+  completed_at: string | null;
+};
+
+type OnboardingJourneyResponse = {
+  status: string;
+  referral_code: string | null;
+  tasks: RemoteOnboardingTask[];
+};
+
 type OnboardingTask = {
   id: string;
   title: string;
-  description: string;
+  description: string | null;
   completed: boolean;
 };
 
-const DEFAULT_TASKS: Array<Omit<OnboardingTask, "completed">> = [
-  {
-    id: "intake",
-    title: "Submit campaign intake",
-    description:
-      "Share campaign goals, budget guardrails, and target audiences so operators configure the right experiment lanes.",
-  },
-  {
-    id: "assets",
-    title: "Upload creative & access assets",
-    description: "Drop logos, product shots, and sample posts into the asset locker and grant Instagram/TikTok access.",
-  },
-  {
-    id: "collaboration",
-    title: "Connect collaboration channels",
-    description: "Accept the Slack Connect invite, confirm reporting recipients, and note any compliance constraints.",
-  },
-];
+const ANALYTICS_ENDPOINT = "/api/analytics/onboarding-events";
+
+const mapTask = (task: RemoteOnboardingTask): OnboardingTask => ({
+  id: task.id,
+  title: task.title,
+  description: task.description,
+  completed: task.status.toLowerCase() === "completed" || Boolean(task.completed_at)
+});
 
 export default function CheckoutSuccessPage() {
   const searchParams = useSearchParams();
   const clear = useCartStore((state) => state.clear);
   const orderId = searchParams.get("order");
-  const [tasks, setTasks] = useState<OnboardingTask[]>(() =>
-    DEFAULT_TASKS.map((task) => ({ ...task, completed: false }))
-  );
+  const [tasks, setTasks] = useState<OnboardingTask[]>([]);
   const [referralCopied, setReferralCopied] = useState(false);
+  const [referralCode, setReferralCode] = useState<string | null>(null);
+  const [journeyStatus, setJourneyStatus] = useState<string | null>(null);
 
-  const referralCode = useMemo(() => {
+  const fallbackReferral = useMemo(() => {
     if (!orderId) {
       return "SMPLAT-REFERRAL";
     }
@@ -50,55 +56,106 @@ export default function CheckoutSuccessPage() {
     return `SMPLAT-${sanitized.slice(0, 6).toUpperCase()}`;
   }, [orderId]);
 
+  const hydratedReferral = referralCode ?? fallbackReferral;
+
   const completedCount = tasks.filter((task) => task.completed).length;
-  const checklistProgress = Math.round((completedCount / tasks.length) * 100);
+  const checklistProgress = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+
+  const fetchJourney = useCallback(async () => {
+    if (!orderId) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/onboarding/journeys/${orderId}`);
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as OnboardingJourneyResponse;
+      setJourneyStatus(payload.status);
+      setReferralCode(payload.referral_code);
+      setTasks(payload.tasks.map(mapTask));
+    } catch (error) {
+      console.warn("Failed to fetch onboarding journey", error);
+    }
+  }, [orderId]);
 
   const recordOnboardingEvent = useCallback(
     async (eventType: string, payload: Record<string, unknown> = {}) => {
-      try {
-        await fetch("/api/analytics/onboarding-events", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ eventType, orderId, ...payload }),
-        });
-      } catch (error) {
-        console.warn("Failed to record onboarding event", error);
+      if (!orderId) {
+        return null;
       }
+      const response = await fetch(ANALYTICS_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventType, orderId, ...payload })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to persist onboarding event: ${response.statusText}`);
+      }
+
+      return (await response.json()) as Record<string, unknown>;
     },
     [orderId]
   );
 
-  const toggleTask = (taskId: string) => {
-    setTasks((previous) => {
-      const updated = previous.map((task) =>
-        task.id === taskId ? { ...task, completed: !task.completed } : task
-      );
-      const updatedTask = updated.find((task) => task.id === taskId);
-      void recordOnboardingEvent("checklist_update", {
-        taskId,
-        completed: updatedTask?.completed ?? false,
-      });
-      return updated;
-    });
-  };
+  const toggleTask = useCallback(
+    async (taskId: string) => {
+      const current = tasks.find((task) => task.id === taskId);
+      if (!current) {
+        return;
+      }
+      const desiredState = !current.completed;
+      try {
+        const response = await recordOnboardingEvent("checklist_update", {
+          taskId,
+          completed: desiredState
+        });
+        if (response?.task && typeof response.task === "object") {
+          const updated = response.task as RemoteOnboardingTask;
+          setTasks((previous) => previous.map((task) => (task.id === taskId ? mapTask(updated) : task)));
+        } else {
+          await fetchJourney();
+        }
+      } catch (error) {
+        console.warn("Failed to update onboarding task", error);
+      }
+    },
+    [fetchJourney, recordOnboardingEvent, tasks]
+  );
 
-  const handleReferralClick = async () => {
+  const handleReferralClick = useCallback(async () => {
+    const codeToCopy = hydratedReferral;
     try {
-      await navigator.clipboard?.writeText(referralCode);
+      await navigator.clipboard?.writeText(codeToCopy);
       setReferralCopied(true);
     } catch {
       setReferralCopied(true);
     }
-    void recordOnboardingEvent("referral_copied", { referralCode });
-  };
+    try {
+      await recordOnboardingEvent("referral_copied", { referralCode: codeToCopy });
+    } catch (error) {
+      console.warn("Failed to record referral copy", error);
+    }
+  }, [hydratedReferral, recordOnboardingEvent]);
 
   useEffect(() => {
     clear();
   }, [clear]);
 
   useEffect(() => {
-    void recordOnboardingEvent("journey_started");
-  }, [orderId, recordOnboardingEvent]);
+    if (!orderId) {
+      return;
+    }
+    void fetchJourney();
+  }, [fetchJourney, orderId]);
+
+  useEffect(() => {
+    if (!orderId) {
+      return;
+    }
+    void recordOnboardingEvent("journey_started").then(() => fetchJourney()).catch(() => fetchJourney());
+  }, [orderId, recordOnboardingEvent, fetchJourney]);
 
   useEffect(() => {
     if (!referralCopied) {
@@ -121,6 +178,9 @@ export default function CheckoutSuccessPage() {
         {orderId ? (
           <p className="mt-2 text-sm text-white/50">Order reference: {orderId}</p>
         ) : null}
+        {journeyStatus ? (
+          <p className="mt-2 text-xs uppercase tracking-[0.3em] text-white/40">Journey status: {journeyStatus}</p>
+        ) : null}
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">
@@ -137,7 +197,7 @@ export default function CheckoutSuccessPage() {
               <li key={task.id}>
                 <button
                   type="button"
-                  onClick={() => toggleTask(task.id)}
+                  onClick={() => void toggleTask(task.id)}
                   className="flex w-full items-start gap-3 rounded-2xl border border-white/10 bg-black/30 p-4 text-left transition hover:border-white/30"
                 >
                   <CheckCircle2
@@ -150,6 +210,13 @@ export default function CheckoutSuccessPage() {
                 </button>
               </li>
             ))}
+            {tasks.length === 0 ? (
+              <li>
+                <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-white/50">
+                  Onboarding tasks will appear here once your operator pod provisions them.
+                </div>
+              </li>
+            ) : null}
           </ul>
         </article>
 
@@ -177,10 +244,10 @@ export default function CheckoutSuccessPage() {
             <p className="text-sm text-white/60">Invite a peer. When they onboard, both teams receive a sprint credit.</p>
           </div>
           <div className="flex items-center gap-3 rounded-full border border-white/20 bg-black/30 px-4 py-2">
-            <code className="text-sm font-mono text-white">{referralCode}</code>
+            <code className="text-sm font-mono text-white">{hydratedReferral}</code>
             <button
               type="button"
-              onClick={handleReferralClick}
+              onClick={() => void handleReferralClick()}
               className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-semibold text-black transition hover:bg-white/90"
             >
               <Gift className="h-4 w-4" /> Copy

@@ -6,7 +6,8 @@ Each document provides repeatable, end-to-end procedures for responding to event
 
 ## Analytics Event Logging
 
-- Checkout offer acceptance and onboarding journey events are captured via Next.js API routes:
-  - `POST /api/analytics/offer-events` persists impressions/CTA clicks to the `checkout_offer_events` table.
-  - `POST /api/analytics/onboarding-events` records progress and referral signals to `onboarding_journey_events`.
-- Tables are created automatically on first write; operators can query them with `psql` or Prisma for bundle uptake and onboarding completion reporting.
+- Checkout offer acceptance and onboarding journey events are captured via typed API layers:
+  - `POST /api/analytics/offer-events` persists impressions/CTA clicks to the `checkout_offer_events` table managed by Prisma migrations (`apps/web/prisma/migrations/202510300001_add_offer_and_onboarding_events`).
+  - `POST /api/analytics/onboarding-events` now proxies to the FastAPI onboarding service which validates requests, toggles durable task state, and emits deltas into `onboarding_journey_events`.
+- Operator dashboards or ad-hoc analysts can query `checkout_offer_events` and `onboarding_journey_events` via Prisma or the warehouse mirror; both tables and their indexes are provisioned via migrations (no more lazy CREATE TABLE statements).
+- To view real-time client checklists, call `GET /api/onboarding/journeys/:orderId` from the Next.js app or query the FastAPI endpoint `/api/v1/orders/{orderId}/onboarding` directly with the checkout API key.
