@@ -5,6 +5,7 @@ This module centralizes order-adjacent service logic that is not tied to payment
 Key entry points:
 
 - `onboarding.py` – orchestrates journey creation, task toggles, and analytics deltas.
+- `acceptance.py` – records bundle acceptance events + aggregation helpers.
 - `/api/v1/orders/{order_id}/onboarding` – FastAPI router exposing journey fetch/update/referral endpoints.
 
 > meta: docs: orders-onboarding-service

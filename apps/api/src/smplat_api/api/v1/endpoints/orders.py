@@ -16,6 +16,7 @@ from smplat_api.models.order import Order, OrderItem, OrderStatusEnum, OrderSour
 from smplat_api.models.product import Product
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.services.fulfillment import FulfillmentService
+from smplat_api.services.orders.acceptance import BundleAcceptanceService
 
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -145,6 +146,8 @@ async def create_order(
         db.add(order)
         await db.flush()  # Get order ID for items
         
+        tracked_product_slugs: list[str] = []
+
         # Create order items
         for item_data in order_data.items:
             # Verify product exists
@@ -157,7 +160,10 @@ async def create_order(
                     status_code=404,
                     detail=f"Product not found: {item_data.product_id}"
                 )
-            
+
+            if product.slug:
+                tracked_product_slugs.append(product.slug)
+
             order_item = OrderItem(
                 order_id=order.id,
                 product_id=item_data.product_id,
@@ -168,9 +174,13 @@ async def create_order(
                 selected_options=item_data.selected_options,
                 attributes=item_data.attributes
             )
-            
+
             db.add(order_item)
-        
+
+        if tracked_product_slugs:
+            acceptance_service = BundleAcceptanceService(db)
+            await acceptance_service.record_order_acceptance(tracked_product_slugs)
+
         await db.commit()
         await db.refresh(order)
         

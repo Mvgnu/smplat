@@ -48,6 +48,7 @@ class BundleRecommendation:
     components: list[str]
     score: float
     heuristics: BundleHeuristics
+    provenance_notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +66,7 @@ class BundleRecommendation:
                 "cms_priority": self.heuristics.cms_priority,
                 "notes": self.heuristics.notes,
             },
+            "provenance_notes": self.provenance_notes,
         }
 
 
@@ -100,6 +102,29 @@ class RecommendationSnapshot:
         )
 
 
+# meta: cms-integration:payload-overrides
+@dataclass(slots=True)
+class CmsOverride:
+    """Payload-derived override metadata for a bundle."""
+
+    applied: bool = False
+    title: str | None = None
+    description: str | None = None
+    savings_copy: str | None = None
+    priority: int | None = None
+    tags: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def provenance_notes(self) -> list[str]:
+        if not self.applied:
+            return []
+        notes = ["cms_override"]
+        notes.extend(self.tags)
+        campaign = self.metadata.get("campaign")
+        if isinstance(campaign, str) and campaign:
+            notes.append(f"campaign:{campaign}")
+        return notes
+
 # meta: caching-strategy: timed-memory
 _CACHE_TTL = timedelta(minutes=10)
 _CACHE: dict[str, RecommendationSnapshot] = {}
@@ -118,6 +143,29 @@ class CatalogRecommendationService:
 
         async with _CACHE_LOCK:
             _CACHE.clear()
+
+    @property
+    def session(self) -> AsyncSession:
+        """Expose the backing database session."""
+
+        return self._session
+
+    async def invalidate_cache(self, product_slug: str) -> None:
+        """Purge cache entries for a given product slug."""
+
+        async with _CACHE_LOCK:
+            _CACHE.pop(product_slug, None)
+
+        record = await self._session.get(CatalogRecommendationCache, product_slug)
+        if record is None:
+            return
+
+        await self._session.delete(record)
+        try:
+            await self._session.commit()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            await self._session.rollback()
+            logger.exception("Failed to invalidate recommendation cache", slug=product_slug, error=exc)
 
     async def resolve(
         self,
@@ -173,6 +221,12 @@ class CatalogRecommendationService:
             heuristics_raw = item.get("heuristics") if isinstance(item.get("heuristics"), dict) else {}
             component_values = item.get("components", [])
             components = [str(value) for value in component_values] if isinstance(component_values, list) else []
+            provenance_notes_raw = item.get("provenance_notes")
+            provenance_notes = (
+                [str(note) for note in provenance_notes_raw]
+                if isinstance(provenance_notes_raw, list)
+                else []
+            )
             bundles.append(
                 BundleRecommendation(
                     slug=str(item.get("slug", "")),
@@ -195,6 +249,7 @@ class CatalogRecommendationService:
                         if isinstance(heuristics_raw.get("notes"), list)
                         else [],
                     ),
+                    provenance_notes=provenance_notes,
                 )
             )
 
@@ -263,6 +318,8 @@ class CatalogRecommendationService:
         bundle_metrics = await self._fetch_acceptance_metrics(bundles)
         queue_depths = await self._fetch_queue_depths(bundles)
 
+        overrides_metadata: dict[str, Any] = {}
+
         recommendations: list[BundleRecommendation] = []
 
         for bundle in bundles:
@@ -274,8 +331,15 @@ class CatalogRecommendationService:
             components = bundle.component_slugs()
             queue_depth = sum(queue_depths.get(slug, 0) for slug in components)
 
+            override = self._resolve_cms_override(bundle)
+
+            title = override.title or bundle.title
+            description = override.description or bundle.description
+            savings_copy = override.savings_copy or bundle.savings_copy
+            cms_priority = override.priority if override.priority is not None else bundle.cms_priority or 0
+
             score = self._score_bundle(
-                cms_priority=bundle.cms_priority or 0,
+                cms_priority=cms_priority,
                 acceptance_rate=acceptance_rate or 0.0,
                 queue_depth=queue_depth,
             )
@@ -293,24 +357,30 @@ class CatalogRecommendationService:
             elif queue_depth == 0:
                 notes.append("queue_clear")
 
+            provenance_notes = override.provenance_notes()
+            if override.applied:
+                notes.append("cms_override")
+                overrides_metadata[bundle.bundle_slug] = override.metadata or {}
+
             heuristics = BundleHeuristics(
                 acceptance_rate=acceptance_rate,
                 acceptance_count=acceptance_count,
                 queue_depth=queue_depth,
                 lookback_days=lookback_days,
-                cms_priority=bundle.cms_priority or 0,
+                cms_priority=cms_priority,
                 notes=notes,
             )
 
             recommendations.append(
                 BundleRecommendation(
                     slug=bundle.bundle_slug,
-                    title=bundle.title,
-                    description=bundle.description,
-                    savings_copy=bundle.savings_copy,
+                    title=title,
+                    description=description,
+                    savings_copy=savings_copy,
                     components=components,
                     score=score,
                     heuristics=heuristics,
+                    provenance_notes=provenance_notes,
                 )
             )
 
@@ -329,6 +399,8 @@ class CatalogRecommendationService:
             "ttl_minutes": ttl_minutes,
             "source": "catalog_bundle_engine",
         }
+        if overrides_metadata:
+            metadata["cms_overrides"] = overrides_metadata
 
         return RecommendationSnapshot(
             primary_slug=product_slug,
@@ -398,6 +470,39 @@ class CatalogRecommendationService:
 
         result = await self._session.execute(stmt)
         return {slug: int(count) for slug, count in result.all()}
+
+    def _resolve_cms_override(self, bundle: CatalogBundle) -> CmsOverride:
+        raw_metadata = bundle.metadata_json if isinstance(bundle.metadata_json, dict) else {}
+        override_raw = raw_metadata.get("cms_override")
+        if not isinstance(override_raw, dict):
+            return CmsOverride()
+
+        override = CmsOverride(applied=True)
+        if isinstance(override_raw.get("title"), str):
+            override.title = override_raw["title"].strip() or None
+        if isinstance(override_raw.get("description"), str):
+            override.description = override_raw["description"].strip() or None
+        if isinstance(override_raw.get("savings_copy"), str):
+            override.savings_copy = override_raw["savings_copy"].strip() or None
+
+        priority_raw = override_raw.get("priority")
+        if isinstance(priority_raw, int):
+            override.priority = priority_raw
+        elif isinstance(priority_raw, str) and priority_raw.isdigit():
+            override.priority = int(priority_raw)
+
+        tags_raw = override_raw.get("tags")
+        if isinstance(tags_raw, list):
+            override.tags = [str(tag) for tag in tags_raw if isinstance(tag, (str, int, float))]
+
+        metadata: dict[str, Any] = {}
+        for key in ("campaign", "owner", "notes"):
+            value = override_raw.get(key)
+            if isinstance(value, (str, int, float)):
+                metadata[key] = value
+        override.metadata = metadata
+
+        return override
 
     def _score_bundle(self, cms_priority: int, acceptance_rate: float, queue_depth: int) -> float:
         """Compute a deterministic score balancing CMS intent and operational readiness."""
