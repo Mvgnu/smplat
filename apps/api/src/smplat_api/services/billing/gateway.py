@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import MutableSequence
 from uuid import UUID, uuid4
@@ -16,7 +16,12 @@ from smplat_api.models.hosted_checkout_session import (
     HostedCheckoutSessionStatusEnum,
 )
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
-from smplat_api.services.billing.providers import StripeBillingProvider, StripeHostedSession
+from smplat_api.services.billing.providers import (
+    StripeBillingProvider,
+    StripeCaptureResponse,
+    StripeHostedSession,
+    StripeRefundResponse,
+)
 from smplat_api.services.secrets.stripe import (
     StripeWorkspaceSecretsResolver,
     build_default_stripe_secrets_resolver,
@@ -74,6 +79,11 @@ class BillingGatewayClient:
 
         secrets = await self._secrets_resolver.get(self._workspace_id)
         if secrets is None:
+            secrets = await self._secrets_resolver.get(None)
+        if secrets is None:
+            if settings.environment == "development":
+                self._provider = _StubStripeBillingProvider()
+                return self._provider
             raise RuntimeError("Stripe credentials are not configured for this workspace")
 
         self._provider = StripeBillingProvider.from_credentials(
@@ -87,6 +97,9 @@ class BillingGatewayClient:
         *,
         success_url: str,
         cancel_url: str,
+        regenerate_from: HostedCheckoutSession | None = None,
+        retry_backoff: timedelta = timedelta(hours=12),
+        recovery_note: str | None = None,
     ) -> StripeHostedSession:
         """Generate a hosted checkout session for redirect flows."""
 
@@ -95,20 +108,84 @@ class BillingGatewayClient:
         if amount <= 0:
             raise ValueError("Invoice amount must be positive for hosted checkout")
         provider = await self._resolve_provider()
+        now = datetime.now(timezone.utc)
+
+        if regenerate_from is not None:
+            # meta: hosted-session: regeneration-swap
+            regenerate_from.status = HostedCheckoutSessionStatusEnum.ABANDONED
+            regenerate_from.cancelled_at = now
+            regenerate_from.last_error = (
+                regenerate_from.last_error or "replaced_by_regeneration"
+            )
+            previous_metadata = dict(regenerate_from.metadata_json or {})
+            previous_metadata["last_webhook_event"] = "operator.regenerated"
+            previous_metadata["regenerated_at"] = now.isoformat()
+            regenerate_from.metadata_json = previous_metadata
+
+        retry_count = 0
+        last_retry_at: datetime | None = None
+        next_retry_at: datetime | None = None
+        if regenerate_from is not None:
+            retry_count = (regenerate_from.retry_count or 0) + 1
+            last_retry_at = now
+            next_retry_at = (
+                now + retry_backoff if retry_backoff.total_seconds() > 0 else None
+            )
+
+        session_note = recovery_note
+        if regenerate_from is not None and recovery_note:
+            session_note = f"{recovery_note} (regenerated from {regenerate_from.session_id})"
+        elif regenerate_from is not None and recovery_note is None:
+            session_note = f"regenerated from {regenerate_from.session_id}"
+
         pending_session = HostedCheckoutSession(
             session_id=f"pending-{uuid4()}",
             workspace_id=self._workspace_id,
             invoice_id=invoice.id,
             status=HostedCheckoutSessionStatusEnum.INITIATED,
+            retry_count=retry_count,
+            last_retry_at=last_retry_at,
+            next_retry_at=next_retry_at,
             metadata_json={
                 "invoice_id": str(invoice.id),
                 "workspace_id": str(invoice.workspace_id),
                 "success_url": success_url,
                 "cancel_url": cancel_url,
+                "hosted_session_id": None,
+                "provider": "stripe",
+                **(
+                    {
+                        "regenerated_from_id": str(regenerate_from.id),
+                        "retry_count": retry_count,
+                        "retry_backoff_seconds": int(
+                            retry_backoff.total_seconds()
+                        ),
+                        "last_retry_at": last_retry_at.isoformat()
+                        if last_retry_at
+                        else None,
+                        "next_retry_at": next_retry_at.isoformat()
+                        if next_retry_at
+                        else None,
+                    }
+                    if regenerate_from is not None
+                    else {}
+                ),
             },
+            recovery_notes=session_note,
         )
+        if session_note:
+            pending_session.metadata_json["recovery_note"] = session_note
         self._db.add(pending_session)
         await self._db.flush()
+
+        provider_metadata = {
+            "invoice_id": str(invoice.id),
+            "workspace_id": str(invoice.workspace_id),
+            "hosted_session_id": str(pending_session.id),
+        }
+        if regenerate_from is not None:
+            provider_metadata["regenerated_from_id"] = str(regenerate_from.id)
+
         session = await provider.create_checkout_session(
             invoice_number=invoice.invoice_number,
             amount=amount,
@@ -116,7 +193,7 @@ class BillingGatewayClient:
             customer_id=invoice.processor_customer_id,
             success_url=success_url,
             cancel_url=cancel_url,
-            metadata={"invoice_id": str(invoice.id), "workspace_id": str(invoice.workspace_id)},
+            metadata=provider_metadata,
         )
         pending_session.session_id = session.session_id
         pending_session.expires_at = session.expires_at
@@ -127,7 +204,19 @@ class BillingGatewayClient:
             "workspace_id": str(invoice.workspace_id),
             "success_url": success_url,
             "cancel_url": cancel_url,
+            "hosted_session_id": str(pending_session.id),
+            "regenerated_from_id": (
+                str(regenerate_from.id) if regenerate_from is not None else None
+            ),
+            "retry_count": retry_count,
+            "last_retry_at": last_retry_at.isoformat() if last_retry_at else None,
+            "next_retry_at": next_retry_at.isoformat() if next_retry_at else None,
         }
+        if regenerate_from is not None:
+            regenerated_meta = dict(regenerate_from.metadata_json or {})
+            regenerated_meta["regenerated_to_id"] = str(pending_session.id)
+            regenerate_from.metadata_json = regenerated_meta
+
         invoice.hosted_session_id = pending_session.id
         await self._db.flush()
         return session
@@ -198,13 +287,17 @@ class BillingGatewayClient:
         refund_amount = Decimal(amount if amount is not None else invoice.total or Decimal("0"))
         if refund_amount <= 0:
             raise ValueError("Refund amount must be positive")
-        if not invoice.processor_charge_id:
+        charge_identifier = invoice.processor_charge_id or invoice.external_processor_id
+        if not charge_identifier:
             raise RuntimeError("Invoice does not have a captured charge to refund")
+
+        if invoice.processor_charge_id is None:
+            invoice.processor_charge_id = charge_identifier
 
         idempotency_key = f"invoice-{invoice.id}-refund"
         provider = await self._resolve_provider()
         provider_result = await provider.refund_payment(
-            charge_id=invoice.processor_charge_id,
+            charge_id=charge_identifier,
             amount=refund_amount,
             metadata={"invoice_id": str(invoice.id), "workspace_id": str(invoice.workspace_id)},
             idempotency_key=idempotency_key,
@@ -247,5 +340,47 @@ class BillingGatewayClient:
             processor_id=provider_result.charge_id,
             refund_id=provider_result.refund_id,
             amount=provider_result.amount,
+            refunded_at=now,
+        )
+class _StubStripeBillingProvider:
+    """Fallback provider used in development when Stripe credentials are absent."""
+
+    # meta: billing-provider: stub
+
+    def __init__(self) -> None:
+        self.webhook_secret = "stub"
+
+    async def create_checkout_session(self, **_: object) -> StripeHostedSession:  # type: ignore[override]
+        now = datetime.now(timezone.utc) + timedelta(hours=1)
+        return StripeHostedSession(
+            session_id=f"stub-session-{uuid4()}",
+            url="https://checkout.example/stub",
+            expires_at=now,
+        )
+
+    async def capture_payment(self, **kwargs: object):  # type: ignore[override]
+        amount = Decimal(kwargs.get("amount", Decimal("0")))
+        currency = str(kwargs.get("currency", "usd"))
+        customer_id = kwargs.get("customer_id")
+        now = datetime.now(timezone.utc)
+        return StripeCaptureResponse(  # type: ignore[name-defined]
+            intent_id="stub_intent",
+            charge_id="stub_charge",
+            amount=amount,
+            currency=currency,
+            customer_id=str(customer_id) if customer_id else None,
+            captured_at=now,
+        )
+
+    async def refund_payment(self, **kwargs: object):  # type: ignore[override]
+        amount = Decimal(kwargs.get("amount", Decimal("0")))
+        currency = str(kwargs.get("currency", "usd"))
+        now = datetime.now(timezone.utc)
+        return StripeRefundResponse(  # type: ignore[name-defined]
+            refund_id="stub_refund",
+            charge_id="stub_charge",
+            amount=amount,
+            currency=currency,
+            failure_reason=None,
             refunded_at=now,
         )
