@@ -29,6 +29,13 @@ If the storefront reports a `stale` badge, verify whether the freshness window s
    - `order_items` + `orders` for first response calculations
    - `fulfillment_tasks.result` JSON for embedded `nps_score` payloads
 
+### Metadata column collision postmortem (2024-05)
+
+- **Incident:** backend test suite failed because SQLAlchemy models in `onboarding.py` defined attributes named `metadata`, shadowing the declarative base attribute. Instantiating these models raised `AttributeError: 'DeclarativeMeta' object has no attribute 'metadata'`.
+- **Fix:** renamed ORM attributes to `metadata_json` while retaining the underlying `metadata` column via `Column("metadata", JSON, ...)`. Updated all services and API serializers to use the new attribute name.
+- **Regression coverage:** added `apps/api/tests/test_fulfillment_metrics_service.py` to exercise the FastAPI trust metrics contract, including cache safety via an autouse fixture.
+- **Prevention:** when adding JSON blobs to declarative models, suffix attribute names with `_json` (or similar) to avoid clashing with SQLAlchemy internals, and extend regression coverage before exposing new metrics.
+
 ## Adding a new metric
 
 1. **Catalog entry** – update `FulfillmentMetricsService._definitions` with the new metric ID, source, default freshness window, and computation function.

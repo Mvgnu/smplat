@@ -134,7 +134,7 @@ class OnboardingTask(Base):
     due_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     assignee = Column(String, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -165,7 +165,7 @@ class OnboardingArtifact(Base):
     url = Column(Text, nullable=True)
     required = Column(Boolean, nullable=False, server_default="false")
     received_at = Column(DateTime(timezone=True), nullable=True)
-    metadata = Column(JSON, nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -200,7 +200,7 @@ class OnboardingInteraction(Base):
     )
     summary = Column(String, nullable=True)
     details = Column(Text, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
@@ -227,7 +227,7 @@ class OnboardingEvent(Base):
     )
     status_before = Column(String, nullable=True)
     status_after = Column(String, nullable=True)
-    metadata = Column(JSON, nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=True)
     occurred_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships

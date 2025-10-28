@@ -1,0 +1,214 @@
+"""Regression coverage for fulfillment trust metrics service."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+import pytest
+
+from smplat_api.models.customer_profile import CurrencyEnum
+from smplat_api.models.fulfillment import (
+    FulfillmentTask,
+    FulfillmentTaskStatusEnum,
+    FulfillmentTaskTypeEnum,
+)
+from smplat_api.models.order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum
+from smplat_api.models.product import Product, ProductStatusEnum
+from smplat_api.services.fulfillment.metrics import (
+    FulfillmentMetricsService,
+    MetricRequest,
+    _CACHE,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_metric_cache():
+    """Ensure each test executes without inheriting cached metric snapshots."""
+
+    _CACHE.clear()
+    yield
+    _CACHE.clear()
+
+
+async def _seed_order_with_item(session) -> tuple[Order, OrderItem]:
+    product = Product(
+        slug="trust-suite",
+        title="Trust Suite",
+        description="Observability add-on",
+        category="fulfillment",
+        base_price=Decimal("250.00"),
+        currency=CurrencyEnum.EUR,
+        status=ProductStatusEnum.ACTIVE,
+    )
+
+    session.add(product)
+    await session.flush()
+
+    order = Order(
+        order_number="SMTST001",
+        subtotal=Decimal("250.00"),
+        tax=Decimal("0"),
+        total=Decimal("250.00"),
+        currency=CurrencyEnum.EUR,
+        status=OrderStatusEnum.PROCESSING,
+        source=OrderSourceEnum.CHECKOUT,
+        created_at=datetime.now(timezone.utc) - timedelta(hours=4),
+    )
+
+    item = OrderItem(
+        product_id=product.id,
+        product_title=product.title,
+        quantity=1,
+        unit_price=product.base_price,
+        total_price=product.base_price,
+    )
+
+    order.items.append(item)
+
+    session.add(order)
+    await session.flush()
+
+    return order, item
+
+
+@pytest.mark.asyncio
+async def test_on_time_percentage_counts_completed_within_schedule(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        # On-time task
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ANALYTICS_COLLECTION,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Baseline analytics",
+                scheduled_at=now + timedelta(minutes=15),
+                completed_at=now,
+            )
+        )
+
+        # Late task
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.ENGAGEMENT_BOOST,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Engagement boost",
+                scheduled_at=now - timedelta(minutes=15),
+                completed_at=now,
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics(
+            [MetricRequest(metric_id="fulfillment_sla_on_time_pct")]
+        )
+
+        assert resolved.metric_id == "fulfillment_sla_on_time_pct"
+        assert resolved.value == pytest.approx(0.5)
+        assert resolved.sample_size == 2
+        assert resolved.metadata["source"] == "fulfillment"
+        assert resolved.metadata["on_time_tasks"] == 1
+
+
+@pytest.mark.asyncio
+async def test_first_response_minutes_returns_average_delta(session_factory):
+    async with session_factory() as session:
+        order, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.INSTAGRAM_SETUP,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Setup",
+                started_at=order.created_at + timedelta(minutes=30),
+                completed_at=now,
+            )
+        )
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.FOLLOWER_GROWTH,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Follower growth",
+                started_at=order.created_at + timedelta(minutes=60),
+                completed_at=now,
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics(
+            [MetricRequest(metric_id="first_response_minutes")]
+        )
+
+        assert resolved.metric_id == "first_response_minutes"
+        assert resolved.sample_size == 2
+        assert resolved.value == pytest.approx(45.0)
+        assert resolved.formatted_value == "45m"
+
+
+@pytest.mark.asyncio
+async def test_nps_trailing_30d_ignores_non_numeric_scores(session_factory):
+    async with session_factory() as session:
+        _, item = await _seed_order_with_item(session)
+        now = datetime.now(timezone.utc)
+
+        valid_result = {"nps_score": 10}
+        invalid_result = {"nps_score": "not-a-number"}
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.CAMPAIGN_OPTIMIZATION,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Campaign analysis",
+                completed_at=now - timedelta(days=1),
+                result=valid_result,
+            )
+        )
+
+        session.add(
+            FulfillmentTask(
+                order_item_id=item.id,
+                task_type=FulfillmentTaskTypeEnum.CAMPAIGN_OPTIMIZATION,
+                status=FulfillmentTaskStatusEnum.COMPLETED,
+                title="Old survey",
+                completed_at=now - timedelta(days=10),
+                result=invalid_result,
+            )
+        )
+
+        await session.commit()
+
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics([MetricRequest(metric_id="nps_trailing_30d")])
+
+        assert resolved.metric_id == "nps_trailing_30d"
+        assert resolved.sample_size == 1
+        assert resolved.value == pytest.approx(10.0)
+        assert resolved.formatted_value == "10.0"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_metric_returns_guardrail_response(session_factory):
+    async with session_factory() as session:
+        service = FulfillmentMetricsService(session)
+        [resolved] = await service.resolve_metrics(
+            [MetricRequest(metric_id="unknown_metric", freshness_window_minutes=60)]
+        )
+
+        assert resolved.metric_id == "unknown_metric"
+        assert resolved.verification_state == "unsupported"
+        assert resolved.metadata == {"source": "unknown"}
+        assert resolved.sample_size == 0
+        assert resolved.computed_at is None

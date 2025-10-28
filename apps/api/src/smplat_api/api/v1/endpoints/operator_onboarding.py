@@ -282,7 +282,7 @@ async def fetch_operator_journey_detail(
             summary=interaction.summary,
             details=interaction.details,
             createdAt=interaction.created_at,
-            metadata=interaction.metadata,
+            metadata=interaction.metadata_json,
         )
         for interaction in sorted(
             journey.interactions,

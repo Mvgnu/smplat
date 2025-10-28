@@ -573,8 +573,8 @@ class OnboardingService:
                             key=lambda candidate: candidate.created_at or datetime.min.replace(tzinfo=timezone.utc),
                             reverse=True,
                         )
-                        if interaction.metadata
-                        and interaction.metadata.get("nudge", {}).get("key") == dedupe_key
+                        if interaction.metadata_json
+                        and interaction.metadata_json.get("nudge", {}).get("key") == dedupe_key
                     ),
                     None,
                 )
@@ -582,7 +582,7 @@ class OnboardingService:
                     continue
 
                 idle_hours = int((now - last_touch).total_seconds() // 3600)
-                preferred_channel = (task.metadata or {}).get("preferred_channel") if task.metadata else None
+                preferred_channel = (task.metadata_json or {}).get("preferred_channel") if task.metadata_json else None
                 if preferred_channel and preferred_channel.lower() == "slack":
                     recommended_channel = OnboardingInteractionChannel.SLACK
                 else:
