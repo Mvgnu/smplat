@@ -110,3 +110,36 @@ export interface ReferralConversionPage {
   convertedPoints: number;
   lastActivity?: string | null;
 }
+
+export type LoyaltyCheckoutIntentKind = "redemption" | "referral_share";
+
+export interface LoyaltyCheckoutIntent {
+  id: string;
+  kind: LoyaltyCheckoutIntentKind;
+  createdAt: string;
+  rewardSlug?: string | null;
+  rewardName?: string | null;
+  pointsCost?: number | null;
+  quantity?: number | null;
+  referralCode?: string | null;
+  channel?: string | null;
+  expiresAt?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface LoyaltyIntentConfirmationPayload {
+  orderId: string;
+  intents: LoyaltyCheckoutIntent[];
+  action: "confirm" | "cancel";
+}
+
+export interface LoyaltyNextActionCard {
+  id: string;
+  kind: LoyaltyCheckoutIntentKind;
+  headline: string;
+  description: string;
+  ctaLabel: string;
+  createdAt: string;
+  expiresAt?: string | null;
+  metadata?: Record<string, unknown>;
+}
