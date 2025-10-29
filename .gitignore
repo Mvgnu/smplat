@@ -8,6 +8,7 @@ dist/
 build/
 .output/
 .output-md/
+apps/web/.next/
 
 # Environment variables
 .env*
