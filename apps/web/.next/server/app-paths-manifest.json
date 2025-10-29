@@ -1,6 +1,0 @@
-{
-  "/not-found": "app/not-found.js",
-  "/(admin)/admin/products/page": "app/(admin)/admin/products/page.js",
-  "/(admin)/billing/reconciliation/page": "app/(admin)/billing/reconciliation/page.js",
-  "/(storefront)/products/page": "app/(storefront)/products/page.js"
-}

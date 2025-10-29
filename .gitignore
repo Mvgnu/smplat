@@ -48,3 +48,6 @@ coverage/
 
 # Turborepo
 .node/
+
+# next
+.next/
