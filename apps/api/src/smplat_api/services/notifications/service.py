@@ -13,7 +13,12 @@ from sqlalchemy.orm import selectinload
 
 from smplat_api.core.settings import get_settings
 from smplat_api.models.fulfillment import FulfillmentTask, FulfillmentTaskStatusEnum
-from smplat_api.models.loyalty import LoyaltyMember, LoyaltyTier
+from smplat_api.models.loyalty import (
+    LoyaltyMember,
+    LoyaltyNudge,
+    LoyaltyNudgeStatus,
+    LoyaltyTier,
+)
 from smplat_api.models.order import Order, OrderItem, OrderStatusEnum
 from smplat_api.models.payment import Payment
 from smplat_api.models.user import User
@@ -473,6 +478,70 @@ class NotificationService:
             contact,
             template,
             event_type="loyalty_tier_upgrade",
+            metadata=metadata,
+        )
+
+    async def send_loyalty_nudge(
+        self,
+        member: LoyaltyMember,
+        nudge: LoyaltyNudge,
+    ) -> None:
+        """Send a proactive loyalty nudge notification honoring preferences."""
+
+        if self._backend is None:
+            return
+
+        if nudge.status != LoyaltyNudgeStatus.ACTIVE:
+            return
+
+        contact = await self._resolve_user_contact(member.user_id)
+        if contact is None:
+            return
+
+        preferences = await self._get_preferences(member.user_id)
+        if not preferences.marketing_messages:
+            logger.info(
+                "Skipping loyalty nudge due to marketing preferences",
+                user_id=str(member.user_id),
+                nudge_id=str(nudge.id),
+            )
+            return
+
+        payload = dict(nudge.payload_json or {})
+        headline = str(payload.get("headline") or "Loyalty reminder")
+        body = str(payload.get("body") or "There is new activity waiting for you.")
+        cta_label = payload.get("ctaLabel")
+        cta_href = payload.get("ctaHref")
+        metadata = {"nudge_id": str(nudge.id), "nudge_type": nudge.nudge_type.value}
+        metadata.update(payload.get("metadata") or {})
+
+        body_lines = [f"Hi {contact.display_name or 'there'},", "", body]
+        html_cta = ""
+        if cta_label and cta_href:
+            body_lines.extend(["", f"{cta_label}: {cta_href}"])
+            html_cta = f"<p><a href=\"{cta_href}\">{cta_label}</a></p>"
+
+        body_lines.extend(["", "Thanks,", "The SMPLAT Team"])
+        text_body = "\n".join(body_lines)
+        html_body = f"""<html>
+  <body>
+    <p>Hi {contact.display_name or 'there'},</p>
+    <p>{body}</p>
+    {html_cta}
+    <p>Thanks,<br />The SMPLAT Team</p>
+  </body>
+</html>"""
+
+        template = RenderedTemplate(
+            subject=headline,
+            text_body=text_body,
+            html_body=html_body,
+        )
+
+        await self._deliver(
+            contact,
+            template,
+            event_type="loyalty_nudge",
             metadata=metadata,
         )
 

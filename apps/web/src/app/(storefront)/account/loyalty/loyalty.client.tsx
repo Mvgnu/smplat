@@ -13,10 +13,12 @@ import type {
   LoyaltyReward,
   LoyaltyNextActionCard,
   LoyaltyNextActionFeed,
+  LoyaltyNudgeCard,
+  LoyaltyNudgeFeed,
   ReferralConversionPage
 } from "@smplat/types";
 
-import { requestRedemption } from "./loyalty.actions";
+import { requestRedemption, updateNudgeStatus } from "./loyalty.actions";
 import {
   clearResolvedIntents,
   consumeLoyaltyNextActions,
@@ -62,6 +64,12 @@ const REDEMPTION_STATUS_CLASS: Record<string, string> = {
   cancelled: "bg-slate-400/20 text-slate-200"
 };
 
+const NUDGE_TYPE_COPY: Record<string, { label: string; badge: string }> = {
+  expiring_points: { label: "Expiring points", badge: "bg-rose-500/20 text-rose-200" },
+  checkout_reminder: { label: "Checkout reminder", badge: "bg-sky-500/20 text-sky-200" },
+  redemption_follow_up: { label: "Redemption follow-up", badge: "bg-purple-500/20 text-purple-200" }
+};
+
 // surface: loyalty-history
 function buildTimeline(
   ledger: LoyaltyLedgerPage,
@@ -103,6 +111,7 @@ type LoyaltyHubClientProps = {
   referrals: ReferralConversionPage;
   rewards: LoyaltyReward[];
   nextActions: LoyaltyNextActionFeed;
+  nudges: LoyaltyNudgeFeed;
 };
 
 type RedemptionFormState = {
@@ -127,7 +136,8 @@ export function LoyaltyHubClient({
   redemptions,
   referrals,
   rewards,
-  nextActions: nextActionFeed
+  nextActions: nextActionFeed,
+  nudges: nudgeFeed
 }: LoyaltyHubClientProps) {
   const [isRedeeming, startRedeem] = useTransition();
   const [state, setState] = useState<RedemptionFormState>(() => initialState(member));
@@ -135,6 +145,7 @@ export function LoyaltyHubClient({
   const [nextActions, setNextActions] = useState<LoyaltyNextActionCard[]>(
     nextActionFeed.cards
   );
+  const [nudges, setNudges] = useState<LoyaltyNudgeCard[]>(() => nudgeFeed.nudges);
 
   const sortedRewards = useMemo(
     () => rewards.filter((reward) => reward.isActive).sort((a, b) => a.costPoints - b.costPoints),
@@ -151,6 +162,7 @@ export function LoyaltyHubClient({
     [ledger, redemptions, state.optimisticRedemptions]
   );
 
+  const hasNudges = nudges.length > 0;
   const hasNextActions = nextActions.length > 0;
 
   const referralConverted = referrals.statusCounts.converted ?? referrals.statusCounts.CONVERTED ?? 0;
@@ -208,6 +220,21 @@ export function LoyaltyHubClient({
       }
     })();
   }, []);
+
+  const resolveNudge = useCallback(
+    (card: LoyaltyNudgeCard, status: "acknowledged" | "dismissed") => {
+      setNudges((previous) => previous.filter((entry) => entry.id !== card.id));
+      void (async () => {
+        try {
+          await updateNudgeStatus(card.id, status);
+        } catch (error) {
+          console.warn("Failed to update loyalty nudge", error);
+          setNudges((previous) => [card, ...previous]);
+        }
+      })();
+    },
+    []
+  );
 
   const handleRedeem = (reward: LoyaltyReward) => {
     if (isRedeeming) {
@@ -286,6 +313,70 @@ export function LoyaltyHubClient({
           </div>
         </div>
       </section>
+
+      {hasNudges ? (
+        <section
+          className="rounded-3xl border border-white/10 bg-white/5 p-6"
+          data-testid="loyalty-nudges"
+        >
+          <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-xl font-semibold text-white">Stay on track</h3>
+              <p className="text-sm text-white/60">We spotted loyalty opportunities worth your attention.</p>
+            </div>
+            <span className="text-xs uppercase tracking-[0.2em] text-white/50">{nudges.length} active</span>
+          </header>
+          <div className="mt-5 space-y-3">
+            {nudges.map((nudge) => {
+              const mapping = NUDGE_TYPE_COPY[nudge.nudgeType] ?? {
+                label: "Reminder",
+                badge: "bg-white/10 text-white/70"
+              };
+              const expiryCopy = nudge.expiresAt
+                ? formatDistanceToNow(new Date(nudge.expiresAt), { addSuffix: true })
+                : "Action needed";
+              return (
+                <article key={nudge.id} className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                    <span className={`rounded-full px-3 py-1 text-[0.65rem] font-semibold ${mapping.badge}`}>
+                      {mapping.label}
+                    </span>
+                    <span>{expiryCopy}</span>
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <p className="text-sm font-semibold text-white">{nudge.headline}</p>
+                    <p className="text-xs text-white/60">{nudge.body}</p>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {nudge.ctaHref ? (
+                      <Link
+                        href={nudge.ctaHref}
+                        className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-xs font-semibold text-black transition hover:bg-white/90"
+                      >
+                        {nudge.ctaLabel ?? "View details"}
+                      </Link>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => resolveNudge(nudge, "acknowledged")}
+                      className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/80 transition hover:border-white/60 hover:text-white"
+                    >
+                      Mark done
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resolveNudge(nudge, "dismissed")}
+                      className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/60 transition hover:border-white/60 hover:text-white"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {hasNextActions ? (
         <section
