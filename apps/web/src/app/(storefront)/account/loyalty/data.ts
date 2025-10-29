@@ -1,6 +1,8 @@
 import type {
   LoyaltyLedgerPage,
   LoyaltyMemberSummary,
+  LoyaltyNextActionCard,
+  LoyaltyNextActionFeed,
   LoyaltyRedemptionPage,
   LoyaltyReward,
   ReferralConversionPage
@@ -206,6 +208,44 @@ export function buildBypassLedgerPage(): LoyaltyLedgerPage {
       }
     ],
     nextCursor: null
+  };
+}
+
+export function buildBypassNextActions(): LoyaltyNextActionFeed {
+  const createdAt = new Date().toISOString();
+  const cards: LoyaltyNextActionCard[] = [
+    {
+      id: "bypass-redemption",
+      kind: "redemption",
+      headline: "Strategy workshop redemption",
+      description: "Hold 1,200 points and finish fulfillment in the loyalty hub.",
+      ctaLabel: "Open rewards",
+      createdAt,
+      expiresAt: null,
+      metadata: { clientIntentId: "bypass-redemption", ctaHref: "/account/loyalty#rewards" }
+    }
+  ];
+  return {
+    intents: [
+      {
+        id: "bypass-redemption",
+        clientIntentId: "bypass-redemption",
+        kind: "redemption",
+        status: "pending",
+        createdAt,
+        orderId: "bypass-order",
+        channel: "checkout",
+        rewardSlug: "strategy-session",
+        rewardName: "Strategy Session",
+        pointsCost: 1200,
+        quantity: 1,
+        referralCode: null,
+        expiresAt: null,
+        resolvedAt: null,
+        metadata: { source: "bypass" }
+      }
+    ],
+    cards
   };
 }
 

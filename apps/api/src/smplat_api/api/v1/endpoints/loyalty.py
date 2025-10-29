@@ -18,6 +18,9 @@ from smplat_api.api.dependencies.session import require_member_session
 from smplat_api.core.settings import settings
 from smplat_api.db.session import get_session
 from smplat_api.models.loyalty import (
+    LoyaltyCheckoutIntent,
+    LoyaltyCheckoutIntentKind,
+    LoyaltyCheckoutIntentStatus,
     LoyaltyLedgerEntry,
     LoyaltyLedgerEntryType,
     LoyaltyRedemption,
@@ -224,6 +227,41 @@ class CheckoutIntentSubmissionRequest(BaseModel):
         if not intents:
             raise ValueError("At least one intent is required")
         return values
+
+
+class CheckoutIntentResponse(BaseModel):
+    id: UUID
+    clientIntentId: str
+    kind: str
+    status: str
+    orderId: Optional[str]
+    channel: Optional[str]
+    createdAt: datetime
+    expiresAt: Optional[datetime]
+    resolvedAt: Optional[datetime]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LoyaltyNextActionCardResponse(BaseModel):
+    id: UUID
+    kind: str
+    headline: str
+    description: str
+    ctaLabel: str
+    createdAt: datetime
+    expiresAt: Optional[datetime]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CheckoutNextActionsResponse(BaseModel):
+    intents: List[CheckoutIntentResponse]
+    cards: List[LoyaltyNextActionCardResponse]
+
+
+class CheckoutIntentResolveRequest(BaseModel):
+    status: Literal["resolved", "cancelled"] = Field(
+        "resolved", description="Mark as resolved (dismissed) or cancelled"
+    )
 
 
 @router.get("/tiers", response_model=List[LoyaltyTierResponse])
@@ -580,6 +618,74 @@ async def list_loyalty_rewards(
     ]
 
 
+def _serialize_checkout_intent(intent: LoyaltyCheckoutIntent) -> CheckoutIntentResponse:
+    metadata = dict(intent.metadata_json or {})
+    client_intent_id = metadata.get("checkout_intent_id") or metadata.get("clientIntentId")
+    if not client_intent_id:
+        client_intent_id = intent.external_id
+
+    if intent.redemption_id and "redemptionId" not in metadata:
+        metadata["redemptionId"] = str(intent.redemption_id)
+    if intent.referral_code and "referralCode" not in metadata:
+        metadata["referralCode"] = intent.referral_code
+
+    metadata["clientIntentId"] = str(client_intent_id)
+
+    return CheckoutIntentResponse(
+        id=intent.id,
+        clientIntentId=str(client_intent_id),
+        kind=intent.kind.value,
+        status=intent.status.value,
+        orderId=intent.order_id,
+        channel=intent.channel,
+        createdAt=intent.created_at,
+        expiresAt=intent.expires_at,
+        resolvedAt=intent.resolved_at,
+        metadata=metadata,
+    )
+
+
+def _build_next_action_card(intent: LoyaltyCheckoutIntent) -> LoyaltyNextActionCardResponse:
+    metadata = dict(intent.metadata_json or {})
+    client_intent_id = metadata.get("clientIntentId") or intent.external_id
+    metadata["clientIntentId"] = str(client_intent_id)
+
+    if intent.kind == LoyaltyCheckoutIntentKind.REDEMPTION:
+        reward_name = metadata.get("rewardName") or metadata.get("rewardSlug") or "Loyalty reward"
+        points_cost = metadata.get("pointsCost")
+        points_display = None
+        if isinstance(points_cost, (int, float)):
+            points_display = f"{int(points_cost):,}"
+
+        description = (
+            f"Hold {points_display} points and finish fulfillment in the loyalty hub."
+            if points_display
+            else "Finalize your planned redemption in the loyalty hub."
+        )
+        metadata.setdefault("ctaHref", "/account/loyalty#rewards")
+        headline = reward_name
+        cta_label = "Open rewards"
+    else:
+        referral_code = metadata.get("referralCode") or intent.referral_code or "your referral"
+        description = f"Send a thank-you or check in on {referral_code} from the loyalty hub."
+        metadata.setdefault("ctaHref", "/account/loyalty/referrals")
+        headline = "Referral follow-up"
+        cta_label = "Manage referrals"
+
+    metadata.setdefault("intentStatus", intent.status.value)
+
+    return LoyaltyNextActionCardResponse(
+        id=intent.id,
+        kind=intent.kind.value,
+        headline=headline,
+        description=description,
+        ctaLabel=cta_label,
+        createdAt=intent.created_at,
+        expiresAt=intent.expires_at,
+        metadata=metadata,
+    )
+
+
 def _serialize_referral(referral: ReferralInvite) -> ReferralIssueResponse:
     return ReferralIssueResponse(
         id=referral.id,
@@ -663,20 +769,20 @@ async def create_loyalty_redemption(
 
 @router.post(
     "/checkout/intents",
-    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=CheckoutNextActionsResponse,
     dependencies=[Depends(require_checkout_api_key)],
 )
 async def submit_checkout_loyalty_intents(
     request: CheckoutIntentSubmissionRequest,
     db: AsyncSession = Depends(get_session),
-) -> Response:
+) -> CheckoutNextActionsResponse:
     """Apply loyalty intents captured during checkout completion."""
 
     service = LoyaltyService(db)
     member = await service.ensure_member(request.userId)
 
     intents_payload = [intent.dict() for intent in request.intents]
-    await service.apply_checkout_redemption_intents(
+    await service.apply_checkout_intents(
         member,
         order_id=request.orderId,
         intents=intents_payload,
@@ -684,7 +790,59 @@ async def submit_checkout_loyalty_intents(
     )
 
     await db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    pending = await service.list_checkout_next_actions(member)
+    return CheckoutNextActionsResponse(
+        intents=[_serialize_checkout_intent(intent) for intent in pending],
+        cards=[_build_next_action_card(intent) for intent in pending],
+    )
+
+
+@router.get("/next-actions", response_model=CheckoutNextActionsResponse)
+async def list_checkout_next_actions(
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> CheckoutNextActionsResponse:
+    """Return active checkout-driven next actions for the member."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+    pending = await service.list_checkout_next_actions(member)
+    return CheckoutNextActionsResponse(
+        intents=[_serialize_checkout_intent(intent) for intent in pending],
+        cards=[_build_next_action_card(intent) for intent in pending],
+    )
+
+
+@router.post(
+    "/next-actions/{intent_id}/resolve",
+    response_model=CheckoutIntentResponse,
+)
+async def resolve_checkout_next_action(
+    intent_id: UUID,
+    request: CheckoutIntentResolveRequest,
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> CheckoutIntentResponse:
+    """Mark a checkout next action as resolved or cancelled."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+
+    status_value = (
+        LoyaltyCheckoutIntentStatus.CANCELLED
+        if request.status == "cancelled"
+        else LoyaltyCheckoutIntentStatus.RESOLVED
+    )
+    record = await service.resolve_checkout_intent(
+        member,
+        intent_id,
+        status=status_value,
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Checkout intent not found")
+
+    await db.commit()
+    return _serialize_checkout_intent(record)
 
 
 async def _fetch_redemption(db: AsyncSession, redemption_id: UUID) -> LoyaltyRedemption:

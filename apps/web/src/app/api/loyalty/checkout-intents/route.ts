@@ -22,8 +22,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    await submitCheckoutIntents({ ...payload, userId: session.user.id });
-    return NextResponse.json({ ok: true });
+    const feed = await submitCheckoutIntents({ ...payload, userId: session.user.id });
+    return NextResponse.json(feed);
   } catch (error) {
     console.warn("Failed to submit checkout loyalty intents", error);
     return NextResponse.json({ error: "Failed to sync loyalty intents" }, { status: 500 });

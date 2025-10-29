@@ -6,8 +6,12 @@ import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Gift, Sparkles } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
-import type { LoyaltyCheckoutIntent } from "@smplat/types";
-import { clearResolvedIntents, consumeSuccessIntents } from "@/lib/loyalty/intents";
+import type { LoyaltyCheckoutIntent, LoyaltyNextActionFeed } from "@smplat/types";
+import {
+  clearResolvedIntents,
+  consumeSuccessIntents,
+  persistServerFeed
+} from "@/lib/loyalty/intents";
 import { useCartStore } from "@/store/cart";
 
 type RemoteOnboardingTask = {
@@ -150,19 +154,35 @@ export default function CheckoutSuccessPage() {
         return;
       }
       setCheckoutIntents((previous) => previous.filter((intent) => intent.id !== intentId));
-      clearResolvedIntents((intent) => intent.id === intentId);
-      if (!orderId) {
+      clearResolvedIntents(
+        (intent) => intent.id === intentId || intent.clientIntentId === target.clientIntentId
+      );
+      if (target.id === target.clientIntentId) {
         return;
       }
-      void fetch("/api/loyalty/checkout-intents", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId, intents: [target], action: "cancel" })
-      }).catch((error) => {
-        console.warn("Failed to cancel loyalty intent", error);
-      });
+
+      void (async () => {
+        try {
+          const response = await fetch(`/api/loyalty/next-actions/${target.id}/resolve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "cancelled" })
+          });
+          if (!response.ok) {
+            throw new Error(await response.text());
+          }
+          const feedResponse = await fetch("/api/loyalty/next-actions");
+          if (feedResponse.ok) {
+            const feed = (await feedResponse.json()) as LoyaltyNextActionFeed;
+            persistServerFeed(feed);
+            setCheckoutIntents(feed.intents);
+          }
+        } catch (error) {
+          console.warn("Failed to resolve loyalty intent", error);
+        }
+      })();
     },
-    [checkoutIntents, orderId]
+    [checkoutIntents]
   );
 
   const handleReferralClick = useCallback(async () => {
@@ -192,6 +212,30 @@ export default function CheckoutSuccessPage() {
   }, [orderId]);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadServerFeed = async () => {
+      try {
+        const response = await fetch("/api/loyalty/next-actions");
+        if (!response.ok) {
+          return;
+        }
+        const feed = (await response.json()) as LoyaltyNextActionFeed;
+        persistServerFeed(feed);
+        if (!cancelled) {
+          setCheckoutIntents(feed.intents);
+        }
+      } catch (error) {
+        console.warn("Failed to fetch checkout next actions", error);
+      }
+    };
+
+    void loadServerFeed();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (checkoutIntents.length === 0) {
       setIntentSyncStatus("idle");
     }
@@ -215,7 +259,10 @@ export default function CheckoutSuccessPage() {
           const message = await response.text();
           throw new Error(message || "Failed to sync loyalty intents");
         }
+        const feed = (await response.json()) as LoyaltyNextActionFeed;
+        persistServerFeed(feed);
         if (!cancelled) {
+          setCheckoutIntents(feed.intents);
           setIntentSyncStatus("synced");
         }
       } catch (error) {

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
@@ -16,6 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from smplat_api.models.loyalty import (
+    LoyaltyCheckoutIntent,
+    LoyaltyCheckoutIntentKind,
+    LoyaltyCheckoutIntentStatus,
     LoyaltyLedgerEntry,
     LoyaltyLedgerEntryType,
     LoyaltyMember,
@@ -30,6 +33,9 @@ from smplat_api.models.loyalty import (
 )
 from smplat_api.models.user import User
 from smplat_api.services.notifications import NotificationService
+
+
+CHECKOUT_INTENT_DEFAULT_TTL = timedelta(days=14)
 
 
 @dataclass
@@ -549,64 +555,158 @@ class LoyaltyService:
         )
         return redemption
 
-    async def apply_checkout_redemption_intents(
+    async def apply_checkout_intents(
         self,
         member: LoyaltyMember,
         *,
         order_id: str,
         intents: Sequence[dict[str, Any]],
         action: Literal["confirm", "cancel"],
-    ) -> list[LoyaltyRedemption]:
-        """Apply or cancel redemption intents captured during checkout."""
+    ) -> list[LoyaltyCheckoutIntent]:
+        """Persist checkout intents and reconcile redemption metadata."""
 
-        redemption_intents = [intent for intent in intents if intent.get("kind") == "redemption"]
-        if not redemption_intents:
+        if not intents:
             return []
 
-        checkout_ids = [str(intent.get("id")) for intent in redemption_intents if intent.get("id")]
-        if not checkout_ids:
-            return []
+        redemption_intents = [
+            intent for intent in intents if intent.get("kind") == LoyaltyCheckoutIntentKind.REDEMPTION.value
+        ]
+        referral_intents = [
+            intent for intent in intents if intent.get("kind") == LoyaltyCheckoutIntentKind.REFERRAL_SHARE.value
+        ]
 
-        stmt = (
-            select(LoyaltyRedemption)
-            .options(selectinload(LoyaltyRedemption.member))
-            .where(
-                LoyaltyRedemption.member_id == member.id,
-                LoyaltyRedemption.metadata_json.isnot(None),
-            )
-        )
-        result = await self._db.execute(stmt)
-        existing_by_intent: dict[str, LoyaltyRedemption] = {}
-        for redemption in result.scalars().all():
-            metadata = redemption.metadata_json or {}
-            checkout_intent_id = metadata.get("checkout_intent_id")
-            if checkout_intent_id and checkout_intent_id in checkout_ids:
-                existing_by_intent[checkout_intent_id] = redemption
-
-        processed: list[LoyaltyRedemption] = []
+        processed: list[LoyaltyCheckoutIntent] = []
 
         if action == "cancel":
+            redemption_mapping = await self._cancel_checkout_redemptions(
+                member,
+                order_id=order_id,
+                intents=redemption_intents,
+            )
             for intent in redemption_intents:
                 checkout_id = str(intent.get("id"))
-                redemption = existing_by_intent.get(checkout_id)
-                if not redemption:
-                    continue
-                metadata: dict[str, Any] = {"checkout_intent_id": checkout_id, "order_id": order_id}
-                metadata.update(intent.get("metadata") or {})
-                metadata.setdefault(
-                    "checkout_channel",
-                    (redemption.metadata_json or {}).get("checkout_channel", "checkout"),
+                record = await self._persist_checkout_intent(
+                    member,
+                    external_id=checkout_id,
+                    kind=LoyaltyCheckoutIntentKind.REDEMPTION,
+                    status=LoyaltyCheckoutIntentStatus.CANCELLED,
+                    order_id=order_id,
+                    channel=self._resolve_intent_channel(intent),
+                    expires_at=None,
+                    metadata=self._extract_intent_metadata(intent),
+                    redemption=redemption_mapping.get(checkout_id),
+                    referral_code=None,
                 )
-                metadata.setdefault("cancellationReason", "checkout_intent_cancelled")
-                await self.cancel_redemption(
-                    redemption,
-                    reason="checkout_intent_cancelled",
-                    metadata=metadata,
+                processed.append(record)
+
+            for intent in referral_intents:
+                checkout_id = str(intent.get("id"))
+                record = await self._persist_checkout_intent(
+                    member,
+                    external_id=checkout_id,
+                    kind=LoyaltyCheckoutIntentKind.REFERRAL_SHARE,
+                    status=LoyaltyCheckoutIntentStatus.CANCELLED,
+                    order_id=order_id,
+                    channel=self._resolve_intent_channel(intent),
+                    expires_at=None,
+                    metadata=self._extract_intent_metadata(intent),
+                    referral_code=self._resolve_intent_referral_code(intent),
                 )
-                processed.append(redemption)
+                processed.append(record)
+
             return processed
 
+        redemption_mapping = await self._confirm_checkout_redemptions(
+            member,
+            order_id=order_id,
+            intents=redemption_intents,
+        )
+
         for intent in redemption_intents:
+            checkout_id = str(intent.get("id"))
+            redemption = redemption_mapping.get(checkout_id)
+            if not redemption:
+                continue
+
+            record = await self._persist_checkout_intent(
+                member,
+                external_id=checkout_id,
+                kind=LoyaltyCheckoutIntentKind.REDEMPTION,
+                status=LoyaltyCheckoutIntentStatus.PENDING,
+                order_id=order_id,
+                channel=self._resolve_intent_channel(intent) or "checkout",
+                expires_at=self._resolve_intent_expiration(intent),
+                metadata=self._extract_intent_metadata(intent),
+                redemption=redemption,
+                referral_code=None,
+            )
+            processed.append(record)
+
+        for intent in referral_intents:
+            checkout_id = str(intent.get("id"))
+            record = await self._persist_checkout_intent(
+                member,
+                external_id=checkout_id,
+                kind=LoyaltyCheckoutIntentKind.REFERRAL_SHARE,
+                status=LoyaltyCheckoutIntentStatus.PENDING,
+                order_id=order_id,
+                channel=self._resolve_intent_channel(intent),
+                expires_at=self._resolve_intent_expiration(intent),
+                metadata=self._extract_intent_metadata(intent),
+                referral_code=self._resolve_intent_referral_code(intent),
+            )
+            processed.append(record)
+
+        return processed
+
+    async def _cancel_checkout_redemptions(
+        self,
+        member: LoyaltyMember,
+        *,
+        order_id: str,
+        intents: Sequence[dict[str, Any]],
+    ) -> dict[str, LoyaltyRedemption]:
+        if not intents:
+            return {}
+
+        checkout_ids = [str(intent.get("id")) for intent in intents if intent.get("id")]
+        existing_by_intent = await self._load_checkout_redemptions(member, checkout_ids)
+
+        for intent in intents:
+            checkout_id = str(intent.get("id"))
+            redemption = existing_by_intent.get(checkout_id)
+            if not redemption:
+                continue
+
+            metadata: dict[str, Any] = {"checkout_intent_id": checkout_id, "order_id": order_id}
+            metadata.update(intent.get("metadata") or {})
+            metadata.setdefault(
+                "checkout_channel",
+                (redemption.metadata_json or {}).get("checkout_channel", "checkout"),
+            )
+            metadata.setdefault("cancellationReason", "checkout_intent_cancelled")
+            await self.cancel_redemption(
+                redemption,
+                reason="checkout_intent_cancelled",
+                metadata=metadata,
+            )
+
+        return existing_by_intent
+
+    async def _confirm_checkout_redemptions(
+        self,
+        member: LoyaltyMember,
+        *,
+        order_id: str,
+        intents: Sequence[dict[str, Any]],
+    ) -> dict[str, LoyaltyRedemption]:
+        if not intents:
+            return {}
+
+        checkout_ids = [str(intent.get("id")) for intent in intents if intent.get("id")]
+        existing_by_intent = await self._load_checkout_redemptions(member, checkout_ids)
+
+        for intent in intents:
             checkout_id = str(intent.get("id"))
             metadata: dict[str, Any] = {
                 "checkout_intent_id": checkout_id,
@@ -621,8 +721,6 @@ class LoyaltyService:
                 existing_metadata.update(metadata)
                 existing.metadata_json = existing_metadata
                 await self._db.flush()
-                processed.append(existing)
-                existing_by_intent[checkout_id] = existing
                 continue
 
             quantity = int(intent.get("quantity") or 1)
@@ -648,10 +746,231 @@ class LoyaltyService:
                 )
                 continue
 
-            processed.append(redemption)
             existing_by_intent[checkout_id] = redemption
 
-        return processed
+        return existing_by_intent
+
+    async def _load_checkout_redemptions(
+        self,
+        member: LoyaltyMember,
+        checkout_ids: Sequence[str],
+    ) -> dict[str, LoyaltyRedemption]:
+        if not checkout_ids:
+            return {}
+
+        stmt = (
+            select(LoyaltyRedemption)
+            .options(selectinload(LoyaltyRedemption.member))
+            .where(
+                LoyaltyRedemption.member_id == member.id,
+                LoyaltyRedemption.metadata_json.isnot(None),
+            )
+        )
+        result = await self._db.execute(stmt)
+        existing_by_intent: dict[str, LoyaltyRedemption] = {}
+        for redemption in result.scalars().all():
+            metadata = redemption.metadata_json or {}
+            checkout_intent_id = metadata.get("checkout_intent_id")
+            if checkout_intent_id and checkout_intent_id in checkout_ids:
+                existing_by_intent[checkout_intent_id] = redemption
+        return existing_by_intent
+
+    async def _persist_checkout_intent(
+        self,
+        member: LoyaltyMember,
+        *,
+        external_id: str,
+        kind: LoyaltyCheckoutIntentKind,
+        status: LoyaltyCheckoutIntentStatus,
+        order_id: str | None,
+        channel: str | None,
+        expires_at: datetime | None,
+        metadata: dict[str, Any] | None,
+        redemption: LoyaltyRedemption | None = None,
+        referral_code: str | None = None,
+    ) -> LoyaltyCheckoutIntent:
+        stmt = (
+            select(LoyaltyCheckoutIntent)
+            .options(selectinload(LoyaltyCheckoutIntent.redemption))
+            .where(
+                LoyaltyCheckoutIntent.member_id == member.id,
+                LoyaltyCheckoutIntent.external_id == external_id,
+            )
+        )
+        result = await self._db.execute(stmt)
+        record = result.scalar_one_or_none()
+
+        if record is None:
+            record = LoyaltyCheckoutIntent(
+                member_id=member.id,
+                external_id=external_id,
+                kind=kind,
+            )
+            self._db.add(record)
+
+        if order_id:
+            record.order_id = order_id
+        if channel:
+            record.channel = channel
+        if redemption:
+            record.redemption = redemption
+        if referral_code:
+            record.referral_code = referral_code
+
+        if expires_at:
+            record.expires_at = expires_at
+
+        existing_metadata = dict(record.metadata_json or {})
+        if metadata:
+            normalized_update = self._normalize_metadata(metadata)
+            existing_metadata.update(normalized_update)
+        record.metadata_json = existing_metadata or None
+
+        record.status = status
+        if status in {
+            LoyaltyCheckoutIntentStatus.CANCELLED,
+            LoyaltyCheckoutIntentStatus.RESOLVED,
+            LoyaltyCheckoutIntentStatus.EXPIRED,
+        }:
+            record.resolved_at = datetime.now(timezone.utc)
+        elif status == LoyaltyCheckoutIntentStatus.PENDING:
+            record.resolved_at = None
+
+        await self._db.flush()
+        return record
+
+    def _resolve_intent_channel(self, intent: dict[str, Any]) -> str | None:
+        channel = intent.get("channel")
+        if channel:
+            return str(channel)
+        metadata = intent.get("metadata") or {}
+        channel_meta = metadata.get("checkout_channel")
+        return str(channel_meta) if channel_meta else None
+
+    def _resolve_intent_referral_code(self, intent: dict[str, Any]) -> str | None:
+        referral_code = intent.get("referralCode")
+        if referral_code:
+            return str(referral_code)
+        metadata = intent.get("metadata") or {}
+        fallback = metadata.get("referralCode") or metadata.get("referral_code")
+        return str(fallback) if fallback else None
+
+    def _resolve_intent_expiration(self, intent: dict[str, Any]) -> datetime | None:
+        expires_at = intent.get("expiresAt")
+        if expires_at:
+            parsed = self._parse_datetime(expires_at)
+            if parsed:
+                return parsed
+
+        metadata = intent.get("metadata") or {}
+        metadata_expires = metadata.get("expiresAt")
+        if metadata_expires:
+            parsed_metadata = self._parse_datetime(metadata_expires)
+            if parsed_metadata:
+                return parsed_metadata
+
+        ttl_seconds = metadata.get("ttlSeconds")
+        if isinstance(ttl_seconds, (int, float)):
+            return datetime.now(timezone.utc) + timedelta(seconds=int(ttl_seconds))
+
+        return datetime.now(timezone.utc) + CHECKOUT_INTENT_DEFAULT_TTL
+
+    def _extract_intent_metadata(self, intent: dict[str, Any]) -> dict[str, Any]:
+        metadata = dict(intent.get("metadata") or {})
+        for key in (
+            "rewardSlug",
+            "rewardName",
+            "pointsCost",
+            "quantity",
+            "referralCode",
+            "createdAt",
+        ):
+            value = intent.get(key)
+            if value is not None and key not in metadata:
+                metadata[key] = value
+        return self._normalize_metadata(metadata)
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        if isinstance(value, str):
+            try:
+                sanitized = value.replace("Z", "+00:00")
+                parsed = datetime.fromisoformat(sanitized)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        return None
+
+    def _normalize_metadata(self, data: dict[str, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for key, value in data.items():
+            normalized[key] = self._normalize_metadata_value(value)
+        return normalized
+
+    def _normalize_metadata_value(self, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        if isinstance(value, dict):
+            return {k: self._normalize_metadata_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._normalize_metadata_value(item) for item in value]
+        return value
+
+    async def list_checkout_next_actions(
+        self,
+        member: LoyaltyMember,
+        *,
+        include_resolved: bool = False,
+    ) -> list[LoyaltyCheckoutIntent]:
+        """Return checkout intents eligible for next action surfaces."""
+
+        now_utc = datetime.now(timezone.utc)
+        stmt = select(LoyaltyCheckoutIntent).where(
+            LoyaltyCheckoutIntent.member_id == member.id,
+        )
+        if not include_resolved:
+            stmt = stmt.where(
+                LoyaltyCheckoutIntent.status == LoyaltyCheckoutIntentStatus.PENDING,
+                or_(
+                    LoyaltyCheckoutIntent.expires_at.is_(None),
+                    LoyaltyCheckoutIntent.expires_at > now_utc,
+                ),
+            )
+
+        stmt = stmt.order_by(LoyaltyCheckoutIntent.created_at.asc())
+        result = await self._db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def resolve_checkout_intent(
+        self,
+        member: LoyaltyMember,
+        intent_id: UUID,
+        *,
+        status: LoyaltyCheckoutIntentStatus = LoyaltyCheckoutIntentStatus.RESOLVED,
+    ) -> LoyaltyCheckoutIntent | None:
+        """Mark a checkout intent as resolved for the member."""
+
+        stmt = select(LoyaltyCheckoutIntent).where(
+            LoyaltyCheckoutIntent.member_id == member.id,
+            LoyaltyCheckoutIntent.id == intent_id,
+        )
+        result = await self._db.execute(stmt)
+        record = result.scalar_one_or_none()
+        if record is None:
+            return None
+
+        record.status = status
+        record.resolved_at = datetime.now(timezone.utc)
+        await self._db.flush()
+        return record
 
     async def fulfill_redemption(
         self,
