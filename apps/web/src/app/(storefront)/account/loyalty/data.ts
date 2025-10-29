@@ -218,6 +218,23 @@ export async function fetchLoyaltyNudges(): Promise<LoyaltyNudgeFeed> {
   return (await response.json()) as LoyaltyNudgeFeed;
 }
 
+export async function fetchLoyaltyNudgeHistory(): Promise<LoyaltyNudgeFeed> {
+  const response = await fetch(`${apiBase}/api/v1/loyalty/nudges/history`, {
+    cache: "no-store",
+    headers: apiKeyHeader
+      ? {
+          "X-API-Key": apiKeyHeader
+        }
+      : undefined
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to load loyalty nudge history: ${response.statusText}`);
+  }
+
+  return (await response.json()) as LoyaltyNudgeFeed;
+}
+
 export function buildBypassMember(): LoyaltyMemberSummary {
   return {
     id: "00000000-0000-0000-0000-000000000001",
@@ -333,7 +350,37 @@ export function buildBypassNudges(): LoyaltyNudgeFeed {
         priority: 20,
         metadata: { pointsRemaining: 125 },
         campaignSlug: "expiring_points",
-        channels: ["email", "sms"]
+        channels: ["email", "sms"],
+        status: "active",
+        lastTriggeredAt: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString(),
+        acknowledgedAt: null,
+        dismissedAt: null
+      }
+    ]
+  };
+}
+
+export function buildBypassNudgeHistory(): LoyaltyNudgeFeed {
+  const now = new Date();
+  const acknowledged = new Date(now.getTime() - 1000 * 60 * 60 * 18).toISOString();
+  return {
+    nudges: [
+      {
+        id: "bypass-nudge-history",
+        nudgeType: "checkout_reminder",
+        headline: "Complete your checkout",
+        body: "We held your reward at checkout and just need confirmation.",
+        ctaLabel: "Resume checkout",
+        ctaHref: "/account/loyalty#next-actions",
+        expiresAt: new Date(now.getTime() - 1000 * 60 * 30).toISOString(),
+        priority: 10,
+        metadata: { checkoutIntentId: "history-intent" },
+        campaignSlug: "checkout_recovery",
+        channels: ["email"],
+        status: "acknowledged",
+        lastTriggeredAt: new Date(now.getTime() - 1000 * 60 * 60 * 20).toISOString(),
+        acknowledgedAt: acknowledged,
+        dismissedAt: null
       }
     ]
   };

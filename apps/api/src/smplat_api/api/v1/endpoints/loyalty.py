@@ -160,6 +160,11 @@ class LedgerEntryResponse(BaseModel):
     entryType: str
     amount: float
     description: Optional[str]
+    balanceBefore: Optional[float]
+    balanceAfter: Optional[float]
+    balanceDelta: Optional[float]
+    checkoutIntentId: Optional[str]
+    checkoutOrderId: Optional[str]
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -205,6 +210,10 @@ class LoyaltyNudgeCardResponse(BaseModel):
     metadata: dict[str, Any]
     campaignSlug: Optional[str]
     channels: List[str]
+    status: str
+    lastTriggeredAt: Optional[datetime]
+    acknowledgedAt: Optional[datetime]
+    dismissedAt: Optional[datetime]
 
 
 class LoyaltyGuardrailOverrideResponse(BaseModel):
@@ -832,6 +841,10 @@ def _serialize_nudge_card(card: LoyaltyNudgeCard) -> LoyaltyNudgeCardResponse:
         metadata=card.metadata,
         campaignSlug=card.campaign_slug,
         channels=[getattr(channel, "value", str(channel)) for channel in card.channels],
+        status=card.status.value,
+        lastTriggeredAt=card.last_triggered_at,
+        acknowledgedAt=card.acknowledged_at,
+        dismissedAt=card.dismissed_at,
     )
 
 
@@ -878,12 +891,22 @@ def _serialize_redemption(redemption: LoyaltyRedemption) -> RedemptionResponse:
 
 def _serialize_ledger_entry(entry: LoyaltyLedgerEntry) -> LedgerEntryResponse:
     metadata = entry.metadata_json or {}
+    balance_before = metadata.get("balance_before")
+    balance_after = metadata.get("balance_after")
+    balance_delta = metadata.get("balance_delta")
+    checkout_intent_id = metadata.get("checkout_intent_id")
+    checkout_order_id = metadata.get("order_id")
     return LedgerEntryResponse(
         id=entry.id,
         occurredAt=entry.occurred_at,
         entryType=entry.entry_type.value,
         amount=float(entry.amount or 0),
         description=entry.description,
+        balanceBefore=float(balance_before) if balance_before is not None else None,
+        balanceAfter=float(balance_after) if balance_after is not None else None,
+        balanceDelta=float(balance_delta) if balance_delta is not None else None,
+        checkoutIntentId=str(checkout_intent_id) if checkout_intent_id is not None else None,
+        checkoutOrderId=str(checkout_order_id) if checkout_order_id is not None else None,
         metadata=dict(metadata),
     )
 
@@ -1004,6 +1027,20 @@ async def list_loyalty_nudges(
     service = LoyaltyService(db)
     member = await service.ensure_member(current_user.id)
     cards = await service.list_member_nudges(member)
+    await db.commit()
+    return LoyaltyNudgeFeedResponse(nudges=[_serialize_nudge_card(card) for card in cards])
+
+
+@router.get("/nudges/history", response_model=LoyaltyNudgeFeedResponse)
+async def list_loyalty_nudge_history(
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> LoyaltyNudgeFeedResponse:
+    """Return lifecycle history of loyalty nudges for the authenticated member."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+    cards = await service.list_member_nudge_history(member)
     await db.commit()
     return LoyaltyNudgeFeedResponse(nudges=[_serialize_nudge_card(card) for card in cards])
 

@@ -15,6 +15,8 @@ import type {
   LoyaltyNextActionFeed,
   LoyaltyNudgeCard,
   LoyaltyNudgeFeed,
+  LoyaltyTimelineEntry,
+  LoyaltyTimelineResult,
   ReferralConversionPage
 } from "@smplat/types";
 
@@ -28,20 +30,6 @@ import { LoyaltyNudgeRail } from "@/components/loyalty/nudge-rail";
 
 const POINTS_DISPLAY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const REFERRAL_REWARD_POINTS = 500;
-
-type TimelineEvent =
-  | {
-      kind: "ledger";
-      id: string;
-      occurredAt: string;
-      ledger: LoyaltyLedgerEntry;
-    }
-  | {
-      kind: "redemption";
-      id: string;
-      occurredAt: string;
-      redemption: LoyaltyRedemption;
-    };
 
 const LEDGER_TYPE_COPY: Record<string, string> = {
   earn: "Points earned",
@@ -65,38 +53,75 @@ const REDEMPTION_STATUS_CLASS: Record<string, string> = {
   cancelled: "bg-slate-400/20 text-slate-200"
 };
 
-// surface: loyalty-history
-function buildTimeline(
-  ledger: LoyaltyLedgerPage,
-  redemptions: LoyaltyRedemptionPage,
-  optimistic: LoyaltyRedemption[]
-): TimelineEvent[] {
-  const ledgerEvents: TimelineEvent[] = ledger.entries.map((entry) => ({
-    kind: "ledger",
-    id: `ledger-${entry.id}`,
-    occurredAt: entry.occurredAt,
-    ledger: entry
-  }));
+type TimelineFilterState = {
+  referralCode: string;
+  campaignSlug: string;
+  checkoutOrderId: string;
+};
 
-  const redemptionMap = new Map<string, LoyaltyRedemption>();
-  [...optimistic, ...redemptions.redemptions].forEach((item) => {
-    if (!redemptionMap.has(item.id)) {
-      redemptionMap.set(item.id, item);
+function matchesClientTimelineFilters(
+  entry: LoyaltyTimelineEntry,
+  filters: TimelineFilterState
+): boolean {
+  if (filters.referralCode) {
+    const target = filters.referralCode;
+    if (entry.kind === "referral") {
+      return entry.referral.code?.toLowerCase().includes(target) ?? false;
     }
-  });
+    if (entry.kind === "ledger") {
+      const metadata = entry.ledger.metadata ?? {};
+      const referralMetadata =
+        (metadata.referral_code as string | undefined) ||
+        (metadata.referralCode as string | undefined);
+      if (!referralMetadata) {
+        return false;
+      }
+      return referralMetadata.toLowerCase().includes(target);
+    }
+    return false;
+  }
 
-  const redemptionEvents: TimelineEvent[] = Array.from(redemptionMap.values()).map((redemption) => ({
+  if (filters.campaignSlug) {
+    if (entry.kind !== "nudge") {
+      return false;
+    }
+    return (entry.nudge.campaignSlug ?? "").toLowerCase().includes(filters.campaignSlug);
+  }
+
+  if (filters.checkoutOrderId) {
+    const target = filters.checkoutOrderId;
+    if (entry.kind === "ledger") {
+      const orderId =
+        entry.ledger.checkoutOrderId ??
+        (entry.ledger.metadata.order_id as string | undefined) ??
+        (entry.ledger.metadata.orderId as string | undefined);
+      if (!orderId) {
+        return false;
+      }
+      return orderId.toLowerCase().includes(target);
+    }
+    if (entry.kind === "nudge") {
+      const nudgeOrder =
+        (entry.nudge.metadata.orderId as string | undefined) ??
+        (entry.nudge.metadata.checkoutIntentId as string | undefined);
+      if (!nudgeOrder) {
+        return false;
+      }
+      return nudgeOrder.toLowerCase().includes(target);
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function toOptimisticTimelineEntry(redemption: LoyaltyRedemption): LoyaltyTimelineEntry {
+  return {
     kind: "redemption",
-    id: `redemption-${redemption.id}`,
+    id: `optimistic-${redemption.id}`,
     occurredAt: redemption.requestedAt,
     redemption
-  }));
-
-  return [...ledgerEvents, ...redemptionEvents].sort((a, b) => {
-    const left = new Date(a.occurredAt).getTime();
-    const right = new Date(b.occurredAt).getTime();
-    return right - left;
-  });
+  };
 }
 
 type LoyaltyHubClientProps = {
@@ -107,6 +132,7 @@ type LoyaltyHubClientProps = {
   rewards: LoyaltyReward[];
   nextActions: LoyaltyNextActionFeed;
   nudges: LoyaltyNudgeFeed;
+  timeline: LoyaltyTimelineResult;
   csrfToken: string;
 };
 
@@ -134,6 +160,7 @@ export function LoyaltyHubClient({
   rewards,
   nextActions: nextActionFeed,
   nudges: nudgeFeed,
+  timeline,
   csrfToken
 }: LoyaltyHubClientProps) {
   const [isRedeeming, startRedeem] = useTransition();
@@ -143,6 +170,11 @@ export function LoyaltyHubClient({
     nextActionFeed.cards
   );
   const [nudges, setNudges] = useState<LoyaltyNudgeCard[]>(() => nudgeFeed.nudges);
+  const [timelineFilters, setTimelineFilters] = useState<TimelineFilterState>({
+    referralCode: "",
+    campaignSlug: "",
+    checkoutOrderId: ""
+  });
 
   const sortedRewards = useMemo(
     () => rewards.filter((reward) => reward.isActive).sort((a, b) => a.costPoints - b.costPoints),
@@ -154,9 +186,29 @@ export function LoyaltyHubClient({
     return new Map(entries);
   }, [rewards]);
 
-  const timelineEvents = useMemo(
-    () => buildTimeline(ledger, redemptions, state.optimisticRedemptions),
-    [ledger, redemptions, state.optimisticRedemptions]
+  const normalizedTimelineFilters = useMemo<TimelineFilterState>(
+    () => ({
+      referralCode: timelineFilters.referralCode.trim().toLowerCase(),
+      campaignSlug: timelineFilters.campaignSlug.trim().toLowerCase(),
+      checkoutOrderId: timelineFilters.checkoutOrderId.trim().toLowerCase()
+    }),
+    [timelineFilters]
+  );
+
+  const optimisticTimelineEntries = useMemo(
+    () => state.optimisticRedemptions.map(toOptimisticTimelineEntry),
+    [state.optimisticRedemptions]
+  );
+
+  const timelineEntries = useMemo(() => {
+    const merged = [...timeline.entries, ...optimisticTimelineEntries];
+    merged.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+    return merged.filter((entry) => matchesClientTimelineFilters(entry, normalizedTimelineFilters));
+  }, [timeline.entries, optimisticTimelineEntries, normalizedTimelineFilters]);
+
+  const visibleTimelineEntries = useMemo(
+    () => timelineEntries.slice(0, 8),
+    [timelineEntries]
   );
 
   const hasNextActions = nextActions.length > 0;
@@ -227,6 +279,10 @@ export function LoyaltyHubClient({
       controller.abort();
       window.clearInterval(interval);
     };
+  }, []);
+
+  const clearTimelineFilters = useCallback(() => {
+    setTimelineFilters({ referralCode: "", campaignSlug: "", checkoutOrderId: "" });
   }, []);
 
   const dismissNextAction = useCallback((id: string) => {
@@ -568,61 +624,108 @@ export function LoyaltyHubClient({
         </div>
       </section>
 
-      <section
-        className="rounded-3xl border border-white/10 bg-white/5 p-6"
-        data-testid="loyalty-history"
-      >
-        <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h3 className="text-xl font-semibold">Activity timeline</h3>
-            <p className="text-sm text-white/60">Ledger entries, redemption outcomes, and referral credits.</p>
-          </div>
-          <p className="text-right text-xs uppercase tracking-[0.2em] text-white/50">
-            {timelineEvents.length > 0 ? `${timelineEvents.length} events` : "No activity"}
-          </p>
-        </header>
-        {timelineEvents.length === 0 ? (
-          <p className="mt-6 text-sm text-white/60">
-            Start redeeming rewards or sharing invites to populate your history.
-          </p>
-        ) : (
-          <ul className="mt-6 space-y-4">
-            {timelineEvents.slice(0, 8).map((event) => {
-              const timestamp = formatDistanceToNow(new Date(event.occurredAt), { addSuffix: true });
-              if (event.kind === "ledger") {
-                const amount = event.ledger.amount;
-                const isPositive = amount >= 0;
-                const amountDisplay = `${isPositive ? "+" : "−"}${POINTS_DISPLAY.format(Math.abs(amount))} pts`;
-                const amountClass = isPositive ? "text-emerald-200" : "text-red-200";
-                const metadata = event.ledger.metadata ?? {};
-                const tags: string[] = [];
-                if (typeof metadata.referral_code === "string") {
-                  tags.push(`Referral ${metadata.referral_code}`);
-                }
-                if (typeof metadata.redemption_id === "string") {
-                  tags.push(`Redemption ${metadata.redemption_id.slice(0, 8)}`);
-                }
-                return (
-                  <li key={event.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
-                      <span>Ledger</span>
-                      <span>{timestamp}</span>
-                    </div>
-                    <div className="mt-2 flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-white">
-                          {event.ledger.description ?? LEDGER_TYPE_COPY[event.ledger.entryType] ?? event.ledger.entryType}
-                        </p>
-                        {tags.length > 0 ? (
-                          <p className="text-xs text-white/60">{tags.join(" · ")}</p>
-                        ) : null}
-                      </div>
-                      <span className={`text-base font-semibold ${amountClass}`}>{amountDisplay}</span>
-                    </div>
-                  </li>
-                );
-              }
+    <section className="rounded-3xl border border-white/10 bg-white/5 p-6" data-testid="loyalty-history">
+      <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h3 className="text-xl font-semibold">Activity timeline</h3>
+          <p className="text-sm text-white/60">Ledger entries, redemption outcomes, guardrail overrides, and referral credits.</p>
+        </div>
+        <p className="text-right text-xs uppercase tracking-[0.2em] text-white/50">
+          {timelineEntries.length > 0 ? `${timelineEntries.length} events` : "No activity"}
+        </p>
+      </header>
 
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
+          Referral code
+          <input
+            className="rounded-full border border-white/20 bg-black/40 px-4 py-2 text-sm text-white placeholder:text-white/40 focus:border-white/60 focus:outline-none"
+            placeholder="Search by code"
+            value={timelineFilters.referralCode}
+            onChange={(event) => setTimelineFilters((previous) => ({ ...previous, referralCode: event.target.value }))}
+            type="text"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
+          Campaign slug
+          <input
+            className="rounded-full border border-white/20 bg-black/40 px-4 py-2 text-sm text-white placeholder:text-white/40 focus:border-white/60 focus:outline-none"
+            placeholder="e.g. checkout_recovery"
+            value={timelineFilters.campaignSlug}
+            onChange={(event) => setTimelineFilters((previous) => ({ ...previous, campaignSlug: event.target.value }))}
+            type="text"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/50">
+          Checkout order
+          <input
+            className="rounded-full border border-white/20 bg-black/40 px-4 py-2 text-sm text-white placeholder:text-white/40 focus:border-white/60 focus:outline-none"
+            placeholder="Order or intent ID"
+            value={timelineFilters.checkoutOrderId}
+            onChange={(event) => setTimelineFilters((previous) => ({ ...previous, checkoutOrderId: event.target.value }))}
+            type="text"
+          />
+        </label>
+      </div>
+      <div className="mt-2 flex justify-end">
+        <button
+          type="button"
+          onClick={clearTimelineFilters}
+          className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60 transition hover:text-white"
+        >
+          Reset filters
+        </button>
+      </div>
+
+      {visibleTimelineEntries.length === 0 ? (
+        <p className="mt-6 text-sm text-white/60">
+          Start redeeming rewards or sharing invites to populate your history.
+        </p>
+      ) : (
+        <ul className="mt-6 space-y-4">
+          {visibleTimelineEntries.map((event) => {
+            const timestamp = formatDistanceToNow(new Date(event.occurredAt), { addSuffix: true });
+            if (event.kind === "ledger") {
+              const amount = event.ledger.amount;
+              const isPositive = amount >= 0;
+              const amountDisplay = `${isPositive ? "+" : "−"}${POINTS_DISPLAY.format(Math.abs(amount))} pts`;
+              const amountClass = isPositive ? "text-emerald-200" : "text-red-200";
+              const metadata = event.ledger.metadata ?? {};
+              const tags: string[] = [];
+              if (typeof metadata.referral_code === "string") {
+                tags.push(`Referral ${metadata.referral_code}`);
+              }
+              if (typeof metadata.redemption_id === "string") {
+                tags.push(`Redemption ${metadata.redemption_id.slice(0, 8)}`);
+              }
+              if (typeof event.ledger.checkoutOrderId === "string") {
+                tags.push(`Order ${event.ledger.checkoutOrderId}`);
+              }
+              return (
+                <li key={event.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                    <span>Ledger</span>
+                    <span>{timestamp}</span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        {event.ledger.description ?? LEDGER_TYPE_COPY[event.ledger.entryType] ?? event.ledger.entryType}
+                      </p>
+                      {tags.length > 0 ? (
+                        <p className="text-xs text-white/60">{tags.join(" · ")}</p>
+                      ) : null}
+                      <p className="text-xs text-white/50">
+                        Balance → {POINTS_DISPLAY.format(event.ledger.balanceAfter ?? 0)} pts
+                      </p>
+                    </div>
+                    <span className={`text-base font-semibold ${amountClass}`}>{amountDisplay}</span>
+                  </div>
+                </li>
+              );
+            }
+
+            if (event.kind === "redemption") {
               const statusKey = event.redemption.status.toLowerCase();
               const statusClass = REDEMPTION_STATUS_CLASS[statusKey] ?? "bg-white/10 text-white";
               const statusLabel = REDEMPTION_STATUS_COPY[statusKey] ?? event.redemption.status;
@@ -671,10 +774,67 @@ export function LoyaltyHubClient({
                   </div>
                 </li>
               );
-            })}
-          </ul>
-        )}
-      </section>
+            }
+
+            if (event.kind === "referral") {
+              return (
+                <li key={event.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                    <span>Referral</span>
+                    <span>{timestamp}</span>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <p className="text-sm font-semibold text-white">Invite {event.referral.code}</p>
+                    <p className="text-xs text-white/60">Status: {event.referral.status}</p>
+                    {event.referral.inviteeEmail ? (
+                      <p className="text-xs text-white/50">Invitee: {event.referral.inviteeEmail}</p>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            }
+
+            if (event.kind === "nudge") {
+              return (
+                <li key={event.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                    <span>Nudge {event.nudge.status}</span>
+                    <span>{timestamp}</span>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <p className="text-sm font-semibold text-white">{event.nudge.headline}</p>
+                    <p className="text-xs text-white/60">{event.nudge.body}</p>
+                    {event.nudge.campaignSlug ? (
+                      <p className="text-xs text-white/50">Campaign: {event.nudge.campaignSlug}</p>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            }
+
+            if (event.kind === "guardrail_override") {
+              return (
+                <li key={event.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                    <span>Guardrail override</span>
+                    <span>{timestamp}</span>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <p className="text-sm font-semibold text-white">Scope: {event.override.scope}</p>
+                    <p className="text-xs text-white/60">Justification: {event.override.justification}</p>
+                    {event.override.expiresAt ? (
+                      <p className="text-xs text-white/50">Expires {formatDistanceToNow(new Date(event.override.expiresAt), { addSuffix: true })}</p>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            }
+
+            return null;
+          })}
+        </ul>
+      )}
+    </section>
 
       <section className="space-y-6">
         <header>

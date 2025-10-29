@@ -67,6 +67,10 @@ class LoyaltyNudgeCard:
     metadata: dict[str, Any]
     campaign_slug: Optional[str]
     channels: list[LoyaltyNudgeChannel]
+    status: LoyaltyNudgeStatus
+    last_triggered_at: Optional[datetime]
+    acknowledged_at: Optional[datetime]
+    dismissed_at: Optional[datetime]
 
 
 @dataclass
@@ -322,12 +326,17 @@ class LoyaltyService:
         if new_balance < Decimal("0"):
             raise ValueError("Insufficient loyalty balance for ledger entry")
 
+        enriched_metadata: dict[str, Any] = {**(metadata or {})}
+        enriched_metadata.setdefault("balance_before", str(balance_before))
+        enriched_metadata.setdefault("balance_after", str(new_balance))
+        enriched_metadata.setdefault("balance_delta", str(balance_delta))
+
         ledger_entry = LoyaltyLedgerEntry(
             member_id=member.id,
             entry_type=entry_type,
             amount=amount,
             description=description,
-            metadata_json=metadata or {},
+            metadata_json=enriched_metadata,
         )
         self._db.add(ledger_entry)
 
@@ -588,28 +597,7 @@ class LoyaltyService:
 
         cards: list[LoyaltyNudgeCard] = []
         for nudge in nudges:
-            payload = dict(nudge.payload_json or {})
-            metadata = payload.get("metadata") or {}
-            headline = str(payload.get("headline") or "")
-            body = str(payload.get("body") or "")
-            cta_label = payload.get("ctaLabel")
-            cta_href = payload.get("ctaHref")
-            channels = self._normalize_channels(nudge.channel_preferences)
-            cards.append(
-                LoyaltyNudgeCard(
-                    id=nudge.id,
-                    nudge_type=nudge.nudge_type,
-                    headline=headline,
-                    body=body,
-                    cta_label=cta_label,
-                    cta_href=cta_href,
-                    expires_at=nudge.expires_at,
-                    priority=nudge.priority or 0,
-                    metadata=metadata,
-                    campaign_slug=nudge.campaign_slug,
-                    channels=channels,
-                )
-            )
+            cards.append(self._to_nudge_card(nudge))
 
         cards.sort(
             key=lambda card: (
@@ -619,6 +607,51 @@ class LoyaltyService:
             )
         )
         return cards
+
+    def _to_nudge_card(self, nudge: LoyaltyNudge) -> LoyaltyNudgeCard:
+        payload = dict(nudge.payload_json or {})
+        metadata = payload.get("metadata") or {}
+        headline = str(payload.get("headline") or "")
+        body = str(payload.get("body") or "")
+        cta_label = payload.get("ctaLabel")
+        cta_href = payload.get("ctaHref")
+        channels = self._normalize_channels(nudge.channel_preferences)
+        return LoyaltyNudgeCard(
+            id=nudge.id,
+            nudge_type=nudge.nudge_type,
+            headline=headline,
+            body=body,
+            cta_label=cta_label,
+            cta_href=cta_href,
+            expires_at=nudge.expires_at,
+            priority=nudge.priority or 0,
+            metadata=metadata,
+            campaign_slug=nudge.campaign_slug,
+            channels=channels,
+            status=nudge.status,
+            last_triggered_at=nudge.last_triggered_at,
+            acknowledged_at=nudge.acknowledged_at,
+            dismissed_at=nudge.dismissed_at,
+        )
+
+    async def list_member_nudge_history(
+        self,
+        member: LoyaltyMember,
+        *,
+        limit: int = 100,
+    ) -> list[LoyaltyNudgeCard]:
+        """Return lifecycle history of loyalty nudges for a member."""
+
+        bounded_limit = max(1, min(limit, 200))
+        stmt = (
+            select(LoyaltyNudge)
+            .where(LoyaltyNudge.member_id == member.id)
+            .order_by(LoyaltyNudge.updated_at.desc(), LoyaltyNudge.id.desc())
+            .limit(bounded_limit)
+        )
+        result = await self._db.execute(stmt)
+        nudges = list(result.scalars().all())
+        return [self._to_nudge_card(nudge) for nudge in nudges]
 
     async def update_member_nudge_status(
         self,

@@ -79,6 +79,11 @@ export interface LoyaltyLedgerEntry {
   amount: number;
   description?: string | null;
   metadata: Record<string, unknown>;
+  balanceBefore?: number | null;
+  balanceAfter?: number | null;
+  balanceDelta?: number | null;
+  checkoutIntentId?: string | null;
+  checkoutOrderId?: string | null;
 }
 
 export interface LoyaltyLedgerPage {
@@ -184,6 +189,10 @@ export interface LoyaltyNudgeCard {
   metadata: Record<string, unknown>;
   campaignSlug?: string | null;
   channels: string[];
+  status: string;
+  lastTriggeredAt?: string | null;
+  acknowledgedAt?: string | null;
+  dismissedAt?: string | null;
 }
 
 export interface LoyaltyNudgeFeed {
@@ -251,3 +260,89 @@ export interface LoyaltyVelocityTimeline {
   snapshots: LoyaltyVelocitySnapshot[];
   nextCursor?: string | null;
 }
+
+export type LoyaltyTimelineEntryKind =
+  | 'ledger'
+  | 'redemption'
+  | 'referral'
+  | 'nudge'
+  | 'guardrail_override';
+
+export type LoyaltyTimelineLedgerEntry = {
+  kind: 'ledger';
+  id: string;
+  occurredAt: string;
+  ledger: LoyaltyLedgerEntry;
+};
+
+export type LoyaltyTimelineRedemptionEntry = {
+  kind: 'redemption';
+  id: string;
+  occurredAt: string;
+  redemption: LoyaltyRedemption;
+};
+
+export type LoyaltyTimelineReferralEntry = {
+  kind: 'referral';
+  id: string;
+  occurredAt: string;
+  referral: ReferralConversion;
+};
+
+export type LoyaltyTimelineNudgeEntry = {
+  kind: 'nudge';
+  id: string;
+  occurredAt: string;
+  nudge: LoyaltyNudgeCard;
+};
+
+export type LoyaltyTimelineGuardrailEntry = {
+  kind: 'guardrail_override';
+  id: string;
+  occurredAt: string;
+  override: LoyaltyGuardrailOverride;
+};
+
+export type LoyaltyTimelineEntry =
+  | LoyaltyTimelineLedgerEntry
+  | LoyaltyTimelineRedemptionEntry
+  | LoyaltyTimelineReferralEntry
+  | LoyaltyTimelineNudgeEntry
+  | LoyaltyTimelineGuardrailEntry;
+
+export type LoyaltyTimelineFilters = {
+  includeLedger?: boolean;
+  includeRedemptions?: boolean;
+  includeReferrals?: boolean;
+  includeNudges?: boolean;
+  includeGuardrails?: boolean;
+  ledgerTypes?: string[];
+  redemptionStatuses?: string[];
+  referralStatuses?: string[];
+  nudgeStatuses?: string[];
+  guardrailScopes?: LoyaltyGuardrailOverrideScope[];
+  referralCode?: string | null;
+  campaignSlug?: string | null;
+  checkoutOrderId?: string | null;
+};
+
+export type LoyaltyTimelineCursor = {
+  ledger: string | null;
+  redemptions: string | null;
+  referrals: string | null;
+  nudges: string | null;
+  guardrails: string | null;
+};
+
+export type LoyaltyTimelinePage = {
+  entries: LoyaltyTimelineEntry[];
+  cursor: LoyaltyTimelineCursor;
+  hasMore: boolean;
+  appliedFilters: Required<LoyaltyTimelineFilters> & {
+    ledgerTypes: string[] | null;
+    redemptionStatuses: string[] | null;
+    referralStatuses: string[] | null;
+    nudgeStatuses: string[] | null;
+    guardrailScopes: LoyaltyGuardrailOverrideScope[] | null;
+  };
+};
