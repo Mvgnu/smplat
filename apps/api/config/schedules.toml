@@ -21,3 +21,12 @@ max_attempts = 4
 base_backoff_seconds = 15
 max_backoff_seconds = 120
 jitter_seconds = 5
+
+[jobs.loyalty_progression_sweep]
+id = "loyalty-progression-sweep"
+task = "smplat_api.jobs.loyalty.progression.run_loyalty_progression"
+cron = "15 * * * *"
+max_attempts = 3
+base_backoff_seconds = 30
+max_backoff_seconds = 300
+jitter_seconds = 10
