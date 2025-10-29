@@ -2,7 +2,8 @@
 
 This runbook captures operational guidance for the loyalty tier system and referral credits.
 
-## API Overview
+## API & Storefront Overview
+- **Storefront hub**: `/account/loyalty` renders tier progress, balances, expiring points, and the reward catalog using server-side hydration of the loyalty APIs. The hub invokes secure server actions that forward redemptions to the upstream API with the checkout key to preserve abuse protections.
 - **List tiers**: `GET /api/v1/loyalty/tiers` returns active tiers ordered by threshold.
 - **Membership lookup**: `GET /api/v1/loyalty/members/{user_id}` lazily provisions loyalty members and now surfaces tier progress, point holds, upcoming benefits, and expiring balances.
 - **List rewards**: `GET /api/v1/loyalty/rewards` exposes active reward catalog definitions for storefront and admin surfaces.
@@ -34,8 +35,9 @@ Tier upgrades trigger the `NotificationService.send_loyalty_tier_upgrade` helper
 3. Call `/loyalty/members/{user_id}` to provision a member and confirm progress/expiring payloads populate.
 4. Run `poetry run pytest tests/test_loyalty_service.py tests/test_loyalty_endpoints.py` to validate redemption flows and API responses.
 5. Exercise redemption creation → fulfillment → cancellation via API to verify holds, ledger entries, and scheduler expirations.
-6. Issue a referral and manually mark it converted to validate ledger updates and notifications.
-7. Confirm TypeScript contracts in `packages/types` and storefront consumers are refreshed.
+6. Run `NEXT_PUBLIC_E2E_AUTH_BYPASS=true pnpm --filter web test:e2e -- --grep "Loyalty hub"` to execute the storefront redemption happy-path Playwright suite. The spec covers optimistic balance updates, success messaging, and error fallback.
+7. Issue a referral and manually mark it converted to validate ledger updates and notifications.
+8. Confirm TypeScript contracts in `packages/types` and storefront consumers are refreshed.
 
 ## Troubleshooting
 - **Missing notification**: Verify `notification_preferences.marketing_messages` is enabled for the user before expecting tier announcements.
