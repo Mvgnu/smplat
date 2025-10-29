@@ -23,6 +23,7 @@ from smplat_api.models.loyalty import (
     LoyaltyCheckoutIntentStatus,
     LoyaltyLedgerEntry,
     LoyaltyLedgerEntryType,
+    LoyaltyNudgeStatus,
     LoyaltyRedemption,
     LoyaltyRedemptionStatus,
     ReferralInvite,
@@ -30,6 +31,7 @@ from smplat_api.models.loyalty import (
 )
 from smplat_api.models.user import User
 from smplat_api.services.loyalty import (
+    LoyaltyNudgeCard,
     LoyaltyService,
     decode_time_uuid_cursor,
     encode_time_uuid_cursor,
@@ -187,6 +189,22 @@ class ReferralConversionWindowResponse(BaseModel):
     lastActivity: Optional[datetime]
 
 
+class LoyaltyNudgeCardResponse(BaseModel):
+    id: UUID
+    nudgeType: str
+    headline: str
+    body: str
+    ctaLabel: Optional[str]
+    ctaHref: Optional[str]
+    expiresAt: Optional[datetime]
+    priority: int
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LoyaltyNudgeFeedResponse(BaseModel):
+    nudges: List[LoyaltyNudgeCardResponse]
+
+
 class RedemptionFulfillRequest(BaseModel):
     description: Optional[str] = Field(None, description="Override description for the ledger entry")
     metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata to attach to the redemption")
@@ -261,6 +279,12 @@ class CheckoutNextActionsResponse(BaseModel):
 class CheckoutIntentResolveRequest(BaseModel):
     status: Literal["resolved", "cancelled"] = Field(
         "resolved", description="Mark as resolved (dismissed) or cancelled"
+    )
+
+
+class LoyaltyNudgeStatusRequest(BaseModel):
+    status: Literal["active", "acknowledged", "dismissed"] = Field(
+        "acknowledged", description="Lifecycle status to persist for the nudge",
     )
 
 
@@ -686,6 +710,20 @@ def _build_next_action_card(intent: LoyaltyCheckoutIntent) -> LoyaltyNextActionC
     )
 
 
+def _serialize_nudge_card(card: LoyaltyNudgeCard) -> LoyaltyNudgeCardResponse:
+    return LoyaltyNudgeCardResponse(
+        id=card.id,
+        nudgeType=card.nudge_type.value,
+        headline=card.headline,
+        body=card.body,
+        ctaLabel=card.cta_label,
+        ctaHref=card.cta_href,
+        expiresAt=card.expires_at,
+        priority=card.priority,
+        metadata=card.metadata,
+    )
+
+
 def _serialize_referral(referral: ReferralInvite) -> ReferralIssueResponse:
     return ReferralIssueResponse(
         id=referral.id,
@@ -843,6 +881,49 @@ async def resolve_checkout_next_action(
 
     await db.commit()
     return _serialize_checkout_intent(record)
+
+
+@router.get("/nudges", response_model=LoyaltyNudgeFeedResponse)
+async def list_loyalty_nudges(
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> LoyaltyNudgeFeedResponse:
+    """Return proactive loyalty nudges for the authenticated member."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+    cards = await service.list_member_nudges(member)
+    await db.commit()
+    return LoyaltyNudgeFeedResponse(nudges=[_serialize_nudge_card(card) for card in cards])
+
+
+@router.post("/nudges/{nudge_id}/status", status_code=status.HTTP_204_NO_CONTENT)
+async def update_loyalty_nudge_status(
+    nudge_id: UUID,
+    request: LoyaltyNudgeStatusRequest,
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    """Persist acknowledgement or dismissal for a loyalty nudge."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+
+    try:
+        new_status = LoyaltyNudgeStatus(request.status)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid nudge status") from error
+
+    record = await service.update_member_nudge_status(
+        member,
+        nudge_id,
+        status=new_status,
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Nudge not found")
+
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 async def _fetch_redemption(db: AsyncSession, redemption_id: UUID) -> LoyaltyRedemption:

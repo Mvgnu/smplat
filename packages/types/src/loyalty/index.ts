@@ -166,3 +166,24 @@ export interface LoyaltyNextActionFeed {
   intents: LoyaltyCheckoutIntent[];
   cards: LoyaltyNextActionCard[];
 }
+
+export type LoyaltyNudgeType =
+  | "expiring_points"
+  | "checkout_reminder"
+  | "redemption_follow_up";
+
+export interface LoyaltyNudgeCard {
+  id: string;
+  nudgeType: LoyaltyNudgeType;
+  headline: string;
+  body: string;
+  ctaLabel?: string | null;
+  ctaHref?: string | null;
+  expiresAt?: string | null;
+  priority: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface LoyaltyNudgeFeed {
+  nudges: LoyaltyNudgeCard[];
+}

@@ -7,10 +7,12 @@ import {
   buildBypassLedgerPage,
   buildBypassMember,
   buildBypassNextActions,
+  buildBypassNudges,
   buildBypassRedemptions,
   buildBypassRewards,
   fetchLoyaltyLedger,
   fetchLoyaltyMember,
+  fetchLoyaltyNudges,
   fetchLoyaltyRedemptions,
   fetchLoyaltyRewards,
   fetchReferralConversions
@@ -36,6 +38,7 @@ export default async function LoyaltyHubPage() {
           referrals={buildBypassConversions()}
           rewards={buildBypassRewards()}
           nextActions={buildBypassNextActions()}
+          nudges={buildBypassNudges()}
         />
       );
     }
@@ -43,13 +46,14 @@ export default async function LoyaltyHubPage() {
     throw new Error("Loyalty hub requires an authenticated user.");
   }
 
-  const [member, rewards, ledger, redemptions, referrals, nextActions] = await Promise.all([
+  const [member, rewards, ledger, redemptions, referrals, nextActions, nudges] = await Promise.all([
     fetchLoyaltyMember(session.user.id),
     fetchLoyaltyRewards(),
     fetchLoyaltyLedger(),
     fetchLoyaltyRedemptions(),
     fetchReferralConversions({ statuses: ["converted", "sent", "cancelled", "expired"] }),
-    fetchCheckoutNextActions(session.user.id)
+    fetchCheckoutNextActions(session.user.id),
+    fetchLoyaltyNudges()
   ]);
 
   return (
@@ -60,6 +64,7 @@ export default async function LoyaltyHubPage() {
       referrals={referrals}
       rewards={rewards}
       nextActions={nextActions}
+      nudges={nudges}
     />
   );
 }

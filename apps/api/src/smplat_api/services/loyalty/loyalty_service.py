@@ -21,6 +21,9 @@ from smplat_api.models.loyalty import (
     LoyaltyCheckoutIntentStatus,
     LoyaltyLedgerEntry,
     LoyaltyLedgerEntryType,
+    LoyaltyNudge,
+    LoyaltyNudgeStatus,
+    LoyaltyNudgeType,
     LoyaltyMember,
     LoyaltyPointExpiration,
     LoyaltyPointExpirationStatus,
@@ -36,6 +39,36 @@ from smplat_api.services.notifications import NotificationService
 
 
 CHECKOUT_INTENT_DEFAULT_TTL = timedelta(days=14)
+NUDGE_REFRESH_WINDOW = timedelta(hours=6)
+NUDGE_NOTIFICATION_COOLDOWN = timedelta(hours=12)
+NUDGE_EXPIRING_POINTS_WINDOW = timedelta(days=7)
+NUDGE_REDEMPTION_STALLED_WINDOW = timedelta(days=3)
+
+
+@dataclass
+class LoyaltyNudgeCard:
+    """Serializable representation of loyalty nudge cards."""
+
+    id: UUID
+    nudge_type: LoyaltyNudgeType
+    headline: str
+    body: str
+    cta_label: Optional[str]
+    cta_href: Optional[str]
+    expires_at: Optional[datetime]
+    priority: int
+    metadata: dict[str, Any]
+
+
+@dataclass
+class _NudgeSignal:
+    """Internal representation of a nudge-worthy signal."""
+
+    nudge_type: LoyaltyNudgeType
+    source_id: str
+    payload: dict[str, Any]
+    expires_at: Optional[datetime]
+    priority: int = 0
 
 
 @dataclass
@@ -406,6 +439,391 @@ class LoyaltyService:
             "converted_points": converted_points,
             "last_activity": last_activity,
         }
+
+    async def list_member_nudges(
+        self,
+        member: LoyaltyMember,
+        *,
+        now: datetime | None = None,
+    ) -> list[LoyaltyNudgeCard]:
+        """Return active loyalty nudges for a member."""
+
+        await self._sync_member_nudges(member, now=now)
+
+        stmt = (
+            select(LoyaltyNudge)
+            .where(
+                LoyaltyNudge.member_id == member.id,
+                LoyaltyNudge.status == LoyaltyNudgeStatus.ACTIVE,
+            )
+            .order_by(LoyaltyNudge.priority.desc(), LoyaltyNudge.created_at.asc())
+        )
+        result = await self._db.execute(stmt)
+        nudges = list(result.scalars().all())
+
+        cards: list[LoyaltyNudgeCard] = []
+        for nudge in nudges:
+            payload = dict(nudge.payload_json or {})
+            metadata = payload.get("metadata") or {}
+            headline = str(payload.get("headline") or "")
+            body = str(payload.get("body") or "")
+            cta_label = payload.get("ctaLabel")
+            cta_href = payload.get("ctaHref")
+            cards.append(
+                LoyaltyNudgeCard(
+                    id=nudge.id,
+                    nudge_type=nudge.nudge_type,
+                    headline=headline,
+                    body=body,
+                    cta_label=cta_label,
+                    cta_href=cta_href,
+                    expires_at=nudge.expires_at,
+                    priority=nudge.priority or 0,
+                    metadata=metadata,
+                )
+            )
+
+        cards.sort(
+            key=lambda card: (
+                -(card.priority or 0),
+                card.expires_at or datetime.max.replace(tzinfo=timezone.utc),
+                str(card.id),
+            )
+        )
+        return cards
+
+    async def update_member_nudge_status(
+        self,
+        member: LoyaltyMember,
+        nudge_id: UUID,
+        *,
+        status: LoyaltyNudgeStatus,
+        now: datetime | None = None,
+    ) -> LoyaltyNudge | None:
+        """Update a nudge lifecycle state for a member."""
+
+        stmt = select(LoyaltyNudge).where(
+            LoyaltyNudge.id == nudge_id,
+            LoyaltyNudge.member_id == member.id,
+        )
+        result = await self._db.execute(stmt)
+        nudge = result.scalar_one_or_none()
+        if nudge is None:
+            return None
+
+        timestamp = now or datetime.now(timezone.utc)
+
+        if status == LoyaltyNudgeStatus.ACKNOWLEDGED:
+            nudge.status = LoyaltyNudgeStatus.ACKNOWLEDGED
+            nudge.acknowledged_at = timestamp
+        elif status == LoyaltyNudgeStatus.DISMISSED:
+            nudge.status = LoyaltyNudgeStatus.DISMISSED
+            nudge.dismissed_at = timestamp
+        elif status == LoyaltyNudgeStatus.ACTIVE:
+            nudge.status = LoyaltyNudgeStatus.ACTIVE
+            nudge.dismissed_at = None
+            nudge.acknowledged_at = None
+        else:
+            nudge.status = status
+
+        await self._db.flush()
+        return nudge
+
+    async def aggregate_nudge_candidates(
+        self,
+        *,
+        limit: int = 250,
+        now: datetime | None = None,
+    ) -> dict[UUID, list[LoyaltyNudgeCard]]:
+        """Aggregate nudges for members with actionable signals."""
+
+        now = now or datetime.now(timezone.utc)
+        candidate_member_ids: set[UUID] = set()
+
+        expiring_stmt = (
+            select(LoyaltyPointExpiration.member_id)
+            .where(
+                LoyaltyPointExpiration.expires_at <= now + NUDGE_EXPIRING_POINTS_WINDOW,
+                LoyaltyPointExpiration.expires_at >= now,
+                LoyaltyPointExpiration.status == LoyaltyPointExpirationStatus.SCHEDULED,
+            )
+            .limit(limit)
+        )
+        expiring_result = await self._db.execute(expiring_stmt)
+        candidate_member_ids.update(expiring_result.scalars().all())
+
+        intent_stmt = (
+            select(LoyaltyCheckoutIntent.member_id)
+            .where(
+                LoyaltyCheckoutIntent.status == LoyaltyCheckoutIntentStatus.PENDING,
+            )
+            .limit(limit)
+        )
+        intent_result = await self._db.execute(intent_stmt)
+        candidate_member_ids.update(intent_result.scalars().all())
+
+        stalled_stmt = (
+            select(LoyaltyRedemption.member_id)
+            .where(
+                LoyaltyRedemption.status == LoyaltyRedemptionStatus.REQUESTED,
+                LoyaltyRedemption.requested_at <= now - NUDGE_REDEMPTION_STALLED_WINDOW,
+            )
+            .limit(limit)
+        )
+        stalled_result = await self._db.execute(stalled_stmt)
+        candidate_member_ids.update(stalled_result.scalars().all())
+
+        if not candidate_member_ids:
+            return {}
+
+        stmt = select(LoyaltyMember).where(LoyaltyMember.id.in_(list(candidate_member_ids)))
+        result = await self._db.execute(stmt)
+        members = list(result.scalars().all())
+
+        aggregated: dict[UUID, list[LoyaltyNudgeCard]] = {}
+        for member_row in members:
+            cards = await self.list_member_nudges(member_row, now=now)
+            if cards:
+                aggregated[member_row.id] = cards
+
+        return aggregated
+
+    async def collect_nudge_dispatch_batch(
+        self,
+        *,
+        limit: int = 100,
+        now: datetime | None = None,
+    ) -> list[LoyaltyNudge]:
+        """Return nudges ready for outbound notifications."""
+
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - NUDGE_NOTIFICATION_COOLDOWN
+        stmt = (
+            select(LoyaltyNudge)
+            .options(selectinload(LoyaltyNudge.member))
+            .where(
+                LoyaltyNudge.status == LoyaltyNudgeStatus.ACTIVE,
+                or_(LoyaltyNudge.expires_at.is_(None), LoyaltyNudge.expires_at > now),
+                or_(
+                    LoyaltyNudge.last_triggered_at.is_(None),
+                    LoyaltyNudge.last_triggered_at <= cutoff,
+                ),
+            )
+            .order_by(LoyaltyNudge.priority.desc(), LoyaltyNudge.updated_at.desc())
+            .limit(limit)
+        )
+        result = await self._db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def mark_nudges_triggered(
+        self,
+        nudges: Sequence[LoyaltyNudge],
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Record the latest trigger time for dispatched nudges."""
+
+        timestamp = now or datetime.now(timezone.utc)
+        for nudge in nudges:
+            nudge.last_triggered_at = timestamp
+        await self._db.flush()
+
+    async def _sync_member_nudges(
+        self,
+        member: LoyaltyMember,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Ensure persisted nudges reflect current loyalty signals."""
+
+        current_time = now or datetime.now(timezone.utc)
+        signals = await self._build_nudge_signals(member, now=current_time)
+
+        stmt = select(LoyaltyNudge).where(LoyaltyNudge.member_id == member.id)
+        result = await self._db.execute(stmt)
+        existing = list(result.scalars().all())
+        existing_by_key = {
+            (nudge.nudge_type, nudge.source_id): nudge for nudge in existing
+        }
+
+        seen_keys: set[tuple[LoyaltyNudgeType, str]] = set()
+        for signal in signals:
+            key = (signal.nudge_type, signal.source_id)
+            seen_keys.add(key)
+            payload = signal.payload
+            nudge = existing_by_key.get(key)
+            if nudge is None:
+                nudge = LoyaltyNudge(
+                    member_id=member.id,
+                    nudge_type=signal.nudge_type,
+                    source_id=signal.source_id,
+                    payload_json=payload,
+                    priority=signal.priority,
+                    expires_at=signal.expires_at,
+                )
+                self._db.add(nudge)
+                existing_by_key[key] = nudge
+                continue
+
+            if nudge.status != LoyaltyNudgeStatus.DISMISSED:
+                nudge.status = LoyaltyNudgeStatus.ACTIVE
+                nudge.payload_json = payload
+                nudge.priority = signal.priority
+                nudge.expires_at = signal.expires_at
+
+        for nudge in existing:
+            key = (nudge.nudge_type, nudge.source_id)
+            if key in seen_keys:
+                continue
+            if nudge.status not in {LoyaltyNudgeStatus.DISMISSED, LoyaltyNudgeStatus.EXPIRED}:
+                nudge.status = LoyaltyNudgeStatus.EXPIRED
+                nudge.expires_at = nudge.expires_at or current_time
+
+        await self._db.flush()
+
+    async def _build_nudge_signals(
+        self,
+        member: LoyaltyMember,
+        *,
+        now: datetime,
+    ) -> list[_NudgeSignal]:
+        """Inspect loyalty signals and produce nudge candidates."""
+
+        signals: list[_NudgeSignal] = []
+
+        exp_stmt = (
+            select(LoyaltyPointExpiration)
+            .where(
+                LoyaltyPointExpiration.member_id == member.id,
+                LoyaltyPointExpiration.status == LoyaltyPointExpirationStatus.SCHEDULED,
+                LoyaltyPointExpiration.expires_at >= now,
+                LoyaltyPointExpiration.expires_at <= now + NUDGE_EXPIRING_POINTS_WINDOW,
+            )
+            .order_by(LoyaltyPointExpiration.expires_at.asc())
+        )
+        exp_result = await self._db.execute(exp_stmt)
+        for expiration in exp_result.scalars().all():
+            points = Decimal(expiration.points or 0)
+            consumed = Decimal(expiration.consumed_points or 0)
+            remaining = points - consumed
+            if remaining <= 0:
+                continue
+
+            headline = "Points expiring soon"
+            body = (
+                f"{int(remaining)} points will expire on {expiration.expires_at.date().isoformat()}."
+            )
+            payload = {
+                "headline": headline,
+                "body": body,
+                "ctaLabel": "Redeem rewards",
+                "ctaHref": "/account/loyalty",
+                "metadata": {
+                    "pointsRemaining": float(remaining),
+                    "expirationId": str(expiration.id),
+                    "expiresAt": expiration.expires_at.isoformat(),
+                },
+            }
+            signals.append(
+                _NudgeSignal(
+                    nudge_type=LoyaltyNudgeType.EXPIRING_POINTS,
+                    source_id=str(expiration.id),
+                    payload=payload,
+                    expires_at=expiration.expires_at,
+                    priority=20,
+                )
+            )
+
+        intent_stmt = (
+            select(LoyaltyCheckoutIntent)
+            .where(
+                LoyaltyCheckoutIntent.member_id == member.id,
+                LoyaltyCheckoutIntent.status == LoyaltyCheckoutIntentStatus.PENDING,
+                or_(
+                    LoyaltyCheckoutIntent.expires_at.is_(None),
+                    LoyaltyCheckoutIntent.expires_at >= now,
+                ),
+            )
+            .order_by(LoyaltyCheckoutIntent.created_at.desc())
+        )
+        intent_result = await self._db.execute(intent_stmt)
+        for intent in intent_result.scalars().all():
+            metadata = intent.metadata_json or {}
+            reward_name = metadata.get("rewardName") or metadata.get("reward_slug")
+            channel = intent.channel or "checkout"
+            headline = "Complete your redemption"
+            if reward_name:
+                body = f"Finish redeeming {reward_name} to secure your reward."
+            else:
+                body = "You have a pending checkout intent awaiting completion."
+
+            payload = {
+                "headline": headline,
+                "body": body,
+                "ctaLabel": "Resume checkout",
+                "ctaHref": "/checkout",
+                "metadata": {
+                    "intentId": str(intent.id),
+                    "channel": channel,
+                    "expiresAt": intent.expires_at.isoformat() if intent.expires_at else None,
+                },
+            }
+            signals.append(
+                _NudgeSignal(
+                    nudge_type=LoyaltyNudgeType.CHECKOUT_REMINDER,
+                    source_id=str(intent.id),
+                    payload=payload,
+                    expires_at=intent.expires_at,
+                    priority=10,
+                )
+            )
+
+        redemption_stmt = (
+            select(LoyaltyRedemption)
+            .options(selectinload(LoyaltyRedemption.reward))
+            .where(
+                LoyaltyRedemption.member_id == member.id,
+                LoyaltyRedemption.status == LoyaltyRedemptionStatus.REQUESTED,
+                LoyaltyRedemption.requested_at <= now - NUDGE_REDEMPTION_STALLED_WINDOW,
+            )
+            .order_by(LoyaltyRedemption.requested_at.asc())
+        )
+        redemption_result = await self._db.execute(redemption_stmt)
+        for redemption in redemption_result.scalars().all():
+            reward_name = redemption.reward.name if redemption.reward else None
+            headline = "We’re reviewing your redemption"
+            requested_at = redemption.requested_at
+            if requested_at and requested_at.tzinfo is None:
+                requested_at = requested_at.replace(tzinfo=timezone.utc)
+            age_days = max((now - requested_at).days, 1) if requested_at else 1
+            if reward_name:
+                body = (
+                    f"Your request for {reward_name} has been pending for {age_days} day(s)."
+                )
+            else:
+                body = f"A redemption request has been pending for {age_days} day(s)."
+
+            payload = {
+                "headline": headline,
+                "body": body,
+                "ctaLabel": "Contact support",
+                "ctaHref": "/support",
+                "metadata": {
+                    "redemptionId": str(redemption.id),
+                    "requestedAt": redemption.requested_at.isoformat(),
+                },
+            }
+            signals.append(
+                _NudgeSignal(
+                    nudge_type=LoyaltyNudgeType.REDEMPTION_FOLLOW_UP,
+                    source_id=str(redemption.id),
+                    payload=payload,
+                    expires_at=redemption.requested_at + timedelta(days=14),
+                    priority=5,
+                )
+            )
+
+        return signals
 
     async def count_open_referrals(self, member: LoyaltyMember) -> int:
         """Count active (draft or sent) referrals for abuse controls."""

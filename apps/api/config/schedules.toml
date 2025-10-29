@@ -30,3 +30,12 @@ max_attempts = 3
 base_backoff_seconds = 30
 max_backoff_seconds = 300
 jitter_seconds = 10
+
+[jobs.loyalty_nudge_aggregation]
+id = "loyalty-nudge-aggregation"
+task = "smplat_api.jobs.loyalty.nudges.aggregate_loyalty_nudges"
+cron = "*/10 * * * *"
+max_attempts = 3
+base_backoff_seconds = 30
+max_backoff_seconds = 300
+jitter_seconds = 10

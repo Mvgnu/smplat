@@ -207,6 +207,70 @@ class LoyaltyCheckoutIntent(Base):
     redemption = relationship("LoyaltyRedemption")
 
 
+class LoyaltyNudgeType(str, Enum):
+    """Types of loyalty nudges surfaced to members."""
+
+    EXPIRING_POINTS = "expiring_points"
+    CHECKOUT_REMINDER = "checkout_reminder"
+    REDEMPTION_FOLLOW_UP = "redemption_follow_up"
+
+
+class LoyaltyNudgeStatus(str, Enum):
+    """Lifecycle status for member nudges."""
+
+    ACTIVE = "active"
+    ACKNOWLEDGED = "acknowledged"
+    DISMISSED = "dismissed"
+    EXPIRED = "expired"
+
+
+class LoyaltyNudge(Base):
+    """Persisted loyalty nudges for proactive outreach."""
+
+    __tablename__ = "loyalty_nudges"
+    __table_args__ = (
+        UniqueConstraint(
+            "member_id",
+            "nudge_type",
+            "source_id",
+            name="uq_loyalty_nudges_member_type_source",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    member_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("loyalty_members.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    nudge_type = Column(
+        SqlEnum(LoyaltyNudgeType, name="loyalty_nudge_type"),
+        nullable=False,
+    )
+    source_id = Column(String, nullable=False)
+    status = Column(
+        SqlEnum(LoyaltyNudgeStatus, name="loyalty_nudge_status"),
+        nullable=False,
+        default=LoyaltyNudgeStatus.ACTIVE,
+        server_default=LoyaltyNudgeStatus.ACTIVE.value,
+    )
+    priority = Column(Integer, nullable=False, default=0, server_default="0")
+    payload_json = Column("payload", JSON, nullable=False, default=dict)
+    last_triggered_at = Column(DateTime(timezone=True), nullable=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    dismissed_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    member = relationship("LoyaltyMember")
+
+
 class LoyaltyReward(Base):
     """Redeemable rewards for loyalty members."""
 

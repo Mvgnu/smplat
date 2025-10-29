@@ -119,3 +119,36 @@ export async function cancelReferralInvite(
     throw new Error("Failed to cancel referral invite");
   }
 }
+
+export type LoyaltyNudgeStatus = "active" | "acknowledged" | "dismissed";
+
+export async function updateNudgeStatus(
+  nudgeId: string,
+  status: LoyaltyNudgeStatus
+): Promise<void> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    if (allowBypass) {
+      return;
+    }
+    throw new Error("Authentication is required to manage nudges.");
+  }
+
+  if (allowBypass) {
+    return;
+  }
+
+  const response = await fetch(`${apiBase}/api/v1/loyalty/nudges/${nudgeId}/status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(apiKeyHeader ? { "X-API-Key": apiKeyHeader } : {})
+    },
+    body: JSON.stringify({ status })
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Failed to update loyalty nudge");
+  }
+}
