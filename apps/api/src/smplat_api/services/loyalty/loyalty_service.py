@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
 
 from loguru import logger
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -227,6 +228,178 @@ class LoyaltyService:
         )
         result = await self._db.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_member_ledger_entries(
+        self,
+        member: LoyaltyMember,
+        *,
+        limit: int = 25,
+        cursor: Tuple[datetime, UUID] | None = None,
+        entry_types: Sequence[LoyaltyLedgerEntryType] | None = None,
+    ) -> tuple[list[LoyaltyLedgerEntry], Tuple[datetime, UUID] | None]:
+        """Return a paginated slice of ledger entries for a member."""
+
+        bounded_limit = max(1, min(limit, 100))
+        stmt = (
+            select(LoyaltyLedgerEntry)
+            .where(LoyaltyLedgerEntry.member_id == member.id)
+            .order_by(LoyaltyLedgerEntry.occurred_at.desc(), LoyaltyLedgerEntry.id.desc())
+        )
+        if entry_types:
+            stmt = stmt.where(LoyaltyLedgerEntry.entry_type.in_(list(entry_types)))
+        if cursor:
+            cursor_time, cursor_id = cursor
+            stmt = stmt.where(
+                or_(
+                    LoyaltyLedgerEntry.occurred_at < cursor_time,
+                    and_(
+                        LoyaltyLedgerEntry.occurred_at == cursor_time,
+                        LoyaltyLedgerEntry.id < cursor_id,
+                    ),
+                )
+            )
+
+        stmt = stmt.limit(bounded_limit + 1)
+        result = await self._db.execute(stmt)
+        rows = list(result.scalars().all())
+        has_more = len(rows) > bounded_limit
+        entries = rows[:bounded_limit]
+        next_cursor: Tuple[datetime, UUID] | None = None
+        if has_more and entries:
+            tail = entries[-1]
+            next_cursor = (tail.occurred_at, tail.id)
+
+        return entries, next_cursor
+
+    async def list_member_redemptions(
+        self,
+        member: LoyaltyMember,
+        *,
+        limit: int = 25,
+        cursor: Tuple[datetime, UUID] | None = None,
+        statuses: Sequence[LoyaltyRedemptionStatus] | None = None,
+    ) -> tuple[list[LoyaltyRedemption], Tuple[datetime, UUID] | None]:
+        """Return redemption records for a member ordered by requested time."""
+
+        bounded_limit = max(1, min(limit, 100))
+        stmt = (
+            select(LoyaltyRedemption)
+            .where(LoyaltyRedemption.member_id == member.id)
+            .order_by(LoyaltyRedemption.requested_at.desc(), LoyaltyRedemption.id.desc())
+        )
+        if statuses:
+            stmt = stmt.where(LoyaltyRedemption.status.in_(list(statuses)))
+        if cursor:
+            cursor_time, cursor_id = cursor
+            stmt = stmt.where(
+                or_(
+                    LoyaltyRedemption.requested_at < cursor_time,
+                    and_(
+                        LoyaltyRedemption.requested_at == cursor_time,
+                        LoyaltyRedemption.id < cursor_id,
+                    ),
+                )
+            )
+
+        stmt = stmt.limit(bounded_limit + 1)
+        result = await self._db.execute(stmt)
+        rows = list(result.scalars().all())
+        has_more = len(rows) > bounded_limit
+        redemptions = rows[:bounded_limit]
+        next_cursor: Tuple[datetime, UUID] | None = None
+        if has_more and redemptions:
+            tail = redemptions[-1]
+            next_cursor = (tail.requested_at, tail.id)
+
+        return redemptions, next_cursor
+
+    async def count_member_redemptions(
+        self,
+        member: LoyaltyMember,
+        *,
+        statuses: Sequence[LoyaltyRedemptionStatus] | None = None,
+    ) -> int:
+        """Count redemptions for a member filtered by status."""
+
+        stmt = select(func.count(LoyaltyRedemption.id)).where(
+            LoyaltyRedemption.member_id == member.id
+        )
+        if statuses:
+            stmt = stmt.where(LoyaltyRedemption.status.in_(list(statuses)))
+        result = await self._db.execute(stmt)
+        return int(result.scalar_one() or 0)
+
+    async def list_member_referral_conversions(
+        self,
+        member: LoyaltyMember,
+        *,
+        limit: int = 25,
+        cursor: Tuple[datetime, UUID] | None = None,
+        statuses: Sequence[ReferralStatus] | None = None,
+    ) -> tuple[list[ReferralInvite], Tuple[datetime, UUID] | None]:
+        """Return referral invites filtered by lifecycle for dashboards."""
+
+        bounded_limit = max(1, min(limit, 100))
+        stmt = (
+            select(ReferralInvite)
+            .where(ReferralInvite.referrer_id == member.id)
+            .order_by(ReferralInvite.created_at.desc(), ReferralInvite.id.desc())
+        )
+        if statuses:
+            stmt = stmt.where(ReferralInvite.status.in_(list(statuses)))
+        if cursor:
+            cursor_time, cursor_id = cursor
+            stmt = stmt.where(
+                or_(
+                    ReferralInvite.created_at < cursor_time,
+                    and_(
+                        ReferralInvite.created_at == cursor_time,
+                        ReferralInvite.id < cursor_id,
+                    ),
+                )
+            )
+
+        stmt = stmt.limit(bounded_limit + 1)
+        result = await self._db.execute(stmt)
+        rows = list(result.scalars().all())
+        has_more = len(rows) > bounded_limit
+        invites = rows[:bounded_limit]
+        next_cursor: Tuple[datetime, UUID] | None = None
+        if has_more and invites:
+            tail = invites[-1]
+            next_cursor = (tail.created_at, tail.id)
+
+        return invites, next_cursor
+
+    async def referral_conversion_summary(self, member: LoyaltyMember) -> dict[str, Any]:
+        """Aggregate referral conversion counts and earned rewards."""
+
+        stmt = (
+            select(
+                ReferralInvite.status,
+                func.count(ReferralInvite.id),
+                func.sum(ReferralInvite.reward_points),
+                func.max(ReferralInvite.updated_at),
+            )
+            .where(ReferralInvite.referrer_id == member.id)
+            .group_by(ReferralInvite.status)
+        )
+        result = await self._db.execute(stmt)
+        status_counts: dict[str, int] = {}
+        converted_points = Decimal("0")
+        last_activity: datetime | None = None
+        for status, count, reward_sum, updated_at in result.all():
+            status_counts[status.value if isinstance(status, ReferralStatus) else status] = int(count or 0)
+            if status == ReferralStatus.CONVERTED:
+                converted_points = Decimal(reward_sum or 0)
+            if updated_at and (last_activity is None or updated_at > last_activity):
+                last_activity = updated_at
+
+        return {
+            "status_counts": status_counts,
+            "converted_points": converted_points,
+            "last_activity": last_activity,
+        }
 
     async def count_open_referrals(self, member: LoyaltyMember) -> int:
         """Count active (draft or sent) referrals for abuse controls."""
@@ -767,3 +940,18 @@ class LoyaltyService:
                 )
             )
         return windows
+
+
+def encode_time_uuid_cursor(timestamp: datetime, identifier: UUID) -> str:
+    """Encode pagination cursor for chronological queries."""
+
+    payload = f"{timestamp.isoformat()}|{identifier}".encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("utf-8")
+
+
+def decode_time_uuid_cursor(cursor: str) -> Tuple[datetime, UUID]:
+    """Decode pagination cursor into datetime and UUID parts."""
+
+    raw = base64.urlsafe_b64decode(cursor.encode("utf-8")).decode("utf-8")
+    timestamp_str, identifier_str = raw.split("|", 1)
+    return datetime.fromisoformat(timestamp_str), UUID(identifier_str)

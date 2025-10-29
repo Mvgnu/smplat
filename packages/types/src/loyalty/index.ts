@@ -71,3 +71,42 @@ export interface LoyaltyRedemption {
   cancelledAt?: string | null;
   failureReason?: string | null;
 }
+
+export interface LoyaltyLedgerEntry {
+  id: string;
+  occurredAt: string;
+  entryType: string;
+  amount: number;
+  description?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface LoyaltyLedgerPage {
+  entries: LoyaltyLedgerEntry[];
+  nextCursor?: string | null;
+}
+
+export interface LoyaltyRedemptionPage {
+  redemptions: LoyaltyRedemption[];
+  nextCursor?: string | null;
+  pendingCount: number;
+}
+
+export interface ReferralConversion {
+  id: string;
+  code: string;
+  status: string;
+  rewardPoints: number;
+  inviteeEmail?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+}
+
+export interface ReferralConversionPage {
+  invites: ReferralConversion[];
+  nextCursor?: string | null;
+  statusCounts: Record<string, number>;
+  convertedPoints: number;
+  lastActivity?: string | null;
+}
