@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, List, Optional
 from uuid import UUID
@@ -14,13 +14,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from smplat_api.api.dependencies.security import require_checkout_api_key
+from smplat_api.api.dependencies.session import require_member_session
+from smplat_api.core.settings import settings
 from smplat_api.db.session import get_session
-from smplat_api.models.loyalty import LoyaltyRedemption
+from smplat_api.models.loyalty import LoyaltyRedemption, ReferralInvite, ReferralStatus
 from smplat_api.models.user import User
 from smplat_api.services.loyalty import LoyaltyService
 
 
 router = APIRouter(prefix="/loyalty", tags=["loyalty"])
+
+
+MEMBER_REWARD_POINTS = Decimal(str(settings.referral_member_reward_points))
+MAX_ACTIVE_MEMBER_REFERRALS = settings.referral_member_max_active_invites
+MEMBER_REFERRAL_COOLDOWN_SECONDS = settings.referral_member_invite_cooldown_seconds
 
 
 class LoyaltyTierResponse(BaseModel):
@@ -67,6 +74,24 @@ class ReferralIssueResponse(BaseModel):
     status: str
     rewardPoints: float
     inviteeEmail: Optional[str]
+    createdAt: datetime
+    expiresAt: Optional[datetime]
+    completedAt: Optional[datetime]
+
+
+class ReferralCreateRequest(BaseModel):
+    inviteeEmail: Optional[str] = Field(
+        None, description="Optional email address for the invitee"
+    )
+    metadata: Optional[dict[str, Any]] = Field(
+        None, description="Additional metadata to store on the invite"
+    )
+
+
+class ReferralCancelRequest(BaseModel):
+    reason: Optional[str] = Field(
+        None, description="Reason provided by the member for cancellation"
+    )
 
 
 class ReferralCompleteRequest(BaseModel):
@@ -180,6 +205,94 @@ async def get_loyalty_member(
     )
 
 
+@router.get("/referrals", response_model=List[ReferralIssueResponse])
+async def list_member_referrals(
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> List[ReferralIssueResponse]:
+    """List referral invites for the authenticated member."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+    referrals = await service.list_member_referrals(member)
+    return [_serialize_referral(referral) for referral in referrals]
+
+
+@router.post(
+    "/referrals",
+    response_model=ReferralIssueResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_member_referral(
+    payload: ReferralCreateRequest,
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> ReferralIssueResponse:
+    """Create a referral invite for the authenticated member with abuse controls."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+
+    open_count = await service.count_open_referrals(member)
+    if open_count >= MAX_ACTIVE_MEMBER_REFERRALS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Referral invite limit reached",
+        )
+
+    last_referral = await service.latest_referral(member)
+    if (
+        last_referral
+        and last_referral.created_at
+        and (
+            datetime.now(timezone.utc) - last_referral.created_at
+        ).total_seconds()
+        < MEMBER_REFERRAL_COOLDOWN_SECONDS
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Please wait before sending another invite",
+        )
+
+    reward_points = MEMBER_REWARD_POINTS
+    referral = await service.issue_referral(
+        member,
+        invitee_email=payload.inviteeEmail,
+        reward_points=reward_points,
+        metadata=payload.metadata,
+        status=ReferralStatus.SENT,
+    )
+    await db.commit()
+    await db.refresh(referral)
+    return _serialize_referral(referral)
+
+
+@router.post(
+    "/referrals/{referral_id}/cancel",
+    response_model=ReferralIssueResponse,
+)
+async def cancel_member_referral(
+    referral_id: UUID,
+    payload: ReferralCancelRequest | None = None,
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> ReferralIssueResponse:
+    """Cancel a referral invite for the authenticated member."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+    referral = await service.get_referral_for_member(member, referral_id)
+    if referral is None:
+        raise HTTPException(status_code=404, detail="Referral invite not found")
+
+    referral = await service.cancel_referral(
+        referral, reason=payload.reason if payload else None
+    )
+    await db.commit()
+    await db.refresh(referral)
+    return _serialize_referral(referral)
+
+
 @router.post(
     "/members/{user_id}/referrals",
     response_model=ReferralIssueResponse,
@@ -203,13 +316,8 @@ async def create_referral_invite(
         metadata=request.metadata,
     )
     await db.commit()
-    return ReferralIssueResponse(
-        id=referral.id,
-        code=referral.code,
-        status=referral.status.value,
-        rewardPoints=float(referral.reward_points or 0),
-        inviteeEmail=referral.invitee_email,
-    )
+    await db.refresh(referral)
+    return _serialize_referral(referral)
 
 
 @router.post(
@@ -236,13 +344,8 @@ async def complete_referral(
     if result is None:
         raise HTTPException(status_code=404, detail="Referral code not found")
     await db.commit()
-    return ReferralIssueResponse(
-        id=result.id,
-        code=result.code,
-        status=result.status.value,
-        rewardPoints=float(result.reward_points or 0),
-        inviteeEmail=result.invitee_email,
-    )
+    await db.refresh(result)
+    return _serialize_referral(result)
 
 
 @router.get("/rewards", response_model=List[LoyaltyRewardResponse])
@@ -264,6 +367,19 @@ async def list_loyalty_rewards(
         )
         for reward in rewards
     ]
+
+
+def _serialize_referral(referral: ReferralInvite) -> ReferralIssueResponse:
+    return ReferralIssueResponse(
+        id=referral.id,
+        code=referral.code,
+        status=referral.status.value,
+        rewardPoints=float(referral.reward_points or 0),
+        inviteeEmail=referral.invitee_email,
+        createdAt=referral.created_at,
+        expiresAt=referral.expires_at,
+        completedAt=referral.completed_at,
+    )
 
 
 def _serialize_redemption(redemption: LoyaltyRedemption) -> RedemptionResponse:

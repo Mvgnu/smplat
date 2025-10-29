@@ -9,7 +9,7 @@ from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -199,6 +199,7 @@ class LoyaltyService:
         invitee_email: str | None,
         reward_points: Decimal,
         metadata: dict[str, Any] | None = None,
+        status: ReferralStatus = ReferralStatus.SENT,
     ) -> ReferralInvite:
         """Create a referral invite for a member."""
 
@@ -209,10 +210,78 @@ class LoyaltyService:
             invitee_email=invitee_email,
             reward_points=reward_points,
             metadata_json=metadata or {},
+            status=status,
         )
         self._db.add(referral)
         await self._db.flush()
         logger.info("Issued referral invite", code=code, member_id=str(member.id))
+        return referral
+
+    async def list_member_referrals(self, member: LoyaltyMember) -> list[ReferralInvite]:
+        """Return referral invites for the provided member ordered by recency."""
+
+        stmt = (
+            select(ReferralInvite)
+            .where(ReferralInvite.referrer_id == member.id)
+            .order_by(ReferralInvite.created_at.desc())
+        )
+        result = await self._db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_open_referrals(self, member: LoyaltyMember) -> int:
+        """Count active (draft or sent) referrals for abuse controls."""
+
+        stmt = (
+            select(func.count(ReferralInvite.id))
+            .where(ReferralInvite.referrer_id == member.id)
+            .where(ReferralInvite.status.in_([ReferralStatus.DRAFT, ReferralStatus.SENT]))
+        )
+        result = await self._db.execute(stmt)
+        return int(result.scalar_one() or 0)
+
+    async def latest_referral(self, member: LoyaltyMember) -> ReferralInvite | None:
+        """Fetch the most recent referral invite for cooldown calculations."""
+
+        stmt = (
+            select(ReferralInvite)
+            .where(ReferralInvite.referrer_id == member.id)
+            .order_by(ReferralInvite.created_at.desc())
+            .limit(1)
+        )
+        result = await self._db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_referral_for_member(
+        self, member: LoyaltyMember, referral_id: UUID
+    ) -> ReferralInvite | None:
+        """Retrieve a referral invite ensuring it belongs to the member."""
+
+        stmt = (
+            select(ReferralInvite)
+            .where(ReferralInvite.id == referral_id)
+            .where(ReferralInvite.referrer_id == member.id)
+        )
+        result = await self._db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def cancel_referral(
+        self,
+        referral: ReferralInvite,
+        *,
+        reason: str | None = None,
+    ) -> ReferralInvite:
+        """Cancel an active referral invite."""
+
+        if referral.status in {ReferralStatus.CONVERTED, ReferralStatus.CANCELLED}:
+            return referral
+
+        referral.status = ReferralStatus.CANCELLED
+        metadata = referral.metadata_json or {}
+        if reason:
+            metadata = {**metadata, "cancel_reason": reason}
+        referral.metadata_json = metadata
+        await self._db.flush()
+        logger.info("Cancelled referral invite", referral_id=str(referral.id))
         return referral
 
     async def complete_referral(

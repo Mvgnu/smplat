@@ -15,6 +15,7 @@ Standing up the platform requires coordinated delivery of database models, Alemb
 - 2025-05-11: Added Alembic migration, SQLAlchemy models, service layer, FastAPI endpoints, notification templates, and shared
   TypeScript contracts to establish MVP loyalty/referral flows with documentation support.
 - 2025-05-12: Delivered redemption + expiration engine (migrations, service orchestration, scheduler jobs, API contracts, tests, and runbook updates) to unlock actionable progression workflows.
+- 2025-05-13: Added session-aware referral endpoints with abuse controls, storefront referral hub, shared client contracts, and updated runbook guidance; Playwright coverage extended for invite throttling.
 
 ## Resolution Summary
 Pending.
