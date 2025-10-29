@@ -36,6 +36,7 @@ const metricPreviewStateOptions = [
 const metricReferenceFields = [
   {
     name: "metricId",
+    dbName: "metric_id",
     type: "select",
     label: "Metric",
     options: metricOptions,
@@ -45,6 +46,7 @@ const metricReferenceFields = [
   },
   {
     name: "metricSource",
+    dbName: "metric_src",
     type: "select",
     label: "Metric source",
     options: metricSourceOptions,
@@ -62,6 +64,7 @@ const metricReferenceFields = [
   },
   {
     name: "previewState",
+    dbName: "preview_state",
     type: "select",
     label: "Preview state",
     options: metricPreviewStateOptions,
@@ -81,6 +84,8 @@ const metricReferenceFields = [
 
 export const CheckoutTrustExperiences: CollectionConfig = {
   slug: "checkout-trust-experiences",
+  // Shorten underlying table name to avoid Postgres identifier length limits
+  dbName: "checkout_trust",
   admin: {
     useAsTitle: "name",
     defaultColumns: ["slug", "environment", "updatedAt"],
@@ -124,6 +129,8 @@ export const CheckoutTrustExperiences: CollectionConfig = {
     },
     {
       name: "assurancePoints",
+      // Shorter table name for array items
+      dbName: "assurance_pts",
       type: "array",
       label: "Assurance points",
       fields: [
@@ -147,6 +154,8 @@ export const CheckoutTrustExperiences: CollectionConfig = {
         },
         {
           name: "metric",
+          // Keep nested group concise
+          dbName: "metric",
           type: "group",
           fields: metricReferenceFields,
         },

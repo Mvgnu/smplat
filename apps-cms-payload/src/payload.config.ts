@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { postgresAdapter } from "@payloadcms/db-postgres";
 import { BlocksFeature, lexicalEditor } from "@payloadcms/richtext-lexical";
-import { buildConfig } from "payload";
+import { buildConfig, type CollectionSlug } from "payload";
 
 import { BlogPosts } from "@/collections/BlogPosts";
 import { CaseStudies } from "@/collections/CaseStudies";
@@ -26,10 +26,15 @@ dotenv.config({ path: path.resolve(dirname, "../../.env"), override: false });
 
 const DATABASE_URI = process.env.DATABASE_URI || "postgres://postgres:postgres@localhost:5432/smplat_payload";
 const WEB_ORIGIN = process.env.WEB_URL || "http://localhost:3000";
+const ADMIN_ORIGIN = process.env.PAYLOAD_URL || "http://localhost:3050";
 
 export default buildConfig({
   serverURL: process.env.PAYLOAD_URL || "http://localhost:3050",
   secret: process.env.PAYLOAD_SECRET || "smplat-dev-secret",
+  routes: {
+    admin: "/admin",
+    api: "/api",
+  },
   admin: {
     user: Users.slug,
     importMap: {
@@ -55,8 +60,8 @@ export default buildConfig({
     SiteSettings,
     CheckoutTrustExperiences,
   ],
-  cors: [WEB_ORIGIN],
-  csrf: [WEB_ORIGIN],
+  cors: [WEB_ORIGIN, ADMIN_ORIGIN],
+  csrf: [WEB_ORIGIN, ADMIN_ORIGIN],
   typescript: {
     outputFile: path.resolve(dirname, "../payload-types.ts")
   },
@@ -74,7 +79,7 @@ export default buildConfig({
     }
 
     const existing = await payload.find({
-      collection: Users.slug,
+      collection: Users.slug as CollectionSlug,
       where: {
         email: {
           equals: process.env.DEFAULT_ADMIN_EMAIL
@@ -85,7 +90,7 @@ export default buildConfig({
 
     if (existing.totalDocs === 0) {
       await payload.create({
-        collection: Users.slug,
+        collection: Users.slug as CollectionSlug,
         data: {
           email: process.env.DEFAULT_ADMIN_EMAIL,
           password: process.env.DEFAULT_ADMIN_PASSWORD,

@@ -1,3 +1,5 @@
+@import '@payloadcms/next/css';
+
 :root {
   color-scheme: light dark;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
