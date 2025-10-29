@@ -378,3 +378,103 @@ async def test_guardrail_job_runs_once(
             )
         ).scalar_one()
         assert status == CatalogBundleExperimentStatus.PAUSED
+
+
+@pytest.mark.asyncio
+async def test_guardrail_worker_handles_multiple_breaches(
+    app_with_db: tuple[object, async_sessionmaker[AsyncSession]]
+) -> None:
+    _, factory = app_with_db
+
+    async with factory() as session:
+        primary, attachment = await _seed_products(session)
+        control_slug, test_slug = await _seed_bundles(session, primary, attachment)
+
+        experiments: list[CatalogBundleExperiment] = []
+        variants: list[tuple[CatalogBundleExperimentVariant, CatalogBundleExperimentVariant]] = []
+        for suffix in ("one", "two"):
+            experiment = CatalogBundleExperiment(
+                slug=f"exp-multi-{suffix}",
+                name=f"Multi Experiment {suffix}",
+                description=None,
+                status=CatalogBundleExperimentStatus.RUNNING,
+                guardrail_config={"min_acceptance_rate": 0.1},
+                sample_size_guardrail=10,
+            )
+            control_variant = CatalogBundleExperimentVariant(
+                experiment=experiment,
+                key="control",
+                name="Control",
+                weight=50,
+                is_control=True,
+                bundle_slug=control_slug,
+                override_payload={"hero": "baseline"},
+            )
+            test_variant = CatalogBundleExperimentVariant(
+                experiment=experiment,
+                key="test",
+                name="Test",
+                weight=50,
+                is_control=False,
+                bundle_slug=test_slug,
+                override_payload={"hero": "variant"},
+            )
+            experiments.append(experiment)
+            variants.append((control_variant, test_variant))
+
+        session.add_all(experiments)
+        for control_variant, test_variant in variants:
+            session.add_all([control_variant, test_variant])
+        await session.commit()
+
+        now = dt.datetime.now(dt.timezone.utc)
+        metrics: list[CatalogBundleExperimentMetric] = []
+        for experiment, (control_variant, test_variant) in zip(experiments, variants, strict=True):
+            metrics.extend(
+                [
+                    CatalogBundleExperimentMetric(
+                        experiment_id=experiment.id,
+                        variant_id=control_variant.id,
+                        window_start=now.date(),
+                        lookback_days=30,
+                        acceptance_rate=Decimal("0.2500"),
+                        acceptance_count=25,
+                        sample_size=100,
+                        guardrail_breached=False,
+                        computed_at=now,
+                    ),
+                    CatalogBundleExperimentMetric(
+                        experiment_id=experiment.id,
+                        variant_id=test_variant.id,
+                        window_start=now.date(),
+                        lookback_days=30,
+                        acceptance_rate=Decimal("0.0200"),
+                        acceptance_count=2,
+                        sample_size=20,
+                        guardrail_breached=True,
+                        computed_at=now,
+                    ),
+                ]
+            )
+        session.add_all(metrics)
+        await session.commit()
+
+    notifier = StubNotifier()
+    worker = BundleExperimentGuardrailWorker(factory, notifier=notifier, interval_seconds=1)
+    summary = await worker.run_once()
+
+    assert summary == {"evaluated": 2, "paused": 2, "alerts": 2}
+    assert {alert.experiment_slug for alert in notifier.alerts} == {"exp-multi-one", "exp-multi-two"}
+
+    async with factory() as session:
+        statuses = (
+            await session.execute(
+                select(CatalogBundleExperiment.slug, CatalogBundleExperiment.status)
+                .where(CatalogBundleExperiment.slug.in_(["exp-multi-one", "exp-multi-two"]))
+                .order_by(CatalogBundleExperiment.slug)
+            )
+        ).all()
+        assert statuses == [
+            ("exp-multi-one", CatalogBundleExperimentStatus.PAUSED),
+            ("exp-multi-two", CatalogBundleExperimentStatus.PAUSED),
+        ]

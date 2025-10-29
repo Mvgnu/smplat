@@ -143,3 +143,57 @@ def test_load_job_definitions_parses_retry_fields(tmp_path: Path) -> None:
     assert job.backoff_multiplier == 3.0
     assert job.max_backoff_seconds == 30.0
     assert job.jitter_seconds == 1.5
+
+
+@pytest.mark.asyncio
+async def test_scheduler_tracks_consecutive_failures_and_resets(tmp_path: Path) -> None:
+    store = get_catalog_scheduler_store()
+    store.reset()
+
+    scheduler = CatalogJobScheduler(session_factory=lambda: None, config_path=tmp_path / "noop.toml")
+
+    run_count = 0
+
+    async def sometimes_failing_job(*, session_factory) -> None:  # pragma: no cover - exercised in tests
+        nonlocal run_count
+        run_count += 1
+        if run_count < 3:
+            raise RuntimeError("boom")
+
+    job = JobDefinition(
+        id="job-consecutive",
+        task="tests.sometimes_failing",
+        cron="* * * * *",
+        kwargs={},
+        max_attempts=1,
+        base_backoff_seconds=0.0,
+        backoff_multiplier=1.0,
+        max_backoff_seconds=0.0,
+        jitter_seconds=0.0,
+    )
+
+    runner = scheduler._wrap_callable(sometimes_failing_job, job)
+
+    # First two runs fail and should increment consecutive failure counters.
+    await runner()
+    await runner()
+
+    snapshot = store.snapshot()
+    job_snapshot = snapshot.jobs[job.id]
+    assert snapshot.totals["runs"] == 2
+    assert snapshot.totals["run_failures"] == 2
+    assert job_snapshot.totals["consecutive_failures"] == 2
+    assert job_snapshot.last_error == "boom"
+    assert job_snapshot.last_success_at is None
+
+    # Third run succeeds and should reset failure streak tracking.
+    await runner()
+
+    snapshot = store.snapshot()
+    job_snapshot = snapshot.jobs[job.id]
+    assert snapshot.totals["runs"] == 3
+    assert snapshot.totals["run_failures"] == 2
+    assert snapshot.totals["success"] == 1
+    assert job_snapshot.totals["consecutive_failures"] == 0
+    assert job_snapshot.last_error is None
+    assert job_snapshot.last_success_at is not None
