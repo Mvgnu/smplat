@@ -57,6 +57,8 @@ model Session {
   sessionToken String   @unique @map("session_token")
   userId       String   @map("user_id")
   expires      DateTime
+  roleSnapshot UserRole? @map("role_snapshot")
+  permissions  String[]  @default([]) @db.Text[]
   ipAddress    String?  @map("ip_address")
   userAgent    String?  @map("user_agent")
   createdAt    DateTime @default(now()) @map("created_at")

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
-import { auth } from "@/server/auth";
+import { requireRole } from "@/server/auth/policies";
+import { getOrCreateCsrfToken } from "@/server/security/csrf";
 import {
   allowAuthBypass,
   buildBypassConversions,
@@ -26,33 +27,36 @@ export const metadata: Metadata = {
 };
 
 export default async function LoyaltyHubPage() {
-  const session = await auth();
+  const { session } = await requireRole("member");
+  const csrfToken = getOrCreateCsrfToken();
 
-  if (!session?.user?.id) {
-    if (allowAuthBypass()) {
-      return (
-        <LoyaltyHubClient
-          ledger={buildBypassLedgerPage()}
-          member={buildBypassMember()}
-          redemptions={buildBypassRedemptions()}
-          referrals={buildBypassConversions()}
-          rewards={buildBypassRewards()}
-          nextActions={buildBypassNextActions()}
-          nudges={buildBypassNudges()}
-        />
-      );
-    }
+  if (allowAuthBypass()) {
+    return (
+      <LoyaltyHubClient
+        ledger={buildBypassLedgerPage()}
+        member={buildBypassMember()}
+        redemptions={buildBypassRedemptions()}
+        referrals={buildBypassConversions()}
+        rewards={buildBypassRewards()}
+        nextActions={buildBypassNextActions()}
+        nudges={buildBypassNudges()}
+        csrfToken={csrfToken}
+      />
+    );
+  }
 
+  const userId = session.user?.id;
+  if (!userId) {
     throw new Error("Loyalty hub requires an authenticated user.");
   }
 
   const [member, rewards, ledger, redemptions, referrals, nextActions, nudges] = await Promise.all([
-    fetchLoyaltyMember(session.user.id),
+    fetchLoyaltyMember(userId),
     fetchLoyaltyRewards(),
     fetchLoyaltyLedger(),
     fetchLoyaltyRedemptions(),
     fetchReferralConversions({ statuses: ["converted", "sent", "cancelled", "expired"] }),
-    fetchCheckoutNextActions(session.user.id),
+    fetchCheckoutNextActions(userId),
     fetchLoyaltyNudges()
   ]);
 
@@ -65,6 +69,7 @@ export default async function LoyaltyHubPage() {
       rewards={rewards}
       nextActions={nextActions}
       nudges={nudges}
+      csrfToken={csrfToken}
     />
   );
 }

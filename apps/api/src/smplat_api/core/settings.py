@@ -31,6 +31,11 @@ class Settings(BaseSettings):
 
     # Internal API security
     checkout_api_key: str = ""
+    # Auth security
+    # security-lockout: redis-threshold-config
+    auth_lockout_threshold: int = 5
+    auth_lockout_window_seconds: int = 300
+    auth_lockout_duration_seconds: int = 900
 
     # Loyalty referrals (member surface)
     referral_member_reward_points: float = 500.0

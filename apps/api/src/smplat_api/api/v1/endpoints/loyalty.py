@@ -18,6 +18,7 @@ from smplat_api.api.dependencies.session import require_member_session
 from smplat_api.core.settings import settings
 from smplat_api.db.session import get_session
 from smplat_api.models.loyalty import (
+    LoyaltyGuardrailOverrideScope,
     LoyaltyCheckoutIntent,
     LoyaltyCheckoutIntentKind,
     LoyaltyCheckoutIntentStatus,
@@ -31,6 +32,8 @@ from smplat_api.models.loyalty import (
 )
 from smplat_api.models.user import User
 from smplat_api.services.loyalty import (
+    LoyaltyGuardrailOverrideRecord,
+    LoyaltyGuardrailSnapshot,
     LoyaltyNudgeCard,
     LoyaltyService,
     decode_time_uuid_cursor,
@@ -198,6 +201,77 @@ class LoyaltyNudgeCardResponse(BaseModel):
     ctaHref: Optional[str]
     expiresAt: Optional[datetime]
     priority: int
+
+
+class LoyaltyGuardrailOverrideResponse(BaseModel):
+    id: UUID
+    scope: str
+    justification: str
+    metadata: dict[str, Any]
+    targetMemberId: Optional[UUID]
+    createdByUserId: Optional[UUID]
+    createdAt: datetime
+    expiresAt: Optional[datetime]
+    revokedAt: Optional[datetime]
+    isActive: bool
+
+    @classmethod
+    def from_record(
+        cls, record: LoyaltyGuardrailOverrideRecord
+    ) -> "LoyaltyGuardrailOverrideResponse":
+        return cls(
+            id=record.id,
+            scope=record.scope.value,
+            justification=record.justification,
+            metadata=record.metadata,
+            targetMemberId=record.target_member_id,
+            createdByUserId=record.created_by_user_id,
+            createdAt=record.created_at,
+            expiresAt=record.expires_at,
+            revokedAt=record.revoked_at,
+            isActive=record.is_active,
+        )
+
+
+class LoyaltyGuardrailSnapshotResponse(BaseModel):
+    inviteQuota: int
+    totalActiveInvites: int
+    membersAtQuota: int
+    cooldownSeconds: int
+    cooldownRemainingSeconds: Optional[int]
+    cooldownUntil: Optional[datetime]
+    throttleOverrideActive: bool
+    overrides: list[LoyaltyGuardrailOverrideResponse]
+
+    @classmethod
+    def from_snapshot(
+        cls, snapshot: LoyaltyGuardrailSnapshot
+    ) -> "LoyaltyGuardrailSnapshotResponse":
+        return cls(
+            inviteQuota=snapshot.invite_quota,
+            totalActiveInvites=snapshot.total_active_invites,
+            membersAtQuota=snapshot.members_at_quota,
+            cooldownSeconds=snapshot.cooldown_seconds,
+            cooldownRemainingSeconds=snapshot.cooldown_remaining_seconds,
+            cooldownUntil=snapshot.cooldown_until,
+            throttleOverrideActive=snapshot.throttle_override_active,
+            overrides=[
+                LoyaltyGuardrailOverrideResponse.from_record(record)
+                for record in snapshot.overrides
+            ],
+        )
+
+
+class LoyaltyGuardrailOverrideCreateRequest(BaseModel):
+    scope: LoyaltyGuardrailOverrideScope
+    justification: str = Field(..., min_length=3, max_length=500)
+    actorUserId: Optional[UUID] = Field(None, description="Operator applying the override")
+    targetMemberId: Optional[UUID] = Field(
+        None, description="Optional loyalty member impacted by the override"
+    )
+    expiresAt: Optional[datetime] = Field(
+        None, description="Optional expiration timestamp for the override"
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1009,3 +1083,46 @@ async def cancel_loyalty_redemption(
     await db.commit()
     await db.refresh(redemption)
     return _serialize_redemption(redemption)
+
+
+@router.get(
+    "/guardrails",
+    response_model=LoyaltyGuardrailSnapshotResponse,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def get_loyalty_guardrails(
+    db: AsyncSession = Depends(get_session),
+) -> LoyaltyGuardrailSnapshotResponse:
+    """Return aggregate guardrail posture for operators."""
+
+    service = LoyaltyService(db)
+    snapshot = await service.fetch_guardrail_snapshot()
+    return LoyaltyGuardrailSnapshotResponse.from_snapshot(snapshot)
+
+
+@router.post(
+    "/guardrails/overrides",
+    response_model=LoyaltyGuardrailOverrideResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def create_guardrail_override(
+    payload: LoyaltyGuardrailOverrideCreateRequest,
+    db: AsyncSession = Depends(get_session),
+) -> LoyaltyGuardrailOverrideResponse:
+    """Create a guardrail override and append audit history."""
+
+    service = LoyaltyService(db)
+    override = await service.create_guardrail_override(
+        scope=payload.scope,
+        justification=payload.justification,
+        actor_user_id=payload.actorUserId,
+        target_member_id=payload.targetMemberId,
+        expires_at=payload.expiresAt,
+        metadata=payload.metadata,
+    )
+    await db.commit()
+    await db.refresh(override)
+    return LoyaltyGuardrailOverrideResponse.from_record(
+        service._serialize_guardrail_override(override)
+    )

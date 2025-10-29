@@ -1,9 +1,19 @@
 from uuid import UUID
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from smplat_api.db.session import get_session
-from smplat_api.schemas.product import ProductCreate, ProductDetailResponse, ProductResponse, ProductUpdate
+from smplat_api.schemas.product import (
+    ProductAssetCreate,
+    ProductCreate,
+    ProductDetailResponse,
+    ProductAuditLogEntry,
+    ProductMediaAssetResponse,
+    ProductResponse,
+    ProductUpdate,
+)
 from smplat_api.services.products import ProductService
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -59,3 +69,60 @@ async def delete_product(product_id: UUID, service: ProductService = Depends(get
         raise HTTPException(status_code=404, detail="Product not found")
 
     await service.delete_product(product_id)
+
+
+@router.post(
+    "/{product_id}/assets",
+    summary="Attach media asset",
+    response_model=ProductMediaAssetResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def attach_asset(
+    product_id: UUID,
+    payload: ProductAssetCreate,
+    service: ProductService = Depends(get_product_service),
+) -> ProductMediaAssetResponse:
+    product = await service.get_product_by_id(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    asset = await service.attach_media_asset(
+        product,
+        label=payload.label,
+        asset_url=payload.asset_url,
+        storage_key=payload.storage_key,
+        metadata=payload.metadata,
+    )
+    return ProductMediaAssetResponse.model_validate(asset)
+
+
+@router.delete("/assets/{asset_id}", summary="Remove media asset", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_asset(asset_id: UUID, service: ProductService = Depends(get_product_service)) -> None:
+    await service.remove_media_asset(asset_id)
+
+
+@router.get(
+    "/{product_id}/audit",
+    summary="List product audit log",
+    response_model=list[ProductAuditLogEntry],
+)
+async def list_audit_log(
+    product_id: UUID, service: ProductService = Depends(get_product_service)
+) -> list[ProductAuditLogEntry]:
+    product = await service.get_product_by_id(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    logs = await service.list_audit_logs(product_id)
+    return [ProductAuditLogEntry.model_validate(entry) for entry in logs]
+
+
+@router.post(
+    "/audit/{log_id}/restore",
+    summary="Restore product state from audit entry",
+    response_model=ProductDetailResponse,
+)
+async def restore_product(log_id: UUID, service: ProductService = Depends(get_product_service)) -> ProductDetailResponse:
+    restored = await service.restore_from_audit(log_id)
+    if not restored:
+        raise HTTPException(status_code=404, detail="Audit log not found or cannot restore")
+    return ProductDetailResponse.model_validate(restored)

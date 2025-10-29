@@ -64,6 +64,7 @@ class Product(Base):
         nullable=False,
         server_default=ProductStatusEnum.DRAFT.value,
     )
+    channel_eligibility = Column(JSON, nullable=False, default=list)
     fulfillment_config = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -72,6 +73,18 @@ class Product(Base):
         "ProductOptionGroup",
         back_populates="product",
         order_by="ProductOptionGroup.display_order",
+        cascade="all, delete-orphan",
+    )
+    media_assets = relationship(
+        "ProductMediaAsset",
+        back_populates="product",
+        order_by="ProductMediaAsset.created_at.desc()",
+        cascade="all, delete-orphan",
+    )
+    audit_logs = relationship(
+        "ProductAuditLog",
+        back_populates="product",
+        order_by="ProductAuditLog.created_at.desc()",
         cascade="all, delete-orphan",
     )
     add_ons = relationship(
@@ -295,3 +308,40 @@ class ProductSubscriptionPlan(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     product = relationship("Product", back_populates="subscription_plans")
+
+
+class ProductMediaAsset(Base):
+    """Uploaded asset metadata associated with a product."""
+
+    # meta: provenance: product-merchandising
+    __tablename__ = "product_media_assets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    product_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    label = Column(String(150), nullable=True)
+    asset_url = Column(String(1024), nullable=False)
+    storage_key = Column(String(512), nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    product = relationship("Product", back_populates="media_assets")
+
+
+class ProductAuditLog(Base):
+    """Immutable audit log capturing product merchandising changes."""
+
+    # meta: provenance: product-merchandising
+    __tablename__ = "product_audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    product_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL"), nullable=True)
+    action = Column(String, nullable=False)
+    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    actor_email = Column(String(255), nullable=True)
+    before_snapshot = Column(JSON, nullable=True)
+    after_snapshot = Column(JSON, nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    product = relationship("Product", back_populates="audit_logs")

@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from smplat_api.db.base import Base
+from smplat_api.models.user import User
 
 
 class LoyaltyTier(Base):
@@ -362,3 +363,87 @@ class LoyaltyPointExpiration(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     member = relationship("LoyaltyMember", back_populates="point_expirations")
+
+
+class LoyaltyGuardrailOverrideScope(str, Enum):
+    """Scopes for operator-controlled guardrail overrides."""
+
+    INVITE_QUOTA = "invite_quota"
+    INVITE_COOLDOWN = "invite_cooldown"
+    GLOBAL_THROTTLE = "global_throttle"
+
+
+class LoyaltyGuardrailOverride(Base):
+    """Operator overrides that temporarily relax loyalty guardrails."""
+
+    __tablename__ = "loyalty_guardrail_overrides"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    scope = Column(
+        SqlEnum(LoyaltyGuardrailOverrideScope, name="loyalty_guardrail_override_scope"),
+        nullable=False,
+    )
+    justification = Column(Text, nullable=False)
+    metadata_json = Column("metadata", JSON, nullable=True)
+    target_member_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("loyalty_members.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_by_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    target_member = relationship("LoyaltyMember")
+    created_by = relationship("User")
+    audit_events = relationship(
+        "LoyaltyGuardrailAuditEvent",
+        back_populates="override",
+        cascade="all, delete-orphan",
+    )
+
+
+class LoyaltyGuardrailAuditAction(str, Enum):
+    """Lifecycle actions recorded for guardrail overrides."""
+
+    CREATED = "created"
+    REVOKED = "revoked"
+
+
+class LoyaltyGuardrailAuditEvent(Base):
+    """Audit trail for operator guardrail overrides."""
+
+    __tablename__ = "loyalty_guardrail_audit_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    override_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("loyalty_guardrail_overrides.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    action = Column(
+        SqlEnum(LoyaltyGuardrailAuditAction, name="loyalty_guardrail_audit_action"),
+        nullable=False,
+    )
+    message = Column(Text, nullable=True)
+    actor_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    override = relationship("LoyaltyGuardrailOverride", back_populates="audit_events")
+    actor = relationship("User")

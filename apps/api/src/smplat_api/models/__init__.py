@@ -64,6 +64,10 @@ from .processor_event import (  # noqa: F401
     register_replay_attempt,
 )
 from .loyalty import (  # noqa: F401
+    LoyaltyGuardrailAuditAction,
+    LoyaltyGuardrailAuditEvent,
+    LoyaltyGuardrailOverride,
+    LoyaltyGuardrailOverrideScope,
     LoyaltyLedgerEntry,
     LoyaltyLedgerEntryType,
     LoyaltyMember,
@@ -74,8 +78,10 @@ from .loyalty import (  # noqa: F401
 from .product import (  # noqa: F401
     Product,
     ProductAddOn,
+    ProductAuditLog,
     ProductCustomField,
     ProductCustomFieldTypeEnum,
+    ProductMediaAsset,
     ProductOption,
     ProductOptionGroup,
     ProductOptionGroupTypeEnum,

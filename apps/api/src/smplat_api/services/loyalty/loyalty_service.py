@@ -16,6 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from smplat_api.models.loyalty import (
+    LoyaltyGuardrailAuditAction,
+    LoyaltyGuardrailAuditEvent,
+    LoyaltyGuardrailOverride,
+    LoyaltyGuardrailOverrideScope,
     LoyaltyCheckoutIntent,
     LoyaltyCheckoutIntentKind,
     LoyaltyCheckoutIntentStatus,
@@ -36,6 +40,7 @@ from smplat_api.models.loyalty import (
 )
 from smplat_api.models.user import User
 from smplat_api.services.notifications import NotificationService
+from smplat_api.core.settings import settings
 
 
 CHECKOUT_INTENT_DEFAULT_TTL = timedelta(days=14)
@@ -97,6 +102,36 @@ class PointsExpirationWindow:
     total_points: Decimal
     remaining_points: Decimal
     status: LoyaltyPointExpirationStatus
+
+
+@dataclass
+class LoyaltyGuardrailOverrideRecord:
+    """Serializable guardrail override for operator tooling."""
+
+    id: UUID
+    scope: LoyaltyGuardrailOverrideScope
+    justification: str
+    metadata: dict[str, Any]
+    target_member_id: UUID | None
+    created_by_user_id: UUID | None
+    created_at: datetime
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    is_active: bool
+
+
+@dataclass
+class LoyaltyGuardrailSnapshot:
+    """Aggregated guardrail posture for operator console."""
+
+    invite_quota: int
+    total_active_invites: int
+    members_at_quota: int
+    cooldown_seconds: int
+    cooldown_remaining_seconds: int | None
+    cooldown_until: datetime | None
+    throttle_override_active: bool
+    overrides: list[LoyaltyGuardrailOverrideRecord]
 
 
 class LoyaltyService:
@@ -924,6 +959,171 @@ class LoyaltyService:
         await self._db.flush()
         logger.info("Referral converted", code=code, member_id=str(member.id))
         return referral
+
+    async def fetch_guardrail_snapshot(self) -> LoyaltyGuardrailSnapshot:
+        """Aggregate guardrail posture for operator consoles."""
+
+        invite_quota = int(settings.referral_member_max_active_invites)
+        active_statuses = [ReferralStatus.DRAFT, ReferralStatus.SENT]
+
+        active_invites_result = await self._db.execute(
+            select(func.count(ReferralInvite.id)).where(
+                ReferralInvite.status.in_(active_statuses)
+            )
+        )
+        total_active_invites = int(active_invites_result.scalar_one() or 0)
+
+        members_at_quota = 0
+        if invite_quota > 0:
+            members_at_quota_result = await self._db.execute(
+                select(func.count())
+                .select_from(
+                    select(
+                        ReferralInvite.referrer_id,
+                        func.count(ReferralInvite.id).label("invite_count"),
+                    )
+                    .where(ReferralInvite.status.in_(active_statuses))
+                    .group_by(ReferralInvite.referrer_id)
+                    .having(func.count(ReferralInvite.id) >= invite_quota)
+                    .subquery()
+                )
+            )
+            members_at_quota = int(members_at_quota_result.scalar_one() or 0)
+
+        cooldown_seconds = int(settings.referral_member_invite_cooldown_seconds)
+        cooldown_remaining_seconds: int | None = None
+        cooldown_until: datetime | None = None
+        latest_invite_result = await self._db.execute(
+            select(ReferralInvite.created_at)
+            .where(ReferralInvite.status.in_(active_statuses))
+            .order_by(ReferralInvite.created_at.desc())
+            .limit(1)
+        )
+        latest_created_at: datetime | None = latest_invite_result.scalar_one_or_none()
+        if latest_created_at and cooldown_seconds > 0:
+            if latest_created_at.tzinfo is None:
+                latest_created_at = latest_created_at.replace(tzinfo=timezone.utc)
+            cooldown_until_candidate = latest_created_at + timedelta(seconds=cooldown_seconds)
+            now = datetime.now(timezone.utc)
+            if cooldown_until_candidate > now:
+                cooldown_until = cooldown_until_candidate
+                cooldown_remaining_seconds = int((cooldown_until_candidate - now).total_seconds())
+
+        overrides_result = await self._db.execute(
+            select(LoyaltyGuardrailOverride)
+            .where(LoyaltyGuardrailOverride.is_active.is_(True))
+            .order_by(LoyaltyGuardrailOverride.created_at.desc())
+        )
+        overrides = [
+            self._serialize_guardrail_override(record)
+            for record in overrides_result.scalars().all()
+        ]
+
+        throttle_override_active = any(
+            override.scope == LoyaltyGuardrailOverrideScope.GLOBAL_THROTTLE
+            for override in overrides
+        )
+
+        return LoyaltyGuardrailSnapshot(
+            invite_quota=invite_quota,
+            total_active_invites=total_active_invites,
+            members_at_quota=members_at_quota,
+            cooldown_seconds=cooldown_seconds,
+            cooldown_remaining_seconds=cooldown_remaining_seconds,
+            cooldown_until=cooldown_until,
+            throttle_override_active=throttle_override_active,
+            overrides=overrides,
+        )
+
+    async def create_guardrail_override(
+        self,
+        *,
+        scope: LoyaltyGuardrailOverrideScope,
+        justification: str,
+        actor_user_id: UUID | None = None,
+        target_member_id: UUID | None = None,
+        expires_at: datetime | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> LoyaltyGuardrailOverride:
+        """Persist a guardrail override and append audit history."""
+
+        metadata = metadata or {}
+        now = datetime.now(timezone.utc)
+
+        actor: User | None = None
+        if actor_user_id:
+            actor = await self._db.get(User, actor_user_id)
+            if actor is None:
+                raise ValueError("Actor user does not exist for guardrail override")
+
+        target_member: LoyaltyMember | None = None
+        if target_member_id:
+            target_member = await self._db.get(LoyaltyMember, target_member_id)
+            if target_member is None:
+                raise ValueError("Target loyalty member not found for override")
+
+        existing_overrides_result = await self._db.execute(
+            select(LoyaltyGuardrailOverride)
+            .where(LoyaltyGuardrailOverride.scope == scope)
+            .where(LoyaltyGuardrailOverride.is_active.is_(True))
+        )
+        for record in existing_overrides_result.scalars().all():
+            record.is_active = False
+            record.revoked_at = now
+            self._db.add(
+                LoyaltyGuardrailAuditEvent(
+                    override_id=record.id,
+                    action=LoyaltyGuardrailAuditAction.REVOKED,
+                    message="Superseded by a new override",
+                    actor_user_id=actor_user_id,
+                )
+            )
+
+        override = LoyaltyGuardrailOverride(
+            scope=scope,
+            justification=justification,
+            metadata_json=metadata or None,
+            target_member_id=target_member.id if target_member else None,
+            created_by_user_id=actor.id if actor else None,
+            expires_at=expires_at,
+        )
+        self._db.add(override)
+        await self._db.flush()
+
+        self._db.add(
+            LoyaltyGuardrailAuditEvent(
+                override_id=override.id,
+                action=LoyaltyGuardrailAuditAction.CREATED,
+                message=justification,
+                actor_user_id=actor.id if actor else None,
+            )
+        )
+
+        await self._db.flush()
+        logger.info(
+            "Created loyalty guardrail override",
+            override_id=str(override.id),
+            scope=scope.value,
+        )
+        return override
+
+    def _serialize_guardrail_override(
+        self, record: LoyaltyGuardrailOverride
+    ) -> LoyaltyGuardrailOverrideRecord:
+        """Convert ORM override to console-friendly dataclass."""
+
+        return LoyaltyGuardrailOverrideRecord(
+            id=record.id,
+            scope=record.scope,
+            justification=record.justification,
+            metadata=record.metadata_json or {},
+            target_member_id=record.target_member_id,
+            created_by_user_id=record.created_by_user_id,
+            created_at=record.created_at,
+            expires_at=record.expires_at,
+            revoked_at=record.revoked_at,
+            is_active=bool(record.is_active),
+        )
 
     async def create_redemption(
         self,

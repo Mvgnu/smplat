@@ -15,9 +15,10 @@ export type ManualNudgeFormTask = {
 export type ManualNudgeFormProps = {
   journeyId: string;
   tasks: ManualNudgeFormTask[];
+  csrfToken: string;
 };
 
-export function ManualNudgeForm({ journeyId, tasks }: ManualNudgeFormProps) {
+export function ManualNudgeForm({ journeyId, tasks, csrfToken }: ManualNudgeFormProps) {
   const [channel, setChannel] = useState<string>("email");
   const [taskId, setTaskId] = useState<string | null>(tasks[0]?.id ?? null);
   const [subject, setSubject] = useState<string>("Onboarding task check-in");
@@ -51,6 +52,7 @@ export function ManualNudgeForm({ journeyId, tasks }: ManualNudgeFormProps) {
       message,
       taskId,
       operator,
+      csrfToken,
     };
 
     setStatus("idle");

@@ -9,3 +9,5 @@ from API routes or server components instead of fetching from the client.
   paginate without reimplementing merge logic. The module also exposes
   `configureLoyaltyTimelineFetchers`/`resetLoyaltyTimelineFetchers` helpers so
   tests can replace the default transport layer with deterministic mocks.
+- `guardrails.ts` wraps the guardrail console endpoints, providing bypass
+  scaffolding for e2e tests and helpers to create overrides from server actions.

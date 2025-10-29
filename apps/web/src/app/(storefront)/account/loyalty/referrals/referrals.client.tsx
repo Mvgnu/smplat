@@ -11,6 +11,7 @@ type ReferralHubClientProps = {
   member: LoyaltyMemberSummary;
   referrals: ReferralInviteResponse[];
   shareBaseUrl: string;
+  csrfToken: string;
 };
 
 type FormState = {
@@ -29,7 +30,7 @@ const INITIAL_FORM_STATE: FormState = {
   notice: undefined
 };
 
-export function ReferralHubClient({ member, referrals, shareBaseUrl }: ReferralHubClientProps) {
+export function ReferralHubClient({ member, referrals, shareBaseUrl, csrfToken }: ReferralHubClientProps) {
   const [isPending, startTransition] = useTransition();
   const [formState, setFormState] = useState<FormState>(INITIAL_FORM_STATE);
   const [listState, setListState] = useState<ReferralListState>({ items: referrals });
@@ -51,7 +52,8 @@ export function ReferralHubClient({ member, referrals, shareBaseUrl }: ReferralH
     startTransition(async () => {
       try {
         const referral = await issueReferralInvite({
-          inviteeEmail: formState.email ? formState.email.trim() : undefined
+          inviteeEmail: formState.email ? formState.email.trim() : undefined,
+          csrfToken
         });
         setListState((previous) => ({ items: [referral, ...previous.items] }));
         setFormState({ email: "", notice: "Referral invite created.", error: undefined });
@@ -72,7 +74,7 @@ export function ReferralHubClient({ member, referrals, shareBaseUrl }: ReferralH
 
     startTransition(async () => {
       try {
-        const updated = await cancelReferralInvite(referralId);
+        const updated = await cancelReferralInvite(referralId, { csrfToken });
         setListState((previous) => ({
           items: previous.items.map((item) => (item.id === updated.id ? updated : item))
         }));

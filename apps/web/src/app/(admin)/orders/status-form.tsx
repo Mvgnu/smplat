@@ -7,6 +7,7 @@ import { ORDER_STATUS_OPTIONS, updateOrderStatusAction, updateOrderStatusInitial
 type OrderStatusFormProps = {
   orderId: string;
   currentStatus: string;
+  csrfToken: string;
 };
 
 const statusLabels: Record<string, string> = {
@@ -31,7 +32,7 @@ function SubmitButton() {
   );
 }
 
-export function OrderStatusForm({ orderId, currentStatus }: OrderStatusFormProps) {
+export function OrderStatusForm({ orderId, currentStatus, csrfToken }: OrderStatusFormProps) {
   const [state, formAction] = useFormState(updateOrderStatusAction, updateOrderStatusInitialState);
 
   const options = useMemo(() => ORDER_STATUS_OPTIONS.map((value) => ({
@@ -42,6 +43,7 @@ export function OrderStatusForm({ orderId, currentStatus }: OrderStatusFormProps
   return (
     <form action={formAction} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white/80">
       <input type="hidden" name="orderId" value={orderId} />
+      <input type="hidden" name="csrfToken" value={csrfToken} />
       <label className="flex flex-col gap-2">
         <span className="text-xs uppercase tracking-[0.3em] text-white/40">Order status</span>
         <select
