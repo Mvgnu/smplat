@@ -10,10 +10,12 @@ This runbook captures operational guidance for the loyalty tier system and refer
 - **Member ledger window**: `GET /api/v1/loyalty/ledger` returns paginated ledger entries for the authenticated member with optional `types` filters and opaque cursors.
 - **Member redemption history**: `GET /api/v1/loyalty/redemptions` streams recent redemption attempts with lifecycle filters and pending counts.
 - **Referral conversion intelligence**: `GET /api/v1/loyalty/referrals/conversions` combines invite breakdowns, earned points, and last-activity timestamps for the storefront dashboard.
-- **Storefront timeline proxy**: `GET /account/loyalty` issues `/app/api/loyalty/timeline` requests to weave ledger, redemption, and referral events into a unified, server-driven history feed that honors the filters surfaced in the UI. The response `cursorToken` encodes per-source API cursors (`ledger`, `redemptions`, `referrals`) so subsequent fetches resume each window without replaying prior entries.
+- **Storefront timeline proxy**: `GET /account/loyalty` issues `/app/api/loyalty/timeline` requests to weave ledger, redemption, referral, loyalty nudge, and guardrail override events into a unified, server-driven history feed. The response `cursorToken` encodes per-source API cursors (`ledger`, `redemptions`, `referrals`, `nudges`, `guardrails`) so subsequent fetches resume each window without replaying prior entries. Client filters for referral code, campaign slug, and checkout order mirror server-side filter support so the feed remains consistent.
 - **Member referral list**: `GET /api/v1/loyalty/referrals` returns the authenticated member's invites (requires session headers).
 - **Member referral create**: `POST /api/v1/loyalty/referrals` issues a new invite using session-aware quotas and cooldowns.
 - **Member referral cancel**: `POST /api/v1/loyalty/referrals/{referral_id}/cancel` voids an invite while preserving conversion telemetry.
+- **Predictive referral segments**: `GET /api/v1/loyalty/referrals/segments` returns active/stalled/at-risk cohort metrics with invite + conversion velocity averages for storefront dashboards.
+- **Velocity analytics timeline**: `GET /api/v1/loyalty/analytics/velocity` streams persisted analytics snapshots (most recent first) with optional cursor pagination for operator consoles.
 - **Issue referral invite**: `POST /api/v1/loyalty/members/{user_id}/referrals` (admin only) mints a referral code and persists metadata for downstream messaging.
 - **Complete referral**: `POST /api/v1/loyalty/referrals/complete` (admin only) associates the invite with a newly onboarded user, credits the referrer, and emits a tier upgrade notification if thresholds are met.
 - **Create redemption**: `POST /api/v1/loyalty/members/{user_id}/redemptions` (admin only) reserves points for a reward slug or custom amount.
@@ -22,6 +24,7 @@ This runbook captures operational guidance for the loyalty tier system and refer
 - **Checkout next actions**: `GET /api/v1/loyalty/next-actions` returns persisted checkout intent records (pending + non-expired) with templated follow-up cards so storefront and loyalty hubs hydrate server-driven reminders.
 - **Resolve checkout action**: `POST /api/v1/loyalty/next-actions/{intent_id}/resolve` marks an intent `resolved` or `cancelled`, recording dismissal timestamps and removing it from subsequent feeds.
 - **Member loyalty nudges**: `GET /api/v1/loyalty/nudges` returns proactive reminder cards (expiring points, stalled redemptions, checkout resumes) composed server-side for the authenticated member.
+- **Nudge history feed**: `GET /api/v1/loyalty/nudges/history` emits lifecycle records (active, acknowledged, dismissed, expired) used by the activity timeline to display acknowledgment markers alongside campaign metadata.
 - **Update loyalty nudge**: `POST /api/v1/loyalty/nudges/{nudge_id}/status` persists acknowledgement or dismissal, preventing duplicate outreach until new signals arise.
 - **Fulfill redemption**: `POST /api/v1/loyalty/redemptions/{redemption_id}/fulfill` finalizes the hold, deducts points, and emits ledger metadata.
 - **Fail/Cancel redemption**: `POST /api/v1/loyalty/redemptions/{redemption_id}/fail|cancel` releases the hold and records the operational reason.
@@ -36,15 +39,20 @@ This runbook captures operational guidance for the loyalty tier system and refer
 - `loyalty_point_expirations`: Schedules and audits outstanding balance expirations.
 - `loyalty_checkout_intents`: Persists checkout-originated reminders (redemption + referral share) with external IDs, channels, status lifecycle, and TTL metadata powering server-driven next-action feeds.
 - `loyalty_nudges`: Stores generated loyalty nudges per member + signal (expiring points, checkout reminders, stalled redemptions) alongside dismissal/acknowledgement state, last notification timestamp, and payload metadata.
+- `loyalty_nudge_campaigns`: Configures nudge campaign defaults (TTL, per-member frequency caps, priority) and preferred channels so the scheduler can pick the best surface per signal.
+- `loyalty_nudge_dispatch_events`: Audits multi-channel dispatch fan-out with `sent_at`, channel, and backend metadata for forensic reviews.
+- `users.phone_number` / `users.push_token`: Optional delivery coordinates enabling SMS and push rails; keep data residency policies in mind when collecting.
+- `loyalty_analytics_snapshots`: Nightly segmentation + velocity snapshots captured for dashboards and historical comparisons.
 
 ## Scheduler & Jobs
 - `run_loyalty_progression` (APScheduler) grants weekly streak bonuses, processes expirations via `LoyaltyService.expire_scheduled_points`, and emits job telemetry. Configure via `CatalogJobScheduler` when enabling loyalty cadence.
 - `aggregate_loyalty_nudges` (APScheduler) runs every 10 minutes via the `loyalty_nudge_aggregation` job in `apps/api/config/schedules.toml`. It first invokes `LoyaltyService.aggregate_nudge_candidates` to refresh persisted nudges, then uses `collect_nudge_dispatch_batch` + `NotificationService.send_loyalty_nudge` to fan-out across email/push backends while respecting marketing preferences, per-nudge cooldowns, and `mark_nudges_triggered` updates.
+- `capture_loyalty_analytics_snapshot` (APScheduler) executes nightly via the `loyalty_analytics_snapshot` schedule to persist segmentation + velocity analytics for dashboards.
 - Health snapshots surface through scheduler telemetry endpoints—verify `loyalty` sweep metrics are present before campaign launches.
 
 ## Notifications
 Tier upgrades trigger the `NotificationService.send_loyalty_tier_upgrade` helper which honors marketing preferences and renders the `render_loyalty_tier_upgrade` template. Templates live alongside other notification assets to keep formatting consistent.
-Loyalty nudges leverage `NotificationService.send_loyalty_nudge`, which reuses marketing preference checks and emits simple reminder copy with optional CTA links. Scheduler-driven fan-out should call `mark_nudges_triggered` after dispatch so cooldown windows hold.
+Loyalty nudges now hydrate from `loyalty_nudge_campaigns` to determine channel preference ordering (email, SMS, push) before invoking `NotificationService.send_loyalty_nudge`, which records a `loyalty_nudge_dispatch_events` row per delivery and reuses marketing preference checks. Scheduler-driven fan-out should call `mark_nudges_triggered` after dispatch so cooldown windows hold, and storefront polling rails (loyalty hub, referral hub, checkout success) provide same-session visibility into pending nudges.
 
 ## QA Checklist
 1. Apply migrations via `poetry run alembic upgrade head` from `apps/api`.
@@ -53,11 +61,13 @@ Loyalty nudges leverage `NotificationService.send_loyalty_nudge`, which reuses m
 4. Run `poetry run pytest tests/test_loyalty_service.py tests/test_loyalty_endpoints.py tests/test_loyalty_jobs.py` to validate redemption flows, checkout intent reconciliation, scheduler aggregation, and API responses.
 5. Exercise redemption creation → fulfillment → cancellation via API to verify holds, ledger entries, and scheduler expirations. Capture the emitted ledger record via `/loyalty/ledger` and confirm metadata (e.g., `redemption_id`) matches the originating redemption. Confirm `/loyalty/next-actions` reflects queued checkout reminders and `/next-actions/{id}/resolve` removes them from the feed.
 6. Call `/loyalty/ledger?limit=5&types=referral_bonus` and `/loyalty/redemptions?statuses=requested&statuses=failed` to validate pagination tokens and status filtering. Confirm `nextCursor` forwards successfully by replaying the second page.
-7. Run `NEXT_PUBLIC_E2E_AUTH_BYPASS=true pnpm --filter web test:e2e -- --grep "Loyalty hub"` to execute the storefront redemption happy-path Playwright suite. Extend coverage to assert the activity timeline renders ledger + redemption chips and that failed redemptions expose retry controls.
-8. Seed an expiring point window (or pending checkout intent / stalled redemption) and call `/api/v1/loyalty/nudges` to confirm nudge cards appear. Dismiss one via `POST /api/v1/loyalty/nudges/{id}/status` and ensure it disappears from the feed and storefront rail.
-9. Run `NEXT_PUBLIC_E2E_AUTH_BYPASS=true pnpm --filter web test:e2e -- --grep "Referrals"` to cover invite creation, share links, cancellation, throttle messaging, and the conversion summary counts rendered in the dashboard card.
-10. Issue a referral and manually mark it converted to validate ledger updates, referral conversion aggregates, and notifications. Ensure the conversion appears within `/loyalty/referrals/conversions` and the ledger event metadata references the referral code.
-11. Confirm TypeScript contracts in `packages/types` and storefront consumers are refreshed.
+7. Run `NEXT_PUBLIC_E2E_AUTH_BYPASS=true pnpm --filter web test:e2e -- --grep "Loyalty hub"` to execute the storefront redemption happy-path Playwright suite. Extend coverage to assert the activity timeline renders ledger + redemption chips, respects referral/campaign/order filters, and that failed redemptions expose retry controls.
+8. Seed an expiring point window (or pending checkout intent / stalled redemption) and call `/api/v1/loyalty/nudges` to confirm multi-channel nudge cards appear. Dismiss one via `POST /api/v1/loyalty/nudges/{id}/status` and ensure it disappears from the feed and storefront rail surfaces (loyalty hub, referral hub, checkout success).
+9. Inspect `loyalty_nudge_dispatch_events` for the seeded member to validate per-channel audit rows and confirm `sent_at` timestamps respect `frequency_cap_hours`.
+10. Run `NEXT_PUBLIC_E2E_AUTH_BYPASS=true pnpm --filter web test:e2e -- --grep "Referrals"` to cover invite creation, share links, cancellation, throttle messaging, and the conversion summary counts rendered in the dashboard card.
+11. Issue a referral and manually mark it converted to validate ledger updates, referral conversion aggregates, and notifications. Ensure the conversion appears within `/loyalty/referrals/conversions` and the ledger event metadata references the referral code.
+12. Hit `/loyalty/referrals/segments` and `/loyalty/analytics/velocity` to confirm segmentation metrics and nightly snapshots refresh after running `capture_loyalty_analytics_snapshot`.
+13. Confirm TypeScript contracts in `packages/types` and storefront consumers are refreshed and polling intervals remain aligned with API rate limits (default 45 seconds).
 
 ## Ledger Timeline Verification
 - Sample ledger payload:
@@ -73,7 +83,9 @@ Loyalty nudges leverage `NotificationService.send_loyalty_nudge`, which reuses m
         "description": "Referral conversion bonus",
         "metadata": {
           "referral_code": "SHAREME01"
-        }
+        },
+        "balanceBefore": 700,
+        "balanceAfter": 1200
       }
     ],
     "nextCursor": null

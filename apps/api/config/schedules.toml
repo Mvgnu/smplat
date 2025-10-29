@@ -39,3 +39,21 @@ max_attempts = 3
 base_backoff_seconds = 30
 max_backoff_seconds = 300
 jitter_seconds = 10
+
+[jobs.loyalty_analytics_snapshot]
+id = "loyalty-analytics-snapshot"
+task = "smplat_api.jobs.loyalty.analytics.capture_loyalty_analytics_snapshot"
+cron = "0 3 * * *"
+max_attempts = 3
+base_backoff_seconds = 60
+max_backoff_seconds = 600
+jitter_seconds = 20
+
+[jobs.checkout_recovery_monitor]
+id = "checkout-recovery-monitor"
+task = "smplat_api.jobs.checkout_recovery.monitor_checkout_orchestrations"
+cron = "*/30 * * * *"
+max_attempts = 3
+base_backoff_seconds = 45
+max_backoff_seconds = 300
+jitter_seconds = 10

@@ -19,7 +19,8 @@ from sqlalchemy import (
     func,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import relationship
 
 from smplat_api.db.base import Base
@@ -216,6 +217,52 @@ class LoyaltyNudgeType(str, Enum):
     REDEMPTION_FOLLOW_UP = "redemption_follow_up"
 
 
+class LoyaltyNudgeChannel(str, Enum):
+    """Channels available for delivering loyalty nudges."""
+
+    EMAIL = "email"
+    SMS = "sms"
+    PUSH = "push"
+
+
+LOYALTY_NUDGE_CHANNEL_ENUM = SqlEnum(
+    LoyaltyNudgeChannel,
+    name="loyalty_nudge_channel",
+    create_type=False,
+)
+
+
+class LoyaltyChannelArray(TypeDecorator):
+    """Stores loyalty nudge channels across Postgres and SQLite."""
+
+    impl = ARRAY(LOYALTY_NUDGE_CHANNEL_ENUM)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):  # type: ignore[override]
+        if dialect.name == "sqlite":
+            return dialect.type_descriptor(JSON())
+        return dialect.type_descriptor(ARRAY(LOYALTY_NUDGE_CHANNEL_ENUM))
+
+    def process_bind_param(self, value, dialect):  # type: ignore[override]
+        if value is None:
+            return []
+        normalized = [
+            item.value if isinstance(item, LoyaltyNudgeChannel) else str(item)
+            for item in value
+        ]
+        return normalized
+
+    def process_result_value(self, value, dialect):  # type: ignore[override]
+        if value is None:
+            return []
+        return [
+            item
+            if isinstance(item, LoyaltyNudgeChannel)
+            else LoyaltyNudgeChannel(item)
+            for item in value
+        ]
+
+
 class LoyaltyNudgeStatus(str, Enum):
     """Lifecycle status for member nudges."""
 
@@ -223,6 +270,34 @@ class LoyaltyNudgeStatus(str, Enum):
     ACKNOWLEDGED = "acknowledged"
     DISMISSED = "dismissed"
     EXPIRED = "expired"
+
+
+class LoyaltyNudgeCampaign(Base):
+    """Campaign metadata that governs nudge cadence and delivery."""
+
+    __tablename__ = "loyalty_nudge_campaigns"
+
+    slug = Column(String(64), primary_key=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    ttl_seconds = Column(Integer, nullable=False, server_default="86400")
+    frequency_cap_hours = Column(Integer, nullable=False, server_default="12")
+    default_priority = Column(Integer, nullable=False, server_default="0")
+    channel_preferences = Column(
+        LoyaltyChannelArray(),
+        nullable=False,
+        default=lambda: [LoyaltyNudgeChannel.EMAIL],
+        server_default="{email}",
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    nudges = relationship("LoyaltyNudge", back_populates="campaign")
 
 
 class LoyaltyNudge(Base):
@@ -248,6 +323,9 @@ class LoyaltyNudge(Base):
         SqlEnum(LoyaltyNudgeType, name="loyalty_nudge_type"),
         nullable=False,
     )
+    campaign_slug = Column(
+        String(64), ForeignKey("loyalty_nudge_campaigns.slug", ondelete="SET NULL"), nullable=True
+    )
     source_id = Column(String, nullable=False)
     status = Column(
         SqlEnum(LoyaltyNudgeStatus, name="loyalty_nudge_status"),
@@ -257,6 +335,12 @@ class LoyaltyNudge(Base):
     )
     priority = Column(Integer, nullable=False, default=0, server_default="0")
     payload_json = Column("payload", JSON, nullable=False, default=dict)
+    channel_preferences = Column(
+        LoyaltyChannelArray(),
+        nullable=False,
+        default=lambda: [LoyaltyNudgeChannel.EMAIL],
+        server_default="{email}",
+    )
     last_triggered_at = Column(DateTime(timezone=True), nullable=True)
     acknowledged_at = Column(DateTime(timezone=True), nullable=True)
     dismissed_at = Column(DateTime(timezone=True), nullable=True)
@@ -270,6 +354,26 @@ class LoyaltyNudge(Base):
     )
 
     member = relationship("LoyaltyMember")
+    campaign = relationship("LoyaltyNudgeCampaign", back_populates="nudges")
+    dispatch_events = relationship(
+        "LoyaltyNudgeDispatchEvent",
+        back_populates="nudge",
+        cascade="all, delete-orphan",
+    )
+
+
+class LoyaltyNudgeDispatchEvent(Base):
+    """Audit log of nudge dispatch attempts per channel."""
+
+    __tablename__ = "loyalty_nudge_dispatch_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    nudge_id = Column(UUID(as_uuid=True), ForeignKey("loyalty_nudges.id", ondelete="CASCADE"), nullable=False)
+    channel = Column(LOYALTY_NUDGE_CHANNEL_ENUM.copy(), nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    metadata_json = Column("metadata", JSON, nullable=True, default=dict)
+
+    nudge = relationship("LoyaltyNudge", back_populates="dispatch_events")
 
 
 class LoyaltyReward(Base):
@@ -447,3 +551,15 @@ class LoyaltyGuardrailAuditEvent(Base):
 
     override = relationship("LoyaltyGuardrailOverride", back_populates="audit_events")
     actor = relationship("User")
+
+
+class LoyaltyAnalyticsSnapshot(Base):
+    """Persisted loyalty analytics trend snapshot for operator insights."""
+
+    __tablename__ = "loyalty_analytics_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    computed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    segments_json = Column("segments", JSON, nullable=False, default=dict)
+    velocity_json = Column("velocity", JSON, nullable=False, default=dict)
+

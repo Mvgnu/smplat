@@ -8,7 +8,11 @@ import { ReferralHubClient } from "./referrals.client";
 import {
   allowAuthBypass,
   buildBypassMember,
-  fetchLoyaltyMember
+  buildBypassSegmentsSnapshot,
+  buildBypassVelocityTimeline,
+  fetchLoyaltyMember,
+  fetchLoyaltySegmentsSnapshot,
+  fetchLoyaltyVelocityTimeline
 } from "../data";
 
 const shareBaseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -24,9 +28,11 @@ export default async function LoyaltyReferralsPage() {
   const csrfToken = getOrCreateCsrfToken();
 
   if (allowAuthBypass()) {
-    const [member, referrals] = await Promise.all([
+    const [member, referrals, segments, velocity] = await Promise.all([
       Promise.resolve(buildBypassMember()),
-      fetchMemberReferrals(bypassUserId)
+      fetchMemberReferrals(bypassUserId),
+      Promise.resolve(buildBypassSegmentsSnapshot()),
+      Promise.resolve(buildBypassVelocityTimeline())
     ]);
     return (
       <ReferralHubClient
@@ -34,6 +40,8 @@ export default async function LoyaltyReferralsPage() {
         referrals={referrals}
         shareBaseUrl={shareBaseUrl}
         csrfToken={csrfToken}
+        segmentsSnapshot={segments}
+        velocityTimeline={velocity}
       />
     );
   }
@@ -43,9 +51,11 @@ export default async function LoyaltyReferralsPage() {
     throw new Error("Referral hub requires an authenticated user.");
   }
 
-  const [member, referrals] = await Promise.all([
+  const [member, referrals, segments, velocity] = await Promise.all([
     fetchLoyaltyMember(userId),
-    fetchMemberReferrals(userId)
+    fetchMemberReferrals(userId),
+    fetchLoyaltySegmentsSnapshot(),
+    fetchLoyaltyVelocityTimeline({ limit: 12 })
   ]);
 
   return (
@@ -54,6 +64,8 @@ export default async function LoyaltyReferralsPage() {
       referrals={referrals}
       shareBaseUrl={shareBaseUrl}
       csrfToken={csrfToken}
+      segmentsSnapshot={segments}
+      velocityTimeline={velocity}
     />
   );
 }

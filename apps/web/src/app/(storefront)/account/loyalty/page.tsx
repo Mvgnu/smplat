@@ -19,6 +19,12 @@ import {
   fetchReferralConversions
 } from "./data";
 import { fetchCheckoutNextActions } from "@/server/loyalty/intents";
+import {
+  configureLoyaltyTimelineFetchers,
+  fetchLoyaltyTimeline,
+  resetLoyaltyTimelineFetchers
+} from "@/server/loyalty/timeline";
+import { buildBypassGuardrailSnapshot } from "@/server/loyalty/guardrails";
 import { LoyaltyHubClient } from "./loyalty.client";
 
 export const metadata: Metadata = {
@@ -31,6 +37,19 @@ export default async function LoyaltyHubPage() {
   const csrfToken = getOrCreateCsrfToken();
 
   if (allowAuthBypass()) {
+    configureLoyaltyTimelineFetchers({
+      fetchLoyaltyLedger: async () => buildBypassLedgerPage(),
+      fetchLoyaltyRedemptions: async () => buildBypassRedemptions(),
+      fetchReferralConversions: async () => buildBypassConversions(),
+      fetchLoyaltyNudgeHistory: async () => buildBypassNudges(),
+      fetchGuardrailSnapshot: async () => buildBypassGuardrailSnapshot()
+    });
+    let timeline;
+    try {
+      timeline = await fetchLoyaltyTimeline({ limit: 20 });
+    } finally {
+      resetLoyaltyTimelineFetchers();
+    }
     return (
       <LoyaltyHubClient
         ledger={buildBypassLedgerPage()}
@@ -40,6 +59,7 @@ export default async function LoyaltyHubPage() {
         rewards={buildBypassRewards()}
         nextActions={buildBypassNextActions()}
         nudges={buildBypassNudges()}
+        timeline={timeline}
         csrfToken={csrfToken}
       />
     );
@@ -50,15 +70,17 @@ export default async function LoyaltyHubPage() {
     throw new Error("Loyalty hub requires an authenticated user.");
   }
 
-  const [member, rewards, ledger, redemptions, referrals, nextActions, nudges] = await Promise.all([
-    fetchLoyaltyMember(userId),
-    fetchLoyaltyRewards(),
-    fetchLoyaltyLedger(),
-    fetchLoyaltyRedemptions(),
-    fetchReferralConversions({ statuses: ["converted", "sent", "cancelled", "expired"] }),
-    fetchCheckoutNextActions(userId),
-    fetchLoyaltyNudges()
-  ]);
+  const [member, rewards, ledger, redemptions, referrals, nextActions, nudges, timeline] =
+    await Promise.all([
+      fetchLoyaltyMember(userId),
+      fetchLoyaltyRewards(),
+      fetchLoyaltyLedger(),
+      fetchLoyaltyRedemptions(),
+      fetchReferralConversions({ statuses: ["converted", "sent", "cancelled", "expired"] }),
+      fetchCheckoutNextActions(userId),
+      fetchLoyaltyNudges(),
+      fetchLoyaltyTimeline({ limit: 20 })
+    ]);
 
   return (
     <LoyaltyHubClient
@@ -69,6 +91,7 @@ export default async function LoyaltyHubPage() {
       rewards={rewards}
       nextActions={nextActions}
       nudges={nudges}
+      timeline={timeline}
       csrfToken={csrfToken}
     />
   );

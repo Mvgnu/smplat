@@ -3,5 +3,6 @@
 __all__ = [
     "bundle_acceptance",
     "bundle_guardrails",
+    "checkout_recovery",
     "loyalty",
 ]

@@ -5,6 +5,18 @@ import type { LoyaltyTimelineFetchers } from "@/server/loyalty/timeline";
 const fetchLoyaltyLedger = jest.fn();
 const fetchLoyaltyRedemptions = jest.fn();
 const fetchReferralConversions = jest.fn();
+const fetchLoyaltyNudgeHistory = jest.fn();
+const fetchGuardrailSnapshot = jest.fn();
+
+const originalFetch = globalThis.fetch;
+
+beforeAll(() => {
+  (globalThis as any).fetch = jest.fn();
+});
+
+afterAll(() => {
+  (globalThis as any).fetch = originalFetch;
+});
 
 let fetchLoyaltyTimeline: typeof import("@/server/loyalty/timeline").fetchLoyaltyTimeline;
 let decodeTimelineCursor: typeof import("@/server/loyalty/timeline").decodeTimelineCursor;
@@ -26,13 +38,31 @@ describe("fetchLoyaltyTimeline", () => {
     fetchLoyaltyLedger.mockReset();
     fetchLoyaltyRedemptions.mockReset();
     fetchReferralConversions.mockReset();
+    fetchLoyaltyNudgeHistory.mockReset();
+    fetchGuardrailSnapshot.mockReset();
+
+    fetchLoyaltyNudgeHistory.mockResolvedValue({ nudges: [] });
+    fetchGuardrailSnapshot.mockResolvedValue({
+      inviteQuota: 0,
+      totalActiveInvites: 0,
+      membersAtQuota: 0,
+      cooldownSeconds: 0,
+      cooldownRemainingSeconds: null,
+      cooldownUntil: null,
+      throttleOverrideActive: false,
+      overrides: []
+    });
 
     configureLoyaltyTimelineFetchers({
       fetchLoyaltyLedger: fetchLoyaltyLedger as LoyaltyTimelineFetchers["fetchLoyaltyLedger"],
       fetchLoyaltyRedemptions:
         fetchLoyaltyRedemptions as LoyaltyTimelineFetchers["fetchLoyaltyRedemptions"],
       fetchReferralConversions:
-        fetchReferralConversions as LoyaltyTimelineFetchers["fetchReferralConversions"]
+        fetchReferralConversions as LoyaltyTimelineFetchers["fetchReferralConversions"],
+      fetchLoyaltyNudgeHistory:
+        fetchLoyaltyNudgeHistory as LoyaltyTimelineFetchers["fetchLoyaltyNudgeHistory"],
+      fetchGuardrailSnapshot:
+        fetchGuardrailSnapshot as LoyaltyTimelineFetchers["fetchGuardrailSnapshot"]
     });
   });
 
@@ -98,7 +128,13 @@ describe("fetchLoyaltyTimeline", () => {
       "redemption-redemption-one",
       "ledger-ledger-old"
     ]);
-    expect(result.cursor).toEqual({ ledger: null, redemptions: null, referrals: null });
+    expect(result.cursor).toEqual({
+      ledger: null,
+      redemptions: null,
+      referrals: null,
+      nudges: null,
+      guardrails: null
+    });
     expect(decodeTimelineCursor(result.cursorToken)).toEqual(result.cursor);
   });
 
@@ -166,9 +202,76 @@ describe("fetchLoyaltyTimeline", () => {
   });
 
   it("encodes and decodes timeline cursors", () => {
-    const cursor = { ledger: "cursor-ledger", redemptions: "cursor-redemption", referrals: null };
+    const cursor = {
+      ledger: "cursor-ledger",
+      redemptions: "cursor-redemption",
+      referrals: null,
+      nudges: "cursor-nudges",
+      guardrails: null
+    };
     const token = encodeTimelineCursor(cursor);
     expect(token).not.toBeNull();
     expect(decodeTimelineCursor(token)).toEqual(cursor);
+  });
+
+  it("includes nudge and guardrail entries when present", async () => {
+    fetchLoyaltyLedger.mockResolvedValue({ entries: [], nextCursor: null });
+    fetchLoyaltyRedemptions.mockResolvedValue({ redemptions: [], nextCursor: null, pendingCount: 0 });
+    fetchReferralConversions.mockResolvedValue({
+      invites: [],
+      nextCursor: null,
+      statusCounts: {},
+      convertedPoints: 0,
+      lastActivity: null
+    });
+    fetchLoyaltyNudgeHistory.mockResolvedValue({
+      nudges: [
+        {
+          id: "nudge-1",
+          nudgeType: "checkout_reminder",
+          headline: "Complete your checkout",
+          body: "You have items waiting to be confirmed.",
+          ctaLabel: "Resume checkout",
+          ctaHref: "/checkout/resume",
+          expiresAt: null,
+          priority: 1,
+          metadata: { intentId: "intent-1" },
+          campaignSlug: "launch",
+          channels: ["email"],
+          status: "SENT",
+          lastTriggeredAt: "2024-03-07T15:00:00Z",
+          acknowledgedAt: "2024-03-07T16:00:00Z",
+          dismissedAt: null
+        }
+      ]
+    });
+    fetchGuardrailSnapshot.mockResolvedValue({
+      inviteQuota: 10,
+      totalActiveInvites: 2,
+      membersAtQuota: 1,
+      cooldownSeconds: 3600,
+      cooldownRemainingSeconds: 1200,
+      cooldownUntil: "2024-03-07T18:00:00Z",
+      throttleOverrideActive: false,
+      overrides: [
+        {
+          id: "override-1",
+          scope: "invite_quota",
+          justification: "VIP concierge",
+          metadata: {},
+          targetMemberId: "member-123",
+          createdByUserId: "user-456",
+          createdAt: "2024-03-07T14:30:00Z",
+          expiresAt: null,
+          revokedAt: null,
+          isActive: true
+        }
+      ]
+    });
+
+    const result = await fetchLoyaltyTimeline({ limit: 5 });
+
+    expect(result.entries.some((entry) => entry.kind === "nudge")).toBe(true);
+    expect(result.entries.some((entry) => entry.kind === "guardrail_override")).toBe(true);
   });
 });

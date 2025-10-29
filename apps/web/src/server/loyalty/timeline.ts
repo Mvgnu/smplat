@@ -1,7 +1,11 @@
 import { Buffer } from "node:buffer";
 
 import type {
+  LoyaltyGuardrailOverride,
+  LoyaltyGuardrailSnapshot,
   LoyaltyLedgerEntry,
+  LoyaltyNudgeCard,
+  LoyaltyNudgeFeed,
   LoyaltyRedemption,
   LoyaltyTimelineCursor,
   LoyaltyTimelineEntry,
@@ -12,20 +16,26 @@ import type {
 
 import {
   fetchLoyaltyLedger as fetchLoyaltyLedgerData,
+  fetchLoyaltyNudgeHistory as fetchLoyaltyNudgeHistoryData,
   fetchLoyaltyRedemptions as fetchLoyaltyRedemptionsData,
   fetchReferralConversions as fetchReferralConversionsData
 } from "@/app/(storefront)/account/loyalty/data";
+import { fetchGuardrailSnapshot } from "@/server/loyalty/guardrails";
 
 export type LoyaltyTimelineFetchers = {
   fetchLoyaltyLedger: typeof fetchLoyaltyLedgerData;
   fetchLoyaltyRedemptions: typeof fetchLoyaltyRedemptionsData;
   fetchReferralConversions: typeof fetchReferralConversionsData;
+  fetchLoyaltyNudgeHistory: typeof fetchLoyaltyNudgeHistoryData;
+  fetchGuardrailSnapshot: typeof fetchGuardrailSnapshot;
 };
 
 let fetchers: LoyaltyTimelineFetchers = {
   fetchLoyaltyLedger: fetchLoyaltyLedgerData,
   fetchLoyaltyRedemptions: fetchLoyaltyRedemptionsData,
-  fetchReferralConversions: fetchReferralConversionsData
+  fetchReferralConversions: fetchReferralConversionsData,
+  fetchLoyaltyNudgeHistory: fetchLoyaltyNudgeHistoryData,
+  fetchGuardrailSnapshot
 };
 
 export function configureLoyaltyTimelineFetchers(
@@ -38,7 +48,9 @@ export function resetLoyaltyTimelineFetchers(): void {
   fetchers = {
     fetchLoyaltyLedger: fetchLoyaltyLedgerData,
     fetchLoyaltyRedemptions: fetchLoyaltyRedemptionsData,
-    fetchReferralConversions: fetchReferralConversionsData
+    fetchReferralConversions: fetchReferralConversionsData,
+    fetchLoyaltyNudgeHistory: fetchLoyaltyNudgeHistoryData,
+    fetchGuardrailSnapshot
   };
 }
 
@@ -77,7 +89,7 @@ export function decodeTimelineCursor(
   return decodeTimelineCursorToken(cursor);
 }
 
-type TimelineSourceKind = "ledger" | "redemption" | "referral";
+type TimelineSourceKind = "ledger" | "redemption" | "referral" | "nudge" | "guardrail";
 
 type TimelineSourceState<T> = {
   kind: TimelineSourceKind;
@@ -94,6 +106,13 @@ type NormalizedTimelineFilters = {
   includeLedger: boolean;
   includeRedemptions: boolean;
   includeReferrals: boolean;
+  includeNudges: boolean;
+  includeGuardrails: boolean;
+  nudgeStatuses: string[] | null;
+  guardrailScopes: string[] | null;
+  referralCode: string | null;
+  campaignSlug: string | null;
+  checkoutOrderId: string | null;
 };
 
 function normalizeFilters(filters?: LoyaltyTimelineFilters): NormalizedTimelineFilters {
@@ -106,7 +125,14 @@ function normalizeFilters(filters?: LoyaltyTimelineFilters): NormalizedTimelineF
     referralStatuses: filters?.referralStatuses ?? null,
     includeLedger: filters?.includeLedger ?? true,
     includeRedemptions: filters?.includeRedemptions ?? true,
-    includeReferrals: filters?.includeReferrals ?? true
+    includeReferrals: filters?.includeReferrals ?? true,
+    includeNudges: filters?.includeNudges ?? true,
+    includeGuardrails: filters?.includeGuardrails ?? true,
+    nudgeStatuses: filters?.nudgeStatuses ?? null,
+    guardrailScopes: filters?.guardrailScopes ?? null,
+    referralCode: filters?.referralCode?.toLowerCase() ?? null,
+    campaignSlug: filters?.campaignSlug?.toLowerCase() ?? null,
+    checkoutOrderId: filters?.checkoutOrderId?.toLowerCase() ?? null
   };
 }
 
@@ -118,6 +144,10 @@ function pickTimestamp(entry: LoyaltyTimelineEntry): string {
       return entry.redemption.requestedAt;
     case "referral":
       return entry.referral.completedAt ?? entry.referral.updatedAt ?? entry.referral.createdAt;
+    case "nudge":
+      return pickNudgeTimestamp(entry.nudge);
+    case "guardrail_override":
+      return entry.override.createdAt;
     default:
       return new Date().toISOString();
   }
@@ -150,10 +180,57 @@ function toReferralTimelineEntry(entry: ReferralConversion): LoyaltyTimelineEntr
   };
 }
 
+function pickNudgeTimestamp(nudge: LoyaltyNudgeCard): string {
+  return (
+    nudge.acknowledgedAt ??
+    nudge.dismissedAt ??
+    nudge.lastTriggeredAt ??
+    nudge.expiresAt ??
+    new Date().toISOString()
+  );
+}
+
+function toNudgeTimelineEntry(entry: LoyaltyNudgeCard): LoyaltyTimelineEntry {
+  return {
+    kind: "nudge",
+    id: entry.id,
+    occurredAt: pickNudgeTimestamp(entry),
+    nudge: entry
+  };
+}
+
+function toGuardrailTimelineEntry(entry: LoyaltyGuardrailOverride): LoyaltyTimelineEntry {
+  return {
+    kind: "guardrail_override",
+    id: entry.id,
+    occurredAt: entry.createdAt,
+    override: entry
+  };
+}
+
 function compareTimelineEntries(a: LoyaltyTimelineEntry, b: LoyaltyTimelineEntry): number {
   const left = new Date(pickTimestamp(a)).getTime();
   const right = new Date(pickTimestamp(b)).getTime();
   return right - left;
+}
+
+function resolveTimelineEntry(
+  state: TimelineSourceState<any>,
+  entry: any
+): LoyaltyTimelineEntry {
+  switch (state.kind) {
+    case "ledger":
+      return toLedgerTimelineEntry(entry);
+    case "redemption":
+      return toRedemptionTimelineEntry(entry);
+    case "referral":
+      return toReferralTimelineEntry(entry);
+    case "nudge":
+      return toNudgeTimelineEntry(entry as LoyaltyNudgeCard);
+    case "guardrail":
+    default:
+      return toGuardrailTimelineEntry(entry as LoyaltyGuardrailOverride);
+  }
 }
 
 function resolveCursorInput(cursor?: LoyaltyTimelineCursor | string | null): LoyaltyTimelineCursor | null {
@@ -166,6 +243,62 @@ function resolveCursorInput(cursor?: LoyaltyTimelineCursor | string | null): Loy
   }
 
   return cursor;
+}
+
+function matchesAdvancedFilters(
+  entry: LoyaltyTimelineEntry,
+  filters: NormalizedTimelineFilters
+): boolean {
+  if (filters.referralCode) {
+    const target = filters.referralCode;
+    if (entry.kind === "referral") {
+      return entry.referral.code?.toLowerCase().includes(target) ?? false;
+    }
+    if (entry.kind === "ledger") {
+      const metadata = entry.ledger.metadata ?? {};
+      const referralMetadata =
+        (metadata.referral_code as string | undefined) ||
+        (metadata.referralCode as string | undefined);
+      if (!referralMetadata) {
+        return false;
+      }
+      return referralMetadata.toLowerCase().includes(target);
+    }
+    return false;
+  }
+
+  if (filters.campaignSlug) {
+    if (entry.kind !== "nudge") {
+      return false;
+    }
+    return (entry.nudge.campaignSlug ?? "").toLowerCase().includes(filters.campaignSlug);
+  }
+
+  if (filters.checkoutOrderId) {
+    const target = filters.checkoutOrderId;
+    if (entry.kind === "ledger") {
+      const orderId =
+        entry.ledger.checkoutOrderId ??
+        (entry.ledger.metadata.order_id as string | undefined) ??
+        (entry.ledger.metadata.orderId as string | undefined);
+      if (!orderId) {
+        return false;
+      }
+      return orderId.toLowerCase().includes(target);
+    }
+    if (entry.kind === "nudge") {
+      const nudgeOrder =
+        (entry.nudge.metadata.orderId as string | undefined) ??
+        (entry.nudge.metadata.checkoutIntentId as string | undefined);
+      if (!nudgeOrder) {
+        return false;
+      }
+      return nudgeOrder.toLowerCase().includes(target);
+    }
+    return false;
+  }
+
+  return true;
 }
 
 async function refillLedgerState(
@@ -213,6 +346,40 @@ async function refillReferralState(
   });
   state.entries.push(...response.invites);
   state.nextCursor = response.nextCursor ?? null;
+}
+
+async function hydrateNudgeState(
+  state: TimelineSourceState<LoyaltyNudgeCard>,
+  filters: NormalizedTimelineFilters,
+  limit: number
+): Promise<void> {
+  const response: LoyaltyNudgeFeed = await fetchers.fetchLoyaltyNudgeHistory();
+  const statuses = filters.nudgeStatuses?.map((status) => status.toLowerCase());
+  const filtered = response.nudges.filter((nudge) => {
+    if (!statuses || statuses.length === 0) {
+      return true;
+    }
+    return statuses.includes(nudge.status.toLowerCase());
+  });
+  state.entries.push(...filtered.slice(0, limit * 3));
+  state.nextCursor = null;
+}
+
+async function hydrateGuardrailState(
+  state: TimelineSourceState<LoyaltyGuardrailOverride>,
+  filters: NormalizedTimelineFilters
+): Promise<void> {
+  const snapshot: LoyaltyGuardrailSnapshot = await fetchers.fetchGuardrailSnapshot();
+  const scopes = filters.guardrailScopes?.map((scope) => scope.toLowerCase());
+  const overrides = snapshot.overrides ?? [];
+  const filtered = overrides.filter((override) => {
+    if (!scopes || scopes.length === 0) {
+      return true;
+    }
+    return scopes.includes(override.scope.toLowerCase());
+  });
+  state.entries.push(...filtered);
+  state.nextCursor = null;
 }
 
 export type FetchLoyaltyTimelineOptions = {
@@ -270,6 +437,34 @@ export async function fetchLoyaltyTimeline(
     states.push(referralState);
   }
 
+  if (filters.includeNudges) {
+    const nudgeState: TimelineSourceState<LoyaltyNudgeCard> = {
+      kind: "nudge",
+      entries: [],
+      consumed: 0,
+      nextCursor: null,
+      lastConsumedCursor: cursor?.nudges ?? null
+    };
+    await hydrateNudgeState(nudgeState, filters, limit);
+    if (nudgeState.entries.length > 0) {
+      states.push(nudgeState);
+    }
+  }
+
+  if (filters.includeGuardrails) {
+    const guardrailState: TimelineSourceState<LoyaltyGuardrailOverride> = {
+      kind: "guardrail",
+      entries: [],
+      consumed: 0,
+      nextCursor: null,
+      lastConsumedCursor: cursor?.guardrails ?? null
+    };
+    await hydrateGuardrailState(guardrailState, filters);
+    if (guardrailState.entries.length > 0) {
+      states.push(guardrailState);
+    }
+  }
+
   const entries: LoyaltyTimelineEntry[] = [];
 
   const getNextCandidate = (): { state: TimelineSourceState<any>; entry: any } | null => {
@@ -283,17 +478,8 @@ export async function fetchLoyaltyTimeline(
         chosen = { state, entry: candidate };
         continue;
       }
-      const currentEntry = state.kind === "ledger"
-        ? toLedgerTimelineEntry(candidate)
-        : state.kind === "redemption"
-          ? toRedemptionTimelineEntry(candidate)
-          : toReferralTimelineEntry(candidate);
-      const chosenEntry =
-        chosen.state.kind === "ledger"
-          ? toLedgerTimelineEntry(chosen.entry)
-          : chosen.state.kind === "redemption"
-            ? toRedemptionTimelineEntry(chosen.entry)
-            : toReferralTimelineEntry(chosen.entry);
+      const currentEntry = resolveTimelineEntry(state, candidate);
+      const chosenEntry = resolveTimelineEntry(chosen.state, chosen.entry);
       if (compareTimelineEntries(currentEntry, chosenEntry) >= 0) {
         continue;
       }
@@ -322,17 +508,11 @@ export async function fetchLoyaltyTimeline(
     const { state, entry } = candidate;
     state.consumed += 1;
 
-    let timelineEntry: LoyaltyTimelineEntry;
-    if (state.kind === "ledger") {
-      timelineEntry = toLedgerTimelineEntry(entry);
-      state.lastConsumedCursor = encodeTimeUuidCursor(entry.occurredAt, entry.id);
-    } else if (state.kind === "redemption") {
-      timelineEntry = toRedemptionTimelineEntry(entry);
-      state.lastConsumedCursor = encodeTimeUuidCursor(entry.requestedAt, entry.id);
-    } else {
-      timelineEntry = toReferralTimelineEntry(entry);
-      const timestamp = timelineEntry.occurredAt;
-      state.lastConsumedCursor = encodeTimeUuidCursor(timestamp, entry.id);
+    const timelineEntry = resolveTimelineEntry(state, entry);
+    state.lastConsumedCursor = encodeTimeUuidCursor(timelineEntry.occurredAt, timelineEntry.id);
+
+    if (!matchesAdvancedFilters(timelineEntry, filters)) {
+      continue;
     }
 
     entries.push(timelineEntry);
@@ -341,11 +521,15 @@ export async function fetchLoyaltyTimeline(
   const ledgerCursorState = states.find((state) => state.kind === "ledger");
   const redemptionCursorState = states.find((state) => state.kind === "redemption");
   const referralCursorState = states.find((state) => state.kind === "referral");
+  const nudgeCursorState = states.find((state) => state.kind === "nudge");
+  const guardrailCursorState = states.find((state) => state.kind === "guardrail");
 
   const cursorPayload: LoyaltyTimelineCursor = {
     ledger: filters.includeLedger ? ledgerCursorState?.nextCursor ?? null : null,
     redemptions: filters.includeRedemptions ? redemptionCursorState?.nextCursor ?? null : null,
-    referrals: filters.includeReferrals ? referralCursorState?.nextCursor ?? null : null
+    referrals: filters.includeReferrals ? referralCursorState?.nextCursor ?? null : null,
+    nudges: filters.includeNudges ? nudgeCursorState?.nextCursor ?? null : null,
+    guardrails: filters.includeGuardrails ? guardrailCursorState?.nextCursor ?? null : null
   };
 
   const hasMore = states.some((state) => {

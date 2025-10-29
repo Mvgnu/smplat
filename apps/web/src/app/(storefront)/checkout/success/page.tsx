@@ -6,12 +6,20 @@ import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Gift, Sparkles } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
-import type { LoyaltyCheckoutIntent, LoyaltyNextActionFeed } from "@smplat/types";
+import type {
+  CheckoutOrchestration,
+  LoyaltyCheckoutIntent,
+  LoyaltyNextActionFeed,
+  LoyaltyNudgeCard,
+  LoyaltyNudgeFeed
+} from "@smplat/types";
 import {
   clearResolvedIntents,
   consumeSuccessIntents,
   persistServerFeed
 } from "@/lib/loyalty/intents";
+import { LoyaltyNudgeRail } from "@/components/loyalty/nudge-rail";
+import { CheckoutRecoveryBanner } from "@/components/checkout/recovery-banner";
 import { useCartStore } from "@/store/cart";
 
 type RemoteOnboardingTask = {
@@ -63,6 +71,12 @@ export default function CheckoutSuccessPage() {
   const [journeyStatus, setJourneyStatus] = useState<string | null>(null);
   const [checkoutIntents, setCheckoutIntents] = useState<LoyaltyCheckoutIntent[]>([]);
   const [intentSyncStatus, setIntentSyncStatus] = useState<"idle" | "syncing" | "synced" | "error">("idle");
+  const [nudges, setNudges] = useState<LoyaltyNudgeCard[]>([]);
+  const [orchestration, setOrchestration] = useState<CheckoutOrchestration | null>(null);
+  const [orchestrationState, setOrchestrationState] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [orchestrationError, setOrchestrationError] = useState<string | null>(null);
 
   const fallbackReferral = useMemo(() => {
     if (!orderId) {
@@ -185,6 +199,33 @@ export default function CheckoutSuccessPage() {
     [checkoutIntents]
   );
 
+  const resolveNudge = useCallback(
+    (card: LoyaltyNudgeCard, status: "acknowledged" | "dismissed") => {
+      setNudges((previous) => previous.filter((entry) => entry.id !== card.id));
+      void (async () => {
+        try {
+          const response = await fetch(`/api/loyalty/nudges/${card.id}/status`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status })
+          });
+          if (!response.ok) {
+            throw new Error(await response.text());
+          }
+          const feedResponse = await fetch("/api/loyalty/nudges");
+          if (feedResponse.ok) {
+            const feed = (await feedResponse.json()) as LoyaltyNudgeFeed;
+            setNudges(feed.nudges);
+          }
+        } catch (error) {
+          console.warn("Failed to resolve loyalty nudge", error);
+          setNudges((previous) => [card, ...previous.filter((entry) => entry.id !== card.id)]);
+        }
+      })();
+    },
+    []
+  );
+
   const handleReferralClick = useCallback(async () => {
     const codeToCopy = hydratedReferral;
     try {
@@ -203,6 +244,52 @@ export default function CheckoutSuccessPage() {
   useEffect(() => {
     clear();
   }, [clear]);
+
+  useEffect(() => {
+    if (!orderId) {
+      setOrchestration(null);
+      setOrchestrationState("idle");
+      setOrchestrationError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setOrchestrationState("loading");
+
+    const loadOrchestration = async () => {
+      try {
+        const response = await fetch(`/api/checkout/orchestrations/${orderId}`, {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const payload = (await response.json()) as CheckoutOrchestration;
+        if (!cancelled) {
+          setOrchestration(payload);
+          setOrchestrationState("ready");
+          setOrchestrationError(null);
+        }
+      } catch (error) {
+        if (cancelled || error instanceof DOMException) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Unable to load checkout orchestration";
+        setOrchestration(null);
+        setOrchestrationState("error");
+        setOrchestrationError(message);
+      }
+    };
+
+    void loadOrchestration();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [orderId]);
 
   useEffect(() => {
     const intents = consumeSuccessIntents(orderId);
@@ -232,6 +319,43 @@ export default function CheckoutSuccessPage() {
     void loadServerFeed();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const loadNudges = async () => {
+      try {
+        const response = await fetch("/api/loyalty/nudges", {
+          headers: { Accept: "application/json" },
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          return;
+        }
+        const feed = (await response.json()) as LoyaltyNudgeFeed;
+        if (!cancelled) {
+          setNudges(feed.nudges);
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException)) {
+          console.warn("Failed to fetch loyalty nudges", error);
+        }
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      void loadNudges();
+    }, 45_000);
+
+    void loadNudges();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -314,10 +438,25 @@ export default function CheckoutSuccessPage() {
         {orderId ? (
           <p className="mt-2 text-sm text-white/50">Order reference: {orderId}</p>
         ) : null}
-        {journeyStatus ? (
-          <p className="mt-2 text-xs uppercase tracking-[0.3em] text-white/40">Journey status: {journeyStatus}</p>
-        ) : null}
-      </section>
+      {journeyStatus ? (
+        <p className="mt-2 text-xs uppercase tracking-[0.3em] text-white/40">Journey status: {journeyStatus}</p>
+      ) : null}
+    </section>
+
+      <CheckoutRecoveryBanner
+        orchestration={orchestration}
+        pendingIntents={checkoutIntents.length}
+        loading={orchestrationState === "loading" && Boolean(orderId)}
+        error={orchestrationState === "error" ? orchestrationError : null}
+      />
+
+      <LoyaltyNudgeRail
+        title="Real-time loyalty nudges"
+        subtitle="Stay ahead with reminders tailored to your recent activity."
+        nudges={nudges}
+        onResolve={resolveNudge}
+        dataTestId="checkout-nudges"
+      />
 
       {hasCheckoutIntents ? (
         <section

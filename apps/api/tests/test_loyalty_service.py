@@ -1,5 +1,4 @@
 import datetime as dt
-import datetime as dt
 from decimal import Decimal
 
 import pytest
@@ -13,7 +12,10 @@ from smplat_api.models.loyalty import (
     LoyaltyLedgerEntry,
     LoyaltyLedgerEntryType,
     LoyaltyNudge,
+    LoyaltyNudgeCampaign,
+    LoyaltyNudgeChannel,
     LoyaltyNudgeStatus,
+    LoyaltyNudgeType,
     LoyaltyPointExpiration,
     LoyaltyPointExpirationStatus,
     LoyaltyRedemption,
@@ -170,3 +172,64 @@ async def test_member_nudges_from_signals(session_factory) -> None:
         refreshed_cards = await service.list_member_nudges(member, now=now)
         refreshed_ids = {card.id for card in refreshed_cards}
         assert target.id not in refreshed_ids
+
+
+@pytest.mark.asyncio
+async def test_collect_nudge_dispatch_batch_respects_frequency(session_factory) -> None:
+    async with session_factory() as session:
+        service = LoyaltyService(session)
+
+        campaign = LoyaltyNudgeCampaign(
+            slug="expiring_points",
+            name="Expiring points",
+            ttl_seconds=86_400,
+            frequency_cap_hours=12,
+            default_priority=25,
+            channel_preferences=[
+                LoyaltyNudgeChannel.EMAIL,
+                LoyaltyNudgeChannel.SMS,
+            ],
+        )
+        tier = LoyaltyTier(slug="platinum", name="Platinum", point_threshold=Decimal("0"), benefits=[])
+        user = User(email="dispatch@example.com")
+        session.add_all([campaign, tier, user])
+        await session.flush()
+
+        member = await service.ensure_member(user.id)
+        now = dt.datetime.now(dt.timezone.utc)
+
+        nudge = LoyaltyNudge(
+            member_id=member.id,
+            nudge_type=LoyaltyNudgeType.EXPIRING_POINTS,
+            source_id="expiring-window",
+            status=LoyaltyNudgeStatus.ACTIVE,
+            payload_json={
+                "headline": "Points expiring",
+                "body": "Redeem before your balance resets.",
+                "ctaLabel": "Redeem",
+                "ctaHref": "/account/loyalty#rewards",
+            },
+            priority=5,
+            campaign_slug="expiring_points",
+            channel_preferences=[
+                LoyaltyNudgeChannel.EMAIL,
+                LoyaltyNudgeChannel.SMS,
+            ],
+            expires_at=now + dt.timedelta(days=1),
+            last_triggered_at=now - dt.timedelta(hours=13),
+        )
+        session.add(nudge)
+        await session.flush()
+
+        candidates = await service.collect_nudge_dispatch_batch(now=now)
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate.nudge.id == nudge.id
+        assert {channel.value for channel in candidate.channels} == {"email", "sms"}
+
+        # Update the nudge as if just dispatched; batch should now filter it out until cooldown passes.
+        nudge.last_triggered_at = now - dt.timedelta(hours=1)
+        await session.flush()
+
+        filtered = await service.collect_nudge_dispatch_batch(now=now)
+        assert filtered == []

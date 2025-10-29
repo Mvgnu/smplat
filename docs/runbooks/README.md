@@ -12,6 +12,11 @@ Each document provides repeatable, end-to-end procedures for responding to event
 - Operator dashboards or ad-hoc analysts can query `checkout_offer_events` and `onboarding_journey_events` via Prisma or the warehouse mirror; both tables and their indexes are provisioned via migrations (no more lazy CREATE TABLE statements).
 - To view real-time client checklists, call `GET /api/onboarding/journeys/:orderId` from the Next.js app or query the FastAPI endpoint `/api/v1/orders/{orderId}/onboarding` directly with the checkout API key.
 
+## Checkout Recovery Orchestration
+
+- The full lifecycle for storefront checkouts is detailed in [`checkout-recovery.md`](./checkout-recovery.md).
+- Includes API usage, scheduler expectations, notification hooks, and QA scenarios for stalled orders and recovery prompts.
+
 ## Merchandising Console
 
 - The admin merchandising workflow is documented in [`merchandising-console.md`](./merchandising-console.md).

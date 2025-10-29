@@ -10,3 +10,4 @@ The service is intentionally thin and reuses shared notification infrastructure 
 - Redemption flow helpers for reserving balances, fulfilling rewards, and reversing on failure.
 - Point expiration scheduling utilities consumed by the loyalty progression job.
 - Proactive nudge aggregation that merges expiring points, stalled redemptions, and checkout reminders into persisted cards and notification-ready payloads.
+- Predictive segmentation + velocity analytics surfaced by `LoyaltyAnalyticsService` with persisted snapshots for operator and storefront insights.

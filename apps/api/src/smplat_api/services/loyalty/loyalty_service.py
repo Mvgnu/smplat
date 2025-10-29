@@ -26,6 +26,9 @@ from smplat_api.models.loyalty import (
     LoyaltyLedgerEntry,
     LoyaltyLedgerEntryType,
     LoyaltyNudge,
+    LoyaltyNudgeCampaign,
+    LoyaltyNudgeChannel,
+    LoyaltyNudgeDispatchEvent,
     LoyaltyNudgeStatus,
     LoyaltyNudgeType,
     LoyaltyMember,
@@ -45,7 +48,6 @@ from smplat_api.core.settings import settings
 
 CHECKOUT_INTENT_DEFAULT_TTL = timedelta(days=14)
 NUDGE_REFRESH_WINDOW = timedelta(hours=6)
-NUDGE_NOTIFICATION_COOLDOWN = timedelta(hours=12)
 NUDGE_EXPIRING_POINTS_WINDOW = timedelta(days=7)
 NUDGE_REDEMPTION_STALLED_WINDOW = timedelta(days=3)
 
@@ -63,6 +65,23 @@ class LoyaltyNudgeCard:
     expires_at: Optional[datetime]
     priority: int
     metadata: dict[str, Any]
+    campaign_slug: Optional[str]
+    channels: list[LoyaltyNudgeChannel]
+    status: LoyaltyNudgeStatus
+    last_triggered_at: Optional[datetime]
+    acknowledged_at: Optional[datetime]
+    dismissed_at: Optional[datetime]
+
+
+@dataclass
+class NudgeCampaignConfig:
+    """Resolved campaign configuration for nudge orchestration."""
+
+    slug: str
+    ttl: timedelta
+    frequency_cap: timedelta
+    default_priority: int
+    channels: list[LoyaltyNudgeChannel]
 
 
 @dataclass
@@ -74,6 +93,16 @@ class _NudgeSignal:
     payload: dict[str, Any]
     expires_at: Optional[datetime]
     priority: int = 0
+    campaign_slug: Optional[str] = None
+    channels: Optional[list[LoyaltyNudgeChannel]] = None
+
+
+@dataclass
+class LoyaltyNudgeDispatchCandidate:
+    """Pending dispatch enriched with delivery channels."""
+
+    nudge: LoyaltyNudge
+    channels: list[LoyaltyNudgeChannel]
 
 
 @dataclass
@@ -145,6 +174,71 @@ class LoyaltyService:
     ) -> None:
         self._db = db_session
         self._notifications = notification_service or NotificationService(db_session)
+        self._campaign_cache: dict[str, NudgeCampaignConfig] | None = None
+
+    async def _get_campaigns(self) -> dict[str, NudgeCampaignConfig]:
+        """Load loyalty nudge campaigns from persistence."""
+
+        if self._campaign_cache is not None:
+            return self._campaign_cache
+
+        stmt = select(LoyaltyNudgeCampaign)
+        result = await self._db.execute(stmt)
+        campaigns: dict[str, NudgeCampaignConfig] = {}
+        for record in result.scalars().all():
+            channels = list(record.channel_preferences or [])
+            if not channels:
+                channels = [LoyaltyNudgeChannel.EMAIL]
+            campaigns[record.slug] = NudgeCampaignConfig(
+                slug=record.slug,
+                ttl=timedelta(seconds=int(record.ttl_seconds or 0) or 86_400),
+                frequency_cap=timedelta(hours=int(record.frequency_cap_hours or 0) or 12),
+                default_priority=int(record.default_priority or 0),
+                channels=channels,
+            )
+
+        self._campaign_cache = campaigns
+        return campaigns
+
+    @staticmethod
+    def _normalize_channels(
+        channels: Sequence[LoyaltyNudgeChannel | str] | None,
+    ) -> list[LoyaltyNudgeChannel]:
+        """Ensure channel preferences resolve to enum values."""
+
+        resolved: list[LoyaltyNudgeChannel] = []
+        for entry in channels or []:
+            if isinstance(entry, LoyaltyNudgeChannel):
+                resolved.append(entry)
+                continue
+            try:
+                resolved.append(LoyaltyNudgeChannel(str(entry)))
+            except ValueError:
+                logger.warning("Ignoring unsupported loyalty nudge channel", channel=entry)
+
+        if not resolved:
+            resolved = [LoyaltyNudgeChannel.EMAIL]
+        return resolved
+
+    @staticmethod
+    def _resolve_campaign(
+        slug: str | None,
+        campaigns: dict[str, NudgeCampaignConfig],
+        *,
+        fallback_priority: int,
+    ) -> NudgeCampaignConfig:
+        """Resolve campaign metadata with sane defaults."""
+
+        if slug and slug in campaigns:
+            return campaigns[slug]
+
+        return NudgeCampaignConfig(
+            slug=slug or "default",
+            ttl=timedelta(days=1),
+            frequency_cap=timedelta(hours=12),
+            default_priority=fallback_priority,
+            channels=[LoyaltyNudgeChannel.EMAIL],
+        )
 
     async def list_active_tiers(self) -> list[LoyaltyTier]:
         """Return active tiers ordered by threshold."""
@@ -232,12 +326,17 @@ class LoyaltyService:
         if new_balance < Decimal("0"):
             raise ValueError("Insufficient loyalty balance for ledger entry")
 
+        enriched_metadata: dict[str, Any] = {**(metadata or {})}
+        enriched_metadata.setdefault("balance_before", str(balance_before))
+        enriched_metadata.setdefault("balance_after", str(new_balance))
+        enriched_metadata.setdefault("balance_delta", str(balance_delta))
+
         ledger_entry = LoyaltyLedgerEntry(
             member_id=member.id,
             entry_type=entry_type,
             amount=amount,
             description=description,
-            metadata_json=metadata or {},
+            metadata_json=enriched_metadata,
         )
         self._db.add(ledger_entry)
 
@@ -498,25 +597,7 @@ class LoyaltyService:
 
         cards: list[LoyaltyNudgeCard] = []
         for nudge in nudges:
-            payload = dict(nudge.payload_json or {})
-            metadata = payload.get("metadata") or {}
-            headline = str(payload.get("headline") or "")
-            body = str(payload.get("body") or "")
-            cta_label = payload.get("ctaLabel")
-            cta_href = payload.get("ctaHref")
-            cards.append(
-                LoyaltyNudgeCard(
-                    id=nudge.id,
-                    nudge_type=nudge.nudge_type,
-                    headline=headline,
-                    body=body,
-                    cta_label=cta_label,
-                    cta_href=cta_href,
-                    expires_at=nudge.expires_at,
-                    priority=nudge.priority or 0,
-                    metadata=metadata,
-                )
-            )
+            cards.append(self._to_nudge_card(nudge))
 
         cards.sort(
             key=lambda card: (
@@ -526,6 +607,51 @@ class LoyaltyService:
             )
         )
         return cards
+
+    def _to_nudge_card(self, nudge: LoyaltyNudge) -> LoyaltyNudgeCard:
+        payload = dict(nudge.payload_json or {})
+        metadata = payload.get("metadata") or {}
+        headline = str(payload.get("headline") or "")
+        body = str(payload.get("body") or "")
+        cta_label = payload.get("ctaLabel")
+        cta_href = payload.get("ctaHref")
+        channels = self._normalize_channels(nudge.channel_preferences)
+        return LoyaltyNudgeCard(
+            id=nudge.id,
+            nudge_type=nudge.nudge_type,
+            headline=headline,
+            body=body,
+            cta_label=cta_label,
+            cta_href=cta_href,
+            expires_at=nudge.expires_at,
+            priority=nudge.priority or 0,
+            metadata=metadata,
+            campaign_slug=nudge.campaign_slug,
+            channels=channels,
+            status=nudge.status,
+            last_triggered_at=nudge.last_triggered_at,
+            acknowledged_at=nudge.acknowledged_at,
+            dismissed_at=nudge.dismissed_at,
+        )
+
+    async def list_member_nudge_history(
+        self,
+        member: LoyaltyMember,
+        *,
+        limit: int = 100,
+    ) -> list[LoyaltyNudgeCard]:
+        """Return lifecycle history of loyalty nudges for a member."""
+
+        bounded_limit = max(1, min(limit, 200))
+        stmt = (
+            select(LoyaltyNudge)
+            .where(LoyaltyNudge.member_id == member.id)
+            .order_by(LoyaltyNudge.updated_at.desc(), LoyaltyNudge.id.desc())
+            .limit(bounded_limit)
+        )
+        result = await self._db.execute(stmt)
+        nudges = list(result.scalars().all())
+        return [self._to_nudge_card(nudge) for nudge in nudges]
 
     async def update_member_nudge_status(
         self,
@@ -628,39 +754,56 @@ class LoyaltyService:
         *,
         limit: int = 100,
         now: datetime | None = None,
-    ) -> list[LoyaltyNudge]:
+    ) -> list[LoyaltyNudgeDispatchCandidate]:
         """Return nudges ready for outbound notifications."""
 
         now = now or datetime.now(timezone.utc)
-        cutoff = now - NUDGE_NOTIFICATION_COOLDOWN
+        campaigns = await self._get_campaigns()
         stmt = (
             select(LoyaltyNudge)
             .options(selectinload(LoyaltyNudge.member))
             .where(
                 LoyaltyNudge.status == LoyaltyNudgeStatus.ACTIVE,
                 or_(LoyaltyNudge.expires_at.is_(None), LoyaltyNudge.expires_at > now),
-                or_(
-                    LoyaltyNudge.last_triggered_at.is_(None),
-                    LoyaltyNudge.last_triggered_at <= cutoff,
-                ),
             )
             .order_by(LoyaltyNudge.priority.desc(), LoyaltyNudge.updated_at.desc())
-            .limit(limit)
+            .limit(limit * 3)
         )
         result = await self._db.execute(stmt)
-        return list(result.scalars().all())
+        candidates: list[LoyaltyNudgeDispatchCandidate] = []
+        for nudge in result.scalars().all():
+            campaign = self._resolve_campaign(
+                nudge.campaign_slug, campaigns, fallback_priority=nudge.priority or 0
+            )
+            cutoff = now - campaign.frequency_cap
+            if nudge.last_triggered_at and nudge.last_triggered_at > cutoff:
+                continue
+            channels = self._normalize_channels(nudge.channel_preferences)
+            candidates.append(LoyaltyNudgeDispatchCandidate(nudge=nudge, channels=channels))
+            if len(candidates) >= limit:
+                break
+
+        return candidates
 
     async def mark_nudges_triggered(
         self,
-        nudges: Sequence[LoyaltyNudge],
+        nudges: Sequence[LoyaltyNudgeDispatchCandidate],
         *,
         now: datetime | None = None,
     ) -> None:
         """Record the latest trigger time for dispatched nudges."""
 
         timestamp = now or datetime.now(timezone.utc)
-        for nudge in nudges:
-            nudge.last_triggered_at = timestamp
+        for candidate in nudges:
+            candidate.nudge.last_triggered_at = timestamp
+            for channel in candidate.channels:
+                event = LoyaltyNudgeDispatchEvent(
+                    nudge_id=candidate.nudge.id,
+                    channel=channel,
+                    sent_at=timestamp,
+                    metadata_json={"campaign": candidate.nudge.campaign_slug},
+                )
+                self._db.add(event)
         await self._db.flush()
 
     async def _sync_member_nudges(
@@ -672,7 +815,8 @@ class LoyaltyService:
         """Ensure persisted nudges reflect current loyalty signals."""
 
         current_time = now or datetime.now(timezone.utc)
-        signals = await self._build_nudge_signals(member, now=current_time)
+        campaigns = await self._get_campaigns()
+        signals = await self._build_nudge_signals(member, campaigns, now=current_time)
 
         stmt = select(LoyaltyNudge).where(LoyaltyNudge.member_id == member.id)
         result = await self._db.execute(stmt)
@@ -686,6 +830,19 @@ class LoyaltyService:
             key = (signal.nudge_type, signal.source_id)
             seen_keys.add(key)
             payload = signal.payload
+            campaign = campaigns.get(signal.campaign_slug or "")
+            if campaign is None:
+                campaign = NudgeCampaignConfig(
+                    slug=signal.campaign_slug or "default",
+                    ttl=timedelta(days=1),
+                    frequency_cap=timedelta(hours=12),
+                    default_priority=signal.priority,
+                    channels=[LoyaltyNudgeChannel.EMAIL],
+                )
+            channels = signal.channels or campaign.channels
+            priority = signal.priority if signal.priority else campaign.default_priority
+            expires_at = signal.expires_at or current_time + campaign.ttl
+
             nudge = existing_by_key.get(key)
             if nudge is None:
                 nudge = LoyaltyNudge(
@@ -693,8 +850,10 @@ class LoyaltyService:
                     nudge_type=signal.nudge_type,
                     source_id=signal.source_id,
                     payload_json=payload,
-                    priority=signal.priority,
-                    expires_at=signal.expires_at,
+                    priority=priority,
+                    expires_at=expires_at,
+                    campaign_slug=campaign.slug,
+                    channel_preferences=channels,
                 )
                 self._db.add(nudge)
                 existing_by_key[key] = nudge
@@ -703,8 +862,10 @@ class LoyaltyService:
             if nudge.status != LoyaltyNudgeStatus.DISMISSED:
                 nudge.status = LoyaltyNudgeStatus.ACTIVE
                 nudge.payload_json = payload
-                nudge.priority = signal.priority
-                nudge.expires_at = signal.expires_at
+                nudge.priority = priority
+                nudge.expires_at = expires_at
+                nudge.campaign_slug = campaign.slug
+                nudge.channel_preferences = channels
 
         for nudge in existing:
             key = (nudge.nudge_type, nudge.source_id)
@@ -719,6 +880,7 @@ class LoyaltyService:
     async def _build_nudge_signals(
         self,
         member: LoyaltyMember,
+        campaigns: dict[str, NudgeCampaignConfig],
         *,
         now: datetime,
     ) -> list[_NudgeSignal]:
@@ -737,6 +899,7 @@ class LoyaltyService:
             .order_by(LoyaltyPointExpiration.expires_at.asc())
         )
         exp_result = await self._db.execute(exp_stmt)
+        exp_campaign = self._resolve_campaign("expiring_points", campaigns, fallback_priority=20)
         for expiration in exp_result.scalars().all():
             points = Decimal(expiration.points or 0)
             consumed = Decimal(expiration.consumed_points or 0)
@@ -765,7 +928,9 @@ class LoyaltyService:
                     source_id=str(expiration.id),
                     payload=payload,
                     expires_at=expiration.expires_at,
-                    priority=20,
+                    priority=exp_campaign.default_priority,
+                    campaign_slug=exp_campaign.slug,
+                    channels=exp_campaign.channels,
                 )
             )
 
@@ -782,6 +947,7 @@ class LoyaltyService:
             .order_by(LoyaltyCheckoutIntent.created_at.desc())
         )
         intent_result = await self._db.execute(intent_stmt)
+        checkout_campaign = self._resolve_campaign("checkout_recovery", campaigns, fallback_priority=10)
         for intent in intent_result.scalars().all():
             metadata = intent.metadata_json or {}
             reward_name = metadata.get("rewardName") or metadata.get("reward_slug")
@@ -809,7 +975,9 @@ class LoyaltyService:
                     source_id=str(intent.id),
                     payload=payload,
                     expires_at=intent.expires_at,
-                    priority=10,
+                    priority=checkout_campaign.default_priority,
+                    campaign_slug=checkout_campaign.slug,
+                    channels=checkout_campaign.channels,
                 )
             )
 
@@ -824,6 +992,9 @@ class LoyaltyService:
             .order_by(LoyaltyRedemption.requested_at.asc())
         )
         redemption_result = await self._db.execute(redemption_stmt)
+        redemption_campaign = self._resolve_campaign(
+            "redemption_follow_up", campaigns, fallback_priority=5
+        )
         for redemption in redemption_result.scalars().all():
             reward_name = redemption.reward.name if redemption.reward else None
             headline = "We’re reviewing your redemption"
@@ -854,7 +1025,9 @@ class LoyaltyService:
                     source_id=str(redemption.id),
                     payload=payload,
                     expires_at=redemption.requested_at + timedelta(days=14),
-                    priority=5,
+                    priority=redemption_campaign.default_priority,
+                    campaign_slug=redemption_campaign.slug,
+                    channels=redemption_campaign.channels,
                 )
             )
 

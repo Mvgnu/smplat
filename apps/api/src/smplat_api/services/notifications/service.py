@@ -16,6 +16,7 @@ from smplat_api.models.fulfillment import FulfillmentTask, FulfillmentTaskStatus
 from smplat_api.models.loyalty import (
     LoyaltyMember,
     LoyaltyNudge,
+    LoyaltyNudgeChannel,
     LoyaltyNudgeStatus,
     LoyaltyTier,
 )
@@ -25,7 +26,15 @@ from smplat_api.models.user import User
 from smplat_api.models.notification import NotificationPreference
 from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
 
-from .backend import EmailBackend, SMTPEmailBackend, InMemoryEmailBackend
+from .backend import (
+    EmailBackend,
+    SMTPEmailBackend,
+    InMemoryEmailBackend,
+    SMSBackend,
+    PushBackend,
+    InMemorySMSBackend,
+    InMemoryPushBackend,
+)
 from .templates import (
     RenderedTemplate,
     render_invoice_overdue,
@@ -48,12 +57,15 @@ class NotificationEvent:
     body_html: str | None
     event_type: str
     metadata: dict[str, Any]
+    channel: str
 
 
 @dataclass
 class _OrderContact:
     email: str
     display_name: Optional[str]
+    phone_number: Optional[str] = None
+    push_token: Optional[str] = None
 
 
 @dataclass
@@ -72,15 +84,44 @@ class NotificationService:
         self,
         db_session: AsyncSession,
         backend: Optional[EmailBackend] = None,
+        sms_backend: Optional[SMSBackend] = None,
+        push_backend: Optional[PushBackend] = None,
     ) -> None:
         self._db = db_session
         self._backend = backend or self._build_default_backend()
+        self._sms_backend = sms_backend or InMemorySMSBackend()
+        self._push_backend = push_backend or InMemoryPushBackend()
         self._events: list[NotificationEvent] = []
 
     @property
     def sent_events(self) -> list[NotificationEvent]:
         """Expose events (useful for tests when using in-memory backend)."""
         return self._events
+
+    def _record_event(
+        self,
+        *,
+        channel: str,
+        recipient: str,
+        subject: str,
+        body_text: str,
+        body_html: str | None,
+        event_type: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Record a dispatched notification for observability/testing."""
+
+        self._events.append(
+            NotificationEvent(
+                recipient=recipient,
+                subject=subject,
+                body_text=body_text,
+                body_html=body_html,
+                event_type=event_type,
+                metadata=metadata,
+                channel=channel,
+            )
+        )
 
     async def send_order_status_update(
         self,
@@ -155,6 +196,74 @@ class NotificationService:
                 "previous_status": previous_status.value if previous_status else None,
                 "current_status": order.status.value,
                 "trigger": trigger,
+            },
+        )
+
+    async def send_checkout_recovery_prompt(
+        self,
+        order: Order,
+        *,
+        stage: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Send a reminder encouraging the customer to resume checkout."""
+
+        if self._backend is None:
+            return
+
+        contact = await self._resolve_order_contact(order)
+        if contact is None:
+            return
+
+        preferences = await self._get_preferences(order.user_id)
+        if not preferences.order_updates:
+            logger.info(
+                "Skipping checkout recovery prompt due to notification preferences",
+                order_id=str(order.id),
+            )
+            return
+
+        subject = f"Action needed: finish checkout for order {order.order_number}"
+        body_lines = [
+            f"Hi {contact.display_name or 'there'},",
+            "",
+            "We noticed your checkout is still in progress and needs a quick follow-up.",
+            f"Current step: {stage.replace('_', ' ').title()}.",
+            "",
+            "You can resume your checkout anytime using the secure link below.",
+            f"Order total: €{float(order.total):.2f}",
+            "",
+            "Resume here: https://app.smplat.test/checkout",
+            "",
+            "If you ran into trouble, reply to this email and our operators will help.",
+            "",
+            "Thanks,",
+            "The SMPLAT Team",
+        ]
+        text_body = "\n".join(body_lines)
+
+        html_body = f"""<html>
+  <body>
+    <p>Hi {contact.display_name or 'there'},</p>
+    <p>We noticed your checkout is still in progress and needs a quick follow-up.</p>
+    <p><strong>Current step:</strong> {stage.replace('_', ' ').title()}.</p>
+    <p>Order total: €{float(order.total):.2f}</p>
+    <p><a href=\"https://app.smplat.test/checkout\">Resume your checkout</a> whenever you're ready.</p>
+    <p>If you ran into trouble, reply to this email and our operators will help.</p>
+    <p>Thanks,<br />The SMPLAT Team</p>
+  </body>
+</html>"""
+
+        template = RenderedTemplate(subject=subject, text_body=text_body, html_body=html_body)
+        await self._deliver(
+            contact,
+            template,
+            event_type="checkout_recovery_prompt",
+            metadata={
+                "order_id": str(order.id),
+                "order_number": order.order_number,
+                "stage": stage,
+                **(metadata or {}),
             },
         )
 
@@ -393,7 +502,12 @@ class NotificationService:
         if not user or not user.email:
             return None
 
-        return _OrderContact(email=user.email, display_name=user.display_name)
+        return _OrderContact(
+            email=user.email,
+            display_name=user.display_name,
+            phone_number=getattr(user, "phone_number", None),
+            push_token=getattr(user, "push_token", None),
+        )
 
     async def _resolve_user_contact(self, user_id: Optional[UUID]) -> Optional[_OrderContact]:
         """Resolve a direct contact for a user id."""
@@ -407,7 +521,12 @@ class NotificationService:
         if not user or not user.email:
             return None
 
-        return _OrderContact(email=user.email, display_name=user.display_name)
+        return _OrderContact(
+            email=user.email,
+            display_name=user.display_name,
+            phone_number=getattr(user, "phone_number", None),
+            push_token=getattr(user, "push_token", None),
+        )
 
     async def _resolve_workspace_contact(self, workspace_id: Optional[UUID]) -> Optional[_OrderContact]:
         """Resolve the primary workspace contact for billing alerts."""
@@ -420,7 +539,12 @@ class NotificationService:
         if not user or not user.email:
             return None
 
-        return _OrderContact(email=user.email, display_name=user.display_name)
+        return _OrderContact(
+            email=user.email,
+            display_name=user.display_name,
+            phone_number=getattr(user, "phone_number", None),
+            push_token=getattr(user, "push_token", None),
+        )
 
     async def _get_preferences(self, user_id: Optional[UUID]) -> _PreferenceSnapshot:
         """Return notification preferences for the provided user."""
@@ -485,11 +609,10 @@ class NotificationService:
         self,
         member: LoyaltyMember,
         nudge: LoyaltyNudge,
+        *,
+        channels: Sequence[LoyaltyNudgeChannel] | None = None,
     ) -> None:
         """Send a proactive loyalty nudge notification honoring preferences."""
-
-        if self._backend is None:
-            return
 
         if nudge.status != LoyaltyNudgeStatus.ACTIVE:
             return
@@ -506,6 +629,13 @@ class NotificationService:
                 nudge_id=str(nudge.id),
             )
             return
+
+        resolved_channels = {
+            channel.value if isinstance(channel, LoyaltyNudgeChannel) else str(channel)
+            for channel in (channels or [])
+        }
+        if not resolved_channels:
+            resolved_channels = {LoyaltyNudgeChannel.EMAIL.value}
 
         payload = dict(nudge.payload_json or {})
         headline = str(payload.get("headline") or "Loyalty reminder")
@@ -538,12 +668,67 @@ class NotificationService:
             html_body=html_body,
         )
 
-        await self._deliver(
-            contact,
-            template,
-            event_type="loyalty_nudge",
-            metadata=metadata,
-        )
+        if LoyaltyNudgeChannel.EMAIL.value in resolved_channels and self._backend is not None:
+            await self._deliver(
+                contact,
+                template,
+                event_type="loyalty_nudge",
+                metadata={**metadata, "channel": "email"},
+            )
+        elif LoyaltyNudgeChannel.EMAIL.value in resolved_channels:
+            logger.info(
+                "Skipped loyalty nudge email dispatch due to missing backend",
+                user_id=str(member.user_id),
+                nudge_id=str(nudge.id),
+            )
+
+        if LoyaltyNudgeChannel.SMS.value in resolved_channels and self._sms_backend is not None:
+            if contact.phone_number:
+                sms_body = f"{headline}: {body}"
+                await self._sms_backend.send_sms(contact.phone_number, sms_body)
+                self._record_event(
+                    channel="sms",
+                    recipient=contact.phone_number,
+                    subject=headline,
+                    body_text=sms_body,
+                    body_html=None,
+                    event_type="loyalty_nudge_sms",
+                    metadata={**metadata, "channel": "sms"},
+                )
+            else:
+                logger.info(
+                    "Skipping loyalty nudge SMS; missing phone",
+                    user_id=str(member.user_id),
+                    nudge_id=str(nudge.id),
+                )
+
+        if LoyaltyNudgeChannel.PUSH.value in resolved_channels and self._push_backend is not None:
+            if contact.push_token:
+                await self._push_backend.send_push(
+                    contact.push_token,
+                    title=headline,
+                    body=body,
+                    metadata={
+                        "ctaLabel": cta_label or "",
+                        "ctaHref": cta_href or "",
+                        **{k: str(v) for k, v in metadata.items()},
+                    },
+                )
+                self._record_event(
+                    channel="push",
+                    recipient=contact.push_token,
+                    subject=headline,
+                    body_text=body,
+                    body_html=None,
+                    event_type="loyalty_nudge_push",
+                    metadata={**metadata, "channel": "push"},
+                )
+            else:
+                logger.info(
+                    "Skipping loyalty nudge push; missing token",
+                    user_id=str(member.user_id),
+                    nudge_id=str(nudge.id),
+                )
 
     async def _deliver(
         self,
@@ -553,6 +738,7 @@ class NotificationService:
         event_type: str,
         metadata: dict[str, Any],
         reply_to: str | None = None,
+        channel: str = "email",
     ) -> None:
         """Send using active backend and record emitted event."""
         if self._backend is None:
@@ -565,13 +751,12 @@ class NotificationService:
             body_html=template.html_body,
             reply_to=reply_to,
         )
-        self._events.append(
-            NotificationEvent(
-                recipient=contact.email,
-                subject=template.subject,
-                body_text=template.text_body,
-                body_html=template.html_body,
-                event_type=event_type,
-                metadata=metadata,
-            )
+        self._record_event(
+            channel=channel,
+            recipient=contact.email,
+            subject=template.subject,
+            body_text=template.text_body,
+            body_html=template.html_body,
+            event_type=event_type,
+            metadata=metadata,
         )

@@ -12,6 +12,12 @@ from .catalog_experiments import (  # noqa: F401
     CatalogBundleExperimentStatus,
     CatalogBundleExperimentVariant,
 )
+from .checkout import (  # noqa: F401
+    CheckoutOrchestration,
+    CheckoutOrchestrationEvent,
+    CheckoutOrchestrationStage,
+    CheckoutOrchestrationStatus,
+)
 from .billing_reconciliation import (  # noqa: F401
     BillingDiscrepancy,
     BillingDiscrepancyStatus,
@@ -64,12 +70,19 @@ from .processor_event import (  # noqa: F401
     register_replay_attempt,
 )
 from .loyalty import (  # noqa: F401
+    LoyaltyAnalyticsSnapshot,
     LoyaltyGuardrailAuditAction,
     LoyaltyGuardrailAuditEvent,
     LoyaltyGuardrailOverride,
     LoyaltyGuardrailOverrideScope,
     LoyaltyLedgerEntry,
     LoyaltyLedgerEntryType,
+    LoyaltyNudge,
+    LoyaltyNudgeCampaign,
+    LoyaltyNudgeChannel,
+    LoyaltyNudgeDispatchEvent,
+    LoyaltyNudgeStatus,
+    LoyaltyNudgeType,
     LoyaltyMember,
     LoyaltyTier,
     ReferralInvite,
