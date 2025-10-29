@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { formatDistanceToNow } from "date-fns";
 
 import type {
@@ -11,10 +11,12 @@ import type {
   LoyaltyRedemption,
   LoyaltyRedemptionPage,
   LoyaltyReward,
+  LoyaltyNextActionCard,
   ReferralConversionPage
 } from "@smplat/types";
 
 import { requestRedemption } from "./loyalty.actions";
+import { clearResolvedIntents, consumeLoyaltyNextActions } from "@/lib/loyalty/intents";
 
 const POINTS_DISPLAY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const REFERRAL_REWARD_POINTS = 500;
@@ -117,6 +119,7 @@ export function LoyaltyHubClient({ ledger, member, redemptions, referrals, rewar
   const [isRedeeming, startRedeem] = useTransition();
   const [state, setState] = useState<RedemptionFormState>(() => initialState(member));
   const [copiedCode, setCopiedCode] = useState(false);
+  const [nextActions, setNextActions] = useState<LoyaltyNextActionCard[]>([]);
 
   const sortedRewards = useMemo(
     () => rewards.filter((reward) => reward.isActive).sort((a, b) => a.costPoints - b.costPoints),
@@ -132,6 +135,8 @@ export function LoyaltyHubClient({ ledger, member, redemptions, referrals, rewar
     () => buildTimeline(ledger, redemptions, state.optimisticRedemptions),
     [ledger, redemptions, state.optimisticRedemptions]
   );
+
+  const hasNextActions = nextActions.length > 0;
 
   const referralConverted = referrals.statusCounts.converted ?? referrals.statusCounts.CONVERTED ?? 0;
   const referralActive =
@@ -151,6 +156,18 @@ export function LoyaltyHubClient({ ledger, member, redemptions, referrals, rewar
   const nextTierCopy = member.nextTier
     ? `Only ${POINTS_DISPLAY.format(Math.max(state.optimisticOnHold + state.optimisticBalance, 0))} pts away from ${member.nextTier}.`
     : "You&rsquo;ve reached the highest tier available.";
+
+  useEffect(() => {
+    const actions = consumeLoyaltyNextActions();
+    if (actions.length > 0) {
+      setNextActions(actions);
+    }
+  }, []);
+
+  const dismissNextAction = useCallback((id: string) => {
+    setNextActions((previous) => previous.filter((action) => action.id !== id));
+    clearResolvedIntents((intent) => intent.id === id);
+  }, []);
 
   const handleRedeem = (reward: LoyaltyReward) => {
     if (isRedeeming) {
@@ -229,6 +246,98 @@ export function LoyaltyHubClient({ ledger, member, redemptions, referrals, rewar
           </div>
         </div>
       </section>
+
+      {hasNextActions ? (
+        <section
+          className="rounded-3xl border border-white/10 bg-white/5 p-6"
+          data-testid="loyalty-next-actions"
+        >
+          <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-xl font-semibold text-white">Next actions from checkout</h3>
+              <p className="text-sm text-white/60">Follow through on the loyalty moves you queued post-purchase.</p>
+            </div>
+            <span className="text-xs uppercase tracking-[0.2em] text-white/50">{nextActions.length} reminders</span>
+          </header>
+          <div className="mt-5 space-y-3">
+            {nextActions.map((action) => {
+              const timestamp = formatDistanceToNow(new Date(action.createdAt), { addSuffix: true });
+              const metadata = (action.metadata ?? {}) as Record<string, unknown>;
+              if (action.kind === "redemption") {
+                const rewardName =
+                  typeof metadata["rewardName"] === "string" ? (metadata["rewardName"] as string) : action.headline;
+                const pointsCost =
+                  typeof metadata["pointsCost"] === "number" ? (metadata["pointsCost"] as number) : undefined;
+                return (
+                  <article key={action.id} className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                    <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                      <span>Redemption reminder</span>
+                      <span>{timestamp}</span>
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      <p className="text-sm font-semibold text-white">{rewardName}</p>
+                      <p className="text-xs text-white/60">
+                        {typeof pointsCost === "number"
+                          ? `Reserve ${POINTS_DISPLAY.format(pointsCost)} pts and complete this reward now.`
+                          : "Finish the planned redemption to capture the points you queued."}
+                      </p>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Link
+                        href="/account/loyalty#rewards"
+                        className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-xs font-semibold text-black transition hover:bg-white/90"
+                      >
+                        {action.ctaLabel}
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => dismissNextAction(action.id)}
+                        className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/60 hover:text-white"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </article>
+                );
+              }
+
+              const referralCode =
+                typeof metadata["referralCode"] === "string" ? (metadata["referralCode"] as string) : null;
+              return (
+                <article key={action.id} className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                    <span>Referral reminder</span>
+                    <span>{timestamp}</span>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <p className="text-sm font-semibold text-white">{action.headline}</p>
+                    <p className="text-xs text-white/60">
+                      {referralCode
+                        ? `Close the loop with referral code ${referralCode} and thank your new customer.`
+                        : action.description}
+                    </p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Link
+                      href="/account/loyalty/referrals"
+                      className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-xs font-semibold text-black transition hover:bg-white/90"
+                    >
+                      {action.ctaLabel}
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => dismissNextAction(action.id)}
+                      className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/60 hover:text-white"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       <section className="grid gap-6 md:grid-cols-3">
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6">

@@ -6,7 +6,7 @@ import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Literal, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
 
 from loguru import logger
@@ -549,6 +549,110 @@ class LoyaltyService:
         )
         return redemption
 
+    async def apply_checkout_redemption_intents(
+        self,
+        member: LoyaltyMember,
+        *,
+        order_id: str,
+        intents: Sequence[dict[str, Any]],
+        action: Literal["confirm", "cancel"],
+    ) -> list[LoyaltyRedemption]:
+        """Apply or cancel redemption intents captured during checkout."""
+
+        redemption_intents = [intent for intent in intents if intent.get("kind") == "redemption"]
+        if not redemption_intents:
+            return []
+
+        checkout_ids = [str(intent.get("id")) for intent in redemption_intents if intent.get("id")]
+        if not checkout_ids:
+            return []
+
+        stmt = (
+            select(LoyaltyRedemption)
+            .options(selectinload(LoyaltyRedemption.member))
+            .where(
+                LoyaltyRedemption.member_id == member.id,
+                LoyaltyRedemption.metadata_json.isnot(None),
+            )
+        )
+        result = await self._db.execute(stmt)
+        existing_by_intent: dict[str, LoyaltyRedemption] = {}
+        for redemption in result.scalars().all():
+            metadata = redemption.metadata_json or {}
+            checkout_intent_id = metadata.get("checkout_intent_id")
+            if checkout_intent_id and checkout_intent_id in checkout_ids:
+                existing_by_intent[checkout_intent_id] = redemption
+
+        processed: list[LoyaltyRedemption] = []
+
+        if action == "cancel":
+            for intent in redemption_intents:
+                checkout_id = str(intent.get("id"))
+                redemption = existing_by_intent.get(checkout_id)
+                if not redemption:
+                    continue
+                metadata: dict[str, Any] = {"checkout_intent_id": checkout_id, "order_id": order_id}
+                metadata.update(intent.get("metadata") or {})
+                metadata.setdefault(
+                    "checkout_channel",
+                    (redemption.metadata_json or {}).get("checkout_channel", "checkout"),
+                )
+                metadata.setdefault("cancellationReason", "checkout_intent_cancelled")
+                await self.cancel_redemption(
+                    redemption,
+                    reason="checkout_intent_cancelled",
+                    metadata=metadata,
+                )
+                processed.append(redemption)
+            return processed
+
+        for intent in redemption_intents:
+            checkout_id = str(intent.get("id"))
+            metadata: dict[str, Any] = {
+                "checkout_intent_id": checkout_id,
+                "order_id": order_id,
+                "checkout_channel": intent.get("channel") or "checkout",
+            }
+            metadata.update(intent.get("metadata") or {})
+
+            existing = existing_by_intent.get(checkout_id)
+            if existing:
+                existing_metadata = dict(existing.metadata_json or {})
+                existing_metadata.update(metadata)
+                existing.metadata_json = existing_metadata
+                await self._db.flush()
+                processed.append(existing)
+                existing_by_intent[checkout_id] = existing
+                continue
+
+            quantity = int(intent.get("quantity") or 1)
+            reward_slug = intent.get("rewardSlug")
+            points_cost_value = intent.get("pointsCost")
+            points_cost = (
+                Decimal(str(points_cost_value)) if points_cost_value is not None else None
+            )
+
+            try:
+                redemption = await self.create_redemption(
+                    member,
+                    reward_slug=reward_slug,
+                    points_cost=points_cost,
+                    quantity=quantity,
+                    metadata=metadata,
+                )
+            except ValueError as error:
+                logger.warning(
+                    "Failed to apply checkout redemption intent",
+                    checkout_intent_id=checkout_id,
+                    reason=str(error),
+                )
+                continue
+
+            processed.append(redemption)
+            existing_by_intent[checkout_id] = redemption
+
+        return processed
+
     async def fulfill_redemption(
         self,
         redemption: LoyaltyRedemption,
@@ -597,7 +701,7 @@ class LoyaltyService:
 
         redemption.status = LoyaltyRedemptionStatus.FULFILLED
         redemption.fulfilled_at = datetime.now(timezone.utc)
-        existing_metadata = redemption.metadata_json or {}
+        existing_metadata = dict(redemption.metadata_json or {})
         existing_metadata.update(metadata or {})
         redemption.metadata_json = existing_metadata
         await self._db.flush()
@@ -635,7 +739,7 @@ class LoyaltyService:
         redemption.status = LoyaltyRedemptionStatus.FAILED
         redemption.failure_reason = reason
         redemption.cancelled_at = datetime.now(timezone.utc)
-        existing_metadata = redemption.metadata_json or {}
+        existing_metadata = dict(redemption.metadata_json or {})
         if metadata:
             existing_metadata.update(metadata)
         redemption.metadata_json = existing_metadata
@@ -673,7 +777,7 @@ class LoyaltyService:
         self._release_points(member, Decimal(redemption.points_cost or 0))
         redemption.status = LoyaltyRedemptionStatus.CANCELLED
         redemption.cancelled_at = datetime.now(timezone.utc)
-        existing_metadata = redemption.metadata_json or {}
+        existing_metadata = dict(redemption.metadata_json or {})
         if metadata:
             existing_metadata.update(metadata)
         if reason:

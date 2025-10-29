@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, root_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -197,6 +197,33 @@ class RedemptionFailureRequest(BaseModel):
 class RedemptionCancelRequest(BaseModel):
     reason: Optional[str] = Field(None, description="Reason for cancelling the redemption")
     metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata to store on the redemption")
+
+
+class CheckoutIntentPayload(BaseModel):
+    id: UUID
+    kind: Literal["redemption", "referral_share"]
+    createdAt: datetime
+    rewardSlug: Optional[str] = None
+    rewardName: Optional[str] = None
+    pointsCost: Optional[float] = None
+    quantity: Optional[int] = None
+    referralCode: Optional[str] = None
+    channel: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+
+
+class CheckoutIntentSubmissionRequest(BaseModel):
+    orderId: str = Field(..., description="Order reference that produced the intent")
+    action: Literal["confirm", "cancel"] = Field("confirm", description="Apply or cancel queued intents")
+    intents: List[CheckoutIntentPayload]
+    userId: UUID
+
+    @root_validator(skip_on_failure=True)
+    def validate_intents(cls, values: dict[str, Any]) -> dict[str, Any]:
+        intents = values.get("intents")
+        if not intents:
+            raise ValueError("At least one intent is required")
+        return values
 
 
 @router.get("/tiers", response_model=List[LoyaltyTierResponse])
@@ -632,6 +659,32 @@ async def create_loyalty_redemption(
     await db.commit()
     await db.refresh(redemption)
     return _serialize_redemption(redemption)
+
+
+@router.post(
+    "/checkout/intents",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def submit_checkout_loyalty_intents(
+    request: CheckoutIntentSubmissionRequest,
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    """Apply loyalty intents captured during checkout completion."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(request.userId)
+
+    intents_payload = [intent.dict() for intent in request.intents]
+    await service.apply_checkout_redemption_intents(
+        member,
+        order_id=request.orderId,
+        intents=intents_payload,
+        action=request.action,
+    )
+
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 async def _fetch_redemption(db: AsyncSession, redemption_id: UUID) -> LoyaltyRedemption:

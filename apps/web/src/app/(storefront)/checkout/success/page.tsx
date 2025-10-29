@@ -4,7 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Gift, Sparkles } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
 
+import type { LoyaltyCheckoutIntent } from "@smplat/types";
+import { clearResolvedIntents, consumeSuccessIntents } from "@/lib/loyalty/intents";
 import { useCartStore } from "@/store/cart";
 
 type RemoteOnboardingTask = {
@@ -39,6 +42,13 @@ const mapTask = (task: RemoteOnboardingTask): OnboardingTask => ({
   completed: task.status.toLowerCase() === "completed" || Boolean(task.completed_at)
 });
 
+function formatPoints(points?: number | null): string {
+  if (typeof points !== "number") {
+    return "0";
+  }
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(points);
+}
+
 export default function CheckoutSuccessPage() {
   const searchParams = useSearchParams();
   const clear = useCartStore((state) => state.clear);
@@ -47,6 +57,8 @@ export default function CheckoutSuccessPage() {
   const [referralCopied, setReferralCopied] = useState(false);
   const [referralCode, setReferralCode] = useState<string | null>(null);
   const [journeyStatus, setJourneyStatus] = useState<string | null>(null);
+  const [checkoutIntents, setCheckoutIntents] = useState<LoyaltyCheckoutIntent[]>([]);
+  const [intentSyncStatus, setIntentSyncStatus] = useState<"idle" | "syncing" | "synced" | "error">("idle");
 
   const fallbackReferral = useMemo(() => {
     if (!orderId) {
@@ -60,6 +72,7 @@ export default function CheckoutSuccessPage() {
 
   const completedCount = tasks.filter((task) => task.completed).length;
   const checklistProgress = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
+  const hasCheckoutIntents = checkoutIntents.length > 0;
 
   const fetchJourney = useCallback(async () => {
     if (!orderId) {
@@ -124,6 +137,34 @@ export default function CheckoutSuccessPage() {
     [fetchJourney, recordOnboardingEvent, tasks]
   );
 
+  const retryIntentSync = useCallback(() => {
+    if (intentSyncStatus === "error") {
+      setIntentSyncStatus("idle");
+    }
+  }, [intentSyncStatus]);
+
+  const dismissIntent = useCallback(
+    (intentId: string) => {
+      const target = checkoutIntents.find((intent) => intent.id === intentId);
+      if (!target) {
+        return;
+      }
+      setCheckoutIntents((previous) => previous.filter((intent) => intent.id !== intentId));
+      clearResolvedIntents((intent) => intent.id === intentId);
+      if (!orderId) {
+        return;
+      }
+      void fetch("/api/loyalty/checkout-intents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId, intents: [target], action: "cancel" })
+      }).catch((error) => {
+        console.warn("Failed to cancel loyalty intent", error);
+      });
+    },
+    [checkoutIntents, orderId]
+  );
+
   const handleReferralClick = useCallback(async () => {
     const codeToCopy = hydratedReferral;
     try {
@@ -142,6 +183,54 @@ export default function CheckoutSuccessPage() {
   useEffect(() => {
     clear();
   }, [clear]);
+
+  useEffect(() => {
+    const intents = consumeSuccessIntents(orderId);
+    if (intents.length > 0) {
+      setCheckoutIntents(intents);
+    }
+  }, [orderId]);
+
+  useEffect(() => {
+    if (checkoutIntents.length === 0) {
+      setIntentSyncStatus("idle");
+    }
+  }, [checkoutIntents.length]);
+
+  useEffect(() => {
+    if (!orderId || checkoutIntents.length === 0 || intentSyncStatus !== "idle") {
+      return;
+    }
+
+    let cancelled = false;
+    const syncIntents = async () => {
+      setIntentSyncStatus("syncing");
+      try {
+        const response = await fetch("/api/loyalty/checkout-intents", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId, intents: checkoutIntents, action: "confirm" })
+        });
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Failed to sync loyalty intents");
+        }
+        if (!cancelled) {
+          setIntentSyncStatus("synced");
+        }
+      } catch (error) {
+        console.warn("Failed to sync checkout loyalty intents", error);
+        if (!cancelled) {
+          setIntentSyncStatus("error");
+        }
+      }
+    };
+
+    void syncIntents();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId, checkoutIntents, intentSyncStatus]);
 
   useEffect(() => {
     if (!orderId) {
@@ -182,6 +271,126 @@ export default function CheckoutSuccessPage() {
           <p className="mt-2 text-xs uppercase tracking-[0.3em] text-white/40">Journey status: {journeyStatus}</p>
         ) : null}
       </section>
+
+      {hasCheckoutIntents ? (
+        <section
+          className="space-y-4 rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur"
+          data-testid="checkout-loyalty-actions"
+        >
+          <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Keep loyalty momentum</h2>
+              <p className="text-sm text-white/60">
+                {intentSyncStatus === "syncing"
+                  ? "Syncing checkout selections with your loyalty profile."
+                  : intentSyncStatus === "error"
+                    ? "We couldn’t sync automatically—follow through from the loyalty hub."
+                    : "We saved your checkout selections so you can follow through without losing momentum."}
+              </p>
+            </div>
+            {intentSyncStatus === "error" ? (
+              <button
+                type="button"
+                onClick={retryIntentSync}
+                className="inline-flex items-center justify-center rounded-full border border-white/40 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/60 hover:text-white"
+              >
+                Retry sync
+              </button>
+            ) : (
+              <span className="text-xs uppercase tracking-[0.3em] text-white/40">
+                {intentSyncStatus === "synced"
+                  ? "Synced"
+                  : intentSyncStatus === "syncing"
+                    ? "Syncing…"
+                    : "Pending"}
+              </span>
+            )}
+          </header>
+          <div className="space-y-3">
+            {checkoutIntents.map((intent) => {
+              const timestamp = intent.createdAt
+                ? formatDistanceToNow(new Date(intent.createdAt), { addSuffix: true })
+                : "moments ago";
+              if (intent.kind === "redemption") {
+                const rewardName = intent.rewardName ?? intent.rewardSlug ?? "Reward";
+                const points = typeof intent.pointsCost === "number" ? formatPoints(intent.pointsCost) : null;
+                return (
+                  <article
+                    key={intent.id}
+                    className="rounded-2xl border border-white/10 bg-black/30 p-4"
+                    data-testid={`checkout-intent-${intent.kind}`}
+                  >
+                    <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                      <span>Redemption follow-up</span>
+                      <span>{timestamp}</span>
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      <p className="text-sm font-semibold text-white">{rewardName}</p>
+                      <p className="text-xs text-white/60">
+                        {points
+                          ? `Hold ${points} points and finish fulfillment in the loyalty hub.`
+                          : "Finalize your planned redemption in the loyalty hub."}
+                      </p>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Link
+                        href="/account/loyalty#rewards"
+                        className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-xs font-semibold text-black transition hover:bg-white/90"
+                      >
+                        Open rewards
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => dismissIntent(intent.id)}
+                        className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/60 hover:text-white"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </article>
+                );
+              }
+
+              const referralCodeCopy = intent.referralCode ?? "your referral";
+              return (
+                <article
+                  key={intent.id}
+                  className="rounded-2xl border border-white/10 bg-black/30 p-4"
+                  data-testid={`checkout-intent-${intent.kind}`}
+                >
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-white/50">
+                    <span>Referral follow-up</span>
+                    <span>{timestamp}</span>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <p className="text-sm font-semibold text-white">Thank your referral</p>
+                    <p className="text-xs text-white/60">
+                      {intent.referralCode
+                        ? `Send a thank-you or check in on ${referralCodeCopy} from the loyalty hub.`
+                        : "Follow up on your referral outreach from the loyalty hub."}
+                    </p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Link
+                      href="/account/loyalty/referrals"
+                      className="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-xs font-semibold text-black transition hover:bg-white/90"
+                    >
+                      Manage referrals
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => dismissIntent(intent.id)}
+                      className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/60 hover:text-white"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       <section className="grid gap-6 lg:grid-cols-2">
         <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">

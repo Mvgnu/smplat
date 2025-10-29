@@ -16,6 +16,7 @@ This runbook captures operational guidance for the loyalty tier system and refer
 - **Issue referral invite**: `POST /api/v1/loyalty/members/{user_id}/referrals` (admin only) mints a referral code and persists metadata for downstream messaging.
 - **Complete referral**: `POST /api/v1/loyalty/referrals/complete` (admin only) associates the invite with a newly onboarded user, credits the referrer, and emits a tier upgrade notification if thresholds are met.
 - **Create redemption**: `POST /api/v1/loyalty/members/{user_id}/redemptions` (admin only) reserves points for a reward slug or custom amount.
+- **Checkout intent sync**: `POST /api/v1/loyalty/checkout/intents` confirms or cancels checkout-planned redemptions (and optional referral nudges) using an order reference so storefront reminders stay reconciled. Confirmation is idempotent per `checkout_intent_id` and cancellation releases held points with a `checkout_intent_cancelled` marker.
 - **Fulfill redemption**: `POST /api/v1/loyalty/redemptions/{redemption_id}/fulfill` finalizes the hold, deducts points, and emits ledger metadata.
 - **Fail/Cancel redemption**: `POST /api/v1/loyalty/redemptions/{redemption_id}/fail|cancel` releases the hold and records the operational reason.
 
@@ -39,7 +40,7 @@ Tier upgrades trigger the `NotificationService.send_loyalty_tier_upgrade` helper
 1. Apply migrations via `poetry run alembic upgrade head` from `apps/api`.
 2. Seed baseline tiers and reward catalog entries ensuring thresholds ascend and slugs are unique.
 3. Call `/loyalty/members/{user_id}` to provision a member and confirm progress/expiring payloads populate.
-4. Run `poetry run pytest tests/test_loyalty_service.py tests/test_loyalty_endpoints.py` to validate redemption flows and API responses.
+4. Run `poetry run pytest tests/test_loyalty_service.py tests/test_loyalty_endpoints.py` to validate redemption flows, checkout intent reconciliation, and API responses.
 5. Exercise redemption creation → fulfillment → cancellation via API to verify holds, ledger entries, and scheduler expirations. Capture the emitted ledger record via `/loyalty/ledger` and confirm metadata (e.g., `redemption_id`) matches the originating redemption.
 6. Call `/loyalty/ledger?limit=5&types=referral_bonus` and `/loyalty/redemptions?statuses=requested&statuses=failed` to validate pagination tokens and status filtering. Confirm `nextCursor` forwards successfully by replaying the second page.
 7. Run `NEXT_PUBLIC_E2E_AUTH_BYPASS=true pnpm --filter web test:e2e -- --grep "Loyalty hub"` to execute the storefront redemption happy-path Playwright suite. Extend coverage to assert the activity timeline renders ledger + redemption chips and that failed redemptions expose retry controls.

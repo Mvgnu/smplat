@@ -3,11 +3,17 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
-import type { LoyaltyTier } from "@smplat/types";
+import type {
+  LoyaltyCheckoutIntent,
+  LoyaltyMemberSummary,
+  LoyaltyReward,
+  LoyaltyTier
+} from "@smplat/types";
 import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import { cartTotalSelector, useCartStore } from "@/store/cart";
 import { marketingFallbacks } from "../products/marketing-content";
 import { AlertTriangle, BadgeCheck, Clock, ShieldCheck, Sparkles, Users } from "lucide-react";
+import { clearResolvedIntents, queueCheckoutIntents } from "@/lib/loyalty/intents";
 
 const alertDescriptions: Record<string, string> = {
   sla_breach_risk: "Projected clearance exceeds the guaranteed delivery SLA.",
@@ -50,6 +56,8 @@ type CheckoutState = {
 
 type CheckoutPageClientProps = {
   trustContent: CheckoutTrustExperience;
+  loyaltyMember: LoyaltyMemberSummary | null;
+  loyaltyRewards: LoyaltyReward[];
 };
 
 type AssuranceDisplay = {
@@ -187,7 +195,7 @@ function MetricBadge({ metric }: { metric?: CheckoutMetricVerification }) {
   );
 }
 
-export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
+export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards }: CheckoutPageClientProps) {
   const items = useCartStore((state) => state.items);
   const cartTotal = useCartStore(cartTotalSelector);
   const clearCart = useCartStore((state) => state.clear);
@@ -202,10 +210,27 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [loyaltyTiers, setLoyaltyTiers] = useState<LoyaltyTier[]>([]);
   const [loyaltyStatus, setLoyaltyStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [plannedRewardSlug, setPlannedRewardSlug] = useState<string | null>(null);
+  const [planReferralFollowUp, setPlanReferralFollowUp] = useState(false);
+  const [intentNotice, setIntentNotice] = useState<string | null>(null);
 
   const currency = items[0]?.currency ?? "USD";
 
   const disabled = items.length === 0 || !formState.fullName || !formState.email;
+
+  const loyaltyRewardOptions = useMemo(
+    () =>
+      (loyaltyRewards ?? [])
+        .filter((reward) => reward.isActive)
+        .sort((a, b) => a.costPoints - b.costPoints)
+        .slice(0, 3),
+    [loyaltyRewards]
+  );
+
+  const selectedReward = useMemo(
+    () => loyaltyRewardOptions.find((reward) => reward.slug === plannedRewardSlug) ?? null,
+    [loyaltyRewardOptions, plannedRewardSlug]
+  );
 
   const orderSummary = useMemo(
     () =>
@@ -420,6 +445,18 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
   }, [upsellRecommendations, recordOfferEvent]);
 
   useEffect(() => {
+    if (plannedRewardSlug && !loyaltyRewardOptions.some((reward) => reward.slug === plannedRewardSlug)) {
+      setPlannedRewardSlug(null);
+    }
+  }, [plannedRewardSlug, loyaltyRewardOptions]);
+
+  useEffect(() => {
+    if (!loyaltyMember?.referralCode && planReferralFollowUp) {
+      setPlanReferralFollowUp(false);
+    }
+  }, [loyaltyMember?.referralCode, planReferralFollowUp]);
+
+  useEffect(() => {
     let cancelled = false;
     const fetchTiers = async () => {
       setLoyaltyStatus("loading");
@@ -457,7 +494,43 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
     setIsSubmitting(true);
     setError(null);
 
+    let queuedIntents: LoyaltyCheckoutIntent[] = [];
     try {
+      if (plannedRewardSlug || (planReferralFollowUp && loyaltyMember?.referralCode)) {
+        const intentsToPersist: Array<Omit<LoyaltyCheckoutIntent, "id" | "createdAt">> = [];
+        if (selectedReward) {
+          intentsToPersist.push({
+            kind: "redemption",
+            rewardSlug: selectedReward.slug,
+            rewardName: selectedReward.name,
+            pointsCost: selectedReward.costPoints,
+            quantity: 1,
+            metadata: {
+              source: "checkout",
+              tier: loyaltyMember?.currentTier ?? null
+            }
+          });
+        }
+        if (planReferralFollowUp && loyaltyMember?.referralCode) {
+          intentsToPersist.push({
+            kind: "referral_share",
+            referralCode: loyaltyMember.referralCode,
+            channel: "checkout",
+            metadata: {
+              source: "checkout",
+              tier: loyaltyMember?.currentTier ?? null
+            }
+          });
+        }
+
+        if (intentsToPersist.length > 0) {
+          queuedIntents = queueCheckoutIntents(intentsToPersist);
+          if (queuedIntents.length > 0) {
+            setIntentNotice("We\u2019ll remind you to follow through after payment.");
+          }
+        }
+      }
+
       const origin = typeof window !== "undefined" ? window.location.origin : "";
 
       const payload = {
@@ -509,6 +582,9 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
       // Defer clearing the cart until success callback.
       window.location.href = `${checkoutUrl}`;
     } catch (err) {
+      if (queuedIntents.length > 0) {
+        clearResolvedIntents((intent) => queuedIntents.some((queued) => queued.id === intent.id));
+      }
       const message = err instanceof Error ? err.message : "Unexpected checkout error";
       setError(message);
       setIsSubmitting(false);
@@ -797,6 +873,65 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
             Payments are processed securely via Stripe. You&apos;ll be redirected to confirm card details. On success
             we&apos;ll follow up with onboarding steps and assign your fulfillment pod.
           </p>
+          {loyaltyMember ? (
+            <div className="space-y-3 rounded-2xl border border-white/10 bg-black/20 p-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs uppercase tracking-wide text-white/50">Loyalty momentum</h3>
+                <span className="text-xs text-white/60">
+                  Balance {formatPoints(loyaltyMember.availablePoints)} pts
+                </span>
+              </div>
+              <p className="text-xs text-white/60">
+                Queue a post-purchase action so the loyalty hub can keep you on track after payment.
+              </p>
+              {loyaltyRewardOptions.length > 0 ? (
+                <div className="space-y-2">
+                  {loyaltyRewardOptions.map((reward) => {
+                    const isSelected = plannedRewardSlug === reward.slug;
+                    return (
+                      <button
+                        key={reward.id}
+                        type="button"
+                        onClick={() => setPlannedRewardSlug(isSelected ? null : reward.slug)}
+                        data-testid={`plan-reward-${reward.slug}`}
+                        className={`w-full rounded-xl border px-3 py-2 text-left text-xs transition ${
+                          isSelected
+                            ? "border-emerald-400/60 bg-emerald-500/20 text-emerald-100"
+                            : "border-white/10 bg-white/5 text-white/70 hover:border-white/30 hover:text-white"
+                        }`}
+                      >
+                        <span className="block text-sm font-semibold text-white">{reward.name}</span>
+                        <span className="block text-xs text-white/60">
+                          {formatPoints(reward.costPoints)} pts · Quick redemption
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-white/60">
+                  Browse the loyalty hub to pick your next redemption after payment.
+                </p>
+              )}
+              <div className="flex items-start gap-2 text-xs text-white/70">
+                <input
+                  type="checkbox"
+                  id="loyalty-plan-referral"
+                  className="mt-1 h-3.5 w-3.5 rounded border-white/20 bg-transparent text-emerald-400 focus:ring-emerald-400"
+                  checked={planReferralFollowUp && Boolean(loyaltyMember.referralCode)}
+                  disabled={!loyaltyMember.referralCode}
+                  onChange={(event) => setPlanReferralFollowUp(event.target.checked)}
+                  data-testid="plan-referral-toggle"
+                />
+                <label htmlFor="loyalty-plan-referral" className="flex-1 cursor-pointer select-none">
+                  {loyaltyMember.referralCode
+                    ? `Remind me to follow up on referral code ${loyaltyMember.referralCode}.`
+                    : "Generate a referral code in the loyalty hub to unlock share reminders."}
+                </label>
+              </div>
+              {intentNotice ? <p className="text-[11px] text-emerald-200">{intentNotice}</p> : null}
+            </div>
+          ) : null}
           {performanceSnapshots.length > 0 ? (
             <div className="space-y-3 rounded-2xl border border-white/10 bg-black/20 p-4">
               <h3 className="text-xs uppercase tracking-wide text-white/50">Performance snapshots</h3>
