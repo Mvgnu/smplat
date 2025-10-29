@@ -36,5 +36,6 @@ See `/docs` for full architecture decisions.
 - `CATALOG_JOB_SCHEDULE_PATH`: override the schedule file location (defaults to `config/schedules.toml`).
 - `BUNDLE_ACCEPTANCE_AGGREGATION_ENABLED`: allow the scheduler to execute `run_aggregation` for bundle acceptance metrics.
 - `BUNDLE_EXPERIMENT_GUARDRAIL_WORKER_ENABLED`: enable guardrail pauses + notifier dispatch (used by both the scheduler and the legacy interval worker).
+- Scheduler retries + observability: each job definition supports `max_attempts`, `base_backoff_seconds`, `backoff_multiplier`, `max_backoff_seconds`, and `jitter_seconds`. Runtime metrics surface through `CatalogJobScheduler.health()` and `/api/v1/observability/prometheus` (counters for runs, retries, failures, timestamps).
 
 > meta: docs: hosted-recovery

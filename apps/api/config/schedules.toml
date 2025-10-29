@@ -5,6 +5,10 @@ timezone = "UTC"
 id = "bundle-acceptance-aggregation"
 task = "smplat_api.jobs.bundle_acceptance.run_aggregation"
 cron = "*/30 * * * *"
+max_attempts = 3
+base_backoff_seconds = 60
+max_backoff_seconds = 600
+jitter_seconds = 15
 
 [jobs.bundle_acceptance_aggregation.kwargs]
 lookback_days = 30
@@ -13,3 +17,7 @@ lookback_days = 30
 id = "bundle-guardrail-evaluation"
 task = "smplat_api.jobs.bundle_guardrails.run_guardrail_evaluation"
 cron = "*/5 * * * *"
+max_attempts = 4
+base_backoff_seconds = 15
+max_backoff_seconds = 120
+jitter_seconds = 5
