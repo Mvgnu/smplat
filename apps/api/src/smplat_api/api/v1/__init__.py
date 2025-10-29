@@ -19,6 +19,7 @@ from .endpoints import (
     payments,
     products,
     trust,
+    loyalty,
 )
 
 router = APIRouter()
@@ -40,3 +41,4 @@ router.include_router(observability.router)
 router.include_router(fulfillment.router, tags=["Fulfillment"])
 router.include_router(instagram.router)
 router.include_router(trust.router)
+router.include_router(loyalty.router)

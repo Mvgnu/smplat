@@ -272,7 +272,7 @@ async def regenerate_hosted_session(
         latest_session.metadata_json = metadata
 
     await db.commit()
-    await db.refresh(latest_session, attribute_names=["invoice"])
+    await db.refresh(latest_session)
     return _serialize_hosted_session(latest_session)
 
 
