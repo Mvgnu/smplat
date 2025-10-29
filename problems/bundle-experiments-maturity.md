@@ -15,6 +15,7 @@ Delivering maturity requires phased work: (1) data integrity and guardrails (bac
 - 2025-05-10: Reinstated API guardrail wiring, settings toggles, worker exports, and documentation after accidental checkout wiped changes; queued pytest + storefront unit runs.
 - 2025-05-10: Introduced catalog job scheduler (APScheduler-backed) with TOML cron definitions for acceptance aggregation + guardrail evaluation; expanded API tests and runbook guidance to confirm automation cadence.
 - 2025-05-10: Hardened catalog scheduler with retry/backoff controls, observability store, Prometheus metrics, and health reporting; added regression tests for retries + schedule config parsing.
+- 2025-05-10: Expanded pytest coverage for scheduler consecutive failure resets and multi-experiment guardrail enforcement; documented QA entry points for operators.
 
 ## Resolution Summary
 Pending.

@@ -30,6 +30,8 @@
 ## QA Fixtures
 - Seed deterministic bundles + metrics via `python tooling/scripts/seed_bundle_experiments.py --slug qa-catalog` (supports `--dry-run`). The script rewires acceptance metrics, experiment variants, and guardrail flags for consistent demos.
 - Use Playwright smoke flows or the new storefront experiment overlay (product page) to confirm variants, guardrail badges, and acceptance telemetry display.
+- Validate scheduler observability resilience with `poetry run pytest apps/api/tests/test_catalog_job_scheduler.py::test_scheduler_tracks_consecutive_failures_and_resets` to confirm consecutive failure tracking resets once jobs heal.
+- Exercise automated guardrail enforcement across multiple concurrent breaches via `poetry run pytest apps/api/tests/catalog/test_catalog_experiments.py::test_guardrail_worker_handles_multiple_breaches`.
 
 ## Guardrail Configuration
 - `sample_size_guardrail`: minimum sample size before decisions. Aggregator flags guardrail breach when `sample_size < guardrail`.
