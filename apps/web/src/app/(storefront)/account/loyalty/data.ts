@@ -3,6 +3,7 @@ import type {
   LoyaltyMemberSummary,
   LoyaltyNextActionCard,
   LoyaltyNextActionFeed,
+  LoyaltyNudgeFeed,
   LoyaltyRedemptionPage,
   LoyaltyReward,
   ReferralConversionPage
@@ -149,6 +150,23 @@ export async function fetchLoyaltyRewards(): Promise<LoyaltyReward[]> {
   return (await response.json()) as LoyaltyReward[];
 }
 
+export async function fetchLoyaltyNudges(): Promise<LoyaltyNudgeFeed> {
+  const response = await fetch(`${apiBase}/api/v1/loyalty/nudges`, {
+    cache: "no-store",
+    headers: apiKeyHeader
+      ? {
+          "X-API-Key": apiKeyHeader
+        }
+      : undefined
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to load loyalty nudges: ${response.statusText}`);
+  }
+
+  return (await response.json()) as LoyaltyNudgeFeed;
+}
+
 export function buildBypassMember(): LoyaltyMemberSummary {
   return {
     id: "00000000-0000-0000-0000-000000000001",
@@ -246,6 +264,25 @@ export function buildBypassNextActions(): LoyaltyNextActionFeed {
       }
     ],
     cards
+  };
+}
+
+export function buildBypassNudges(): LoyaltyNudgeFeed {
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 48).toISOString();
+  return {
+    nudges: [
+      {
+        id: "bypass-nudge-expiring",
+        nudgeType: "expiring_points",
+        headline: "125 points expire soon",
+        body: "Redeem before they leave your balance for good.",
+        ctaLabel: "Open rewards",
+        ctaHref: "/account/loyalty#rewards",
+        expiresAt,
+        priority: 20,
+        metadata: { pointsRemaining: 125 }
+      }
+    ]
   };
 }
 

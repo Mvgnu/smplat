@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+import datetime as dt
 from decimal import Decimal
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -8,8 +10,13 @@ from sqlalchemy import select
 
 from smplat_api.models.loyalty import (
     LoyaltyCheckoutIntent,
+    LoyaltyCheckoutIntentKind,
     LoyaltyCheckoutIntentStatus,
     LoyaltyLedgerEntryType,
+    LoyaltyNudge,
+    LoyaltyNudgeStatus,
+    LoyaltyPointExpiration,
+    LoyaltyPointExpirationStatus,
     LoyaltyRedemption,
     LoyaltyRedemptionStatus,
     LoyaltyReward,
@@ -402,3 +409,72 @@ async def test_referral_share_intent_persistence(app_with_db) -> None:
         assert stored_intent.status == LoyaltyCheckoutIntentStatus.PENDING
         assert stored_intent.referral_code == "SHAREME123"
         assert stored_intent.metadata_json.get("channel") == "email"
+
+
+@pytest.mark.asyncio
+async def test_loyalty_nudges_feed_and_status(app_with_db) -> None:
+    app, session_factory = app_with_db
+
+    async with session_factory() as session:
+        tier = LoyaltyTier(slug="nudge", name="Nudge", point_threshold=Decimal("0"), benefits=[])
+        user = User(email="nudge@example.com")
+        session.add_all([tier, user])
+        await session.flush()
+
+        service = LoyaltyService(session)
+        member = await service.ensure_member(user.id)
+        now = dt.datetime.now(dt.timezone.utc)
+
+        session.add(
+            LoyaltyPointExpiration(
+                member_id=member.id,
+                points=Decimal("60"),
+                consumed_points=Decimal("0"),
+                expires_at=now + dt.timedelta(days=2),
+                status=LoyaltyPointExpirationStatus.SCHEDULED,
+            )
+        )
+        session.add(
+            LoyaltyCheckoutIntent(
+                member_id=member.id,
+                external_id="nudge-checkout",
+                kind=LoyaltyCheckoutIntentKind.REDEMPTION,
+                status=LoyaltyCheckoutIntentStatus.PENDING,
+                created_at=now - dt.timedelta(hours=1),
+                expires_at=now + dt.timedelta(days=1),
+                metadata_json={"rewardName": "Launch Kit"},
+            )
+        )
+        session.add(
+            LoyaltyRedemption(
+                member_id=member.id,
+                status=LoyaltyRedemptionStatus.REQUESTED,
+                points_cost=Decimal("400"),
+                quantity=1,
+                requested_at=now - dt.timedelta(days=3),
+            )
+        )
+        await session.commit()
+
+    session_headers = {"X-Session-User": str(user.id)}
+
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        list_resp = await client.get("/api/v1/loyalty/nudges", headers=session_headers)
+        assert list_resp.status_code == 200
+        body = list_resp.json()
+        assert "nudges" in body
+        assert len(body["nudges"]) >= 2
+        target_id = body["nudges"][0]["id"]
+
+        update_resp = await client.post(
+            f"/api/v1/loyalty/nudges/{target_id}/status",
+            headers=session_headers,
+            json={"status": "dismissed"},
+        )
+        assert update_resp.status_code == 204
+
+    async with session_factory() as session:
+        stmt = select(LoyaltyNudge).where(LoyaltyNudge.id == UUID(target_id))
+        result = await session.execute(stmt)
+        stored = result.scalar_one()
+        assert stored.status == LoyaltyNudgeStatus.DISMISSED
