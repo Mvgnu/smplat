@@ -24,6 +24,27 @@ class EmailBackend(Protocol):
         ...
 
 
+class SMSBackend(Protocol):
+    """Protocol for SMS dispatchers."""
+
+    async def send_sms(self, recipient: str, body_text: str) -> None:
+        ...
+
+
+class PushBackend(Protocol):
+    """Protocol for push notification connectors."""
+
+    async def send_push(
+        self,
+        recipient: str,
+        title: str,
+        body: str,
+        *,
+        metadata: Optional[dict[str, str]] = None,
+    ) -> None:
+        ...
+
+
 class SMTPEmailBackend:
     """SMTP-powered backend that sends emails via standard library."""
 
@@ -109,3 +130,43 @@ class InMemoryEmailBackend:
         if body_html:
             message.add_alternative(body_html, subtype="html")
         self.sent_messages.append(message)
+
+
+@dataclass
+class InMemorySMSBackend:
+    """Stores SMS payloads for inspection in tests."""
+
+    sent_messages: List[tuple[str, str]]
+
+    def __init__(self) -> None:
+        self.sent_messages = []
+
+    async def send_sms(self, recipient: str, body_text: str) -> None:
+        self.sent_messages.append((recipient, body_text))
+
+
+@dataclass
+class InMemoryPushBackend:
+    """In-memory push dispatcher for validation."""
+
+    sent_messages: List[dict[str, str]]
+
+    def __init__(self) -> None:
+        self.sent_messages = []
+
+    async def send_push(
+        self,
+        recipient: str,
+        title: str,
+        body: str,
+        *,
+        metadata: Optional[dict[str, str]] = None,
+    ) -> None:
+        self.sent_messages.append(
+            {
+                "recipient": recipient,
+                "title": title,
+                "body": body,
+                "metadata": metadata or {},
+            }
+        )

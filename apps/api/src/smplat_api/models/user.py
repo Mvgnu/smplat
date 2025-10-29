@@ -26,6 +26,8 @@ class User(Base):
     email = Column(String, nullable=False, unique=True, index=True)
     password_hash = Column(String, nullable=True)
     display_name = Column(String, nullable=True)
+    phone_number = Column(String(32), nullable=True)
+    push_token = Column(String(128), nullable=True)
     role = Column(
         SqlEnum(UserRoleEnum, name="user_role_enum"),
         nullable=False,

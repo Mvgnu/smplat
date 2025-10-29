@@ -32,6 +32,7 @@ from smplat_api.models.loyalty import (
 )
 from smplat_api.models.user import User
 from smplat_api.services.loyalty import (
+    LoyaltyAnalyticsService,
     LoyaltyGuardrailOverrideRecord,
     LoyaltyGuardrailSnapshot,
     LoyaltyNudgeCard,
@@ -201,6 +202,9 @@ class LoyaltyNudgeCardResponse(BaseModel):
     ctaHref: Optional[str]
     expiresAt: Optional[datetime]
     priority: int
+    metadata: dict[str, Any]
+    campaignSlug: Optional[str]
+    channels: List[str]
 
 
 class LoyaltyGuardrailOverrideResponse(BaseModel):
@@ -260,6 +264,37 @@ class LoyaltyGuardrailSnapshotResponse(BaseModel):
                 for record in snapshot.overrides
             ],
         )
+
+
+class LoyaltySegmentSummaryResponse(BaseModel):
+    slug: Literal["active", "stalled", "at-risk", "inactive"]
+    label: str
+    memberCount: int
+    averageInvitesPerMember: float
+    averageConversionsPerMember: float
+    averagePointsEarnedPerMember: float
+
+
+class LoyaltySegmentsResponse(BaseModel):
+    computedAt: datetime
+    windowDays: int
+    segments: List[LoyaltySegmentSummaryResponse]
+
+
+class LoyaltyVelocitySnapshotResponse(BaseModel):
+    computedAt: datetime
+    windowDays: int
+    totalInvites: int
+    totalConversions: int
+    totalPointsEarned: float
+    invitesPerMember: float
+    conversionsPerMember: float
+    pointsPerMember: float
+
+
+class LoyaltyVelocityTimelineResponse(BaseModel):
+    snapshots: List[LoyaltyVelocitySnapshotResponse]
+    nextCursor: Optional[datetime]
 
 
 class LoyaltyGuardrailOverrideCreateRequest(BaseModel):
@@ -795,6 +830,8 @@ def _serialize_nudge_card(card: LoyaltyNudgeCard) -> LoyaltyNudgeCardResponse:
         expiresAt=card.expires_at,
         priority=card.priority,
         metadata=card.metadata,
+        campaignSlug=card.campaign_slug,
+        channels=[getattr(channel, "value", str(channel)) for channel in card.channels],
     )
 
 
@@ -1125,4 +1162,90 @@ async def create_guardrail_override(
     await db.refresh(override)
     return LoyaltyGuardrailOverrideResponse.from_record(
         service._serialize_guardrail_override(override)
+    )
+
+
+@router.get(
+    "/referrals/segments",
+    response_model=LoyaltySegmentsResponse,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def get_loyalty_referral_segments(
+    db: AsyncSession = Depends(get_session),
+) -> LoyaltySegmentsResponse:
+    """Return predictive loyalty segments with referral velocity averages."""
+
+    analytics = LoyaltyAnalyticsService(db)
+    snapshot = await analytics.compute_snapshot()
+    return LoyaltySegmentsResponse(
+        computedAt=snapshot.computed_at,
+        windowDays=snapshot.window_days,
+        segments=[
+            LoyaltySegmentSummaryResponse(
+                slug=segment.slug,
+                label=segment.label,
+                memberCount=segment.member_count,
+                averageInvitesPerMember=segment.average_invites_per_member,
+                averageConversionsPerMember=segment.average_conversions_per_member,
+                averagePointsEarnedPerMember=segment.average_points_earned_per_member,
+            )
+            for segment in snapshot.segments
+        ],
+    )
+
+
+@router.get(
+    "/analytics/velocity",
+    response_model=LoyaltyVelocityTimelineResponse,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def list_loyalty_velocity_snapshots(
+    limit: int = Query(10, ge=1, le=30),
+    cursor: Optional[datetime] = Query(
+        None, description="Return snapshots computed before this timestamp"
+    ),
+    db: AsyncSession = Depends(get_session),
+) -> LoyaltyVelocityTimelineResponse:
+    """List persisted loyalty velocity snapshots for trend analysis."""
+
+    analytics = LoyaltyAnalyticsService(db)
+    records = await analytics.list_snapshots(limit=limit, before=cursor)
+
+    if not records:
+        fallback = await analytics.compute_snapshot()
+        fallback_snapshot = LoyaltyVelocitySnapshotResponse(
+            computedAt=fallback.computed_at,
+            windowDays=fallback.velocity.window_days,
+            totalInvites=fallback.velocity.total_invites,
+            totalConversions=fallback.velocity.total_conversions,
+            totalPointsEarned=fallback.velocity.total_points_earned,
+            invitesPerMember=fallback.velocity.invites_per_member,
+            conversionsPerMember=fallback.velocity.conversions_per_member,
+            pointsPerMember=fallback.velocity.points_per_member,
+        )
+        return LoyaltyVelocityTimelineResponse(
+            snapshots=[fallback_snapshot],
+            nextCursor=None,
+        )
+
+    next_cursor = records[-1].computed_at if len(records) == limit else None
+    snapshots = []
+    for record in records:
+        velocity_payload = record.velocity_json or {}
+        snapshots.append(
+            LoyaltyVelocitySnapshotResponse(
+                computedAt=record.computed_at,
+                windowDays=int(velocity_payload.get("windowDays", analytics._window_days)),
+                totalInvites=int(velocity_payload.get("totalInvites", 0)),
+                totalConversions=int(velocity_payload.get("totalConversions", 0)),
+                totalPointsEarned=float(velocity_payload.get("totalPointsEarned", 0.0)),
+                invitesPerMember=float(velocity_payload.get("invitesPerMember", 0.0)),
+                conversionsPerMember=float(velocity_payload.get("conversionsPerMember", 0.0)),
+                pointsPerMember=float(velocity_payload.get("pointsPerMember", 0.0)),
+            )
+        )
+
+    return LoyaltyVelocityTimelineResponse(
+        snapshots=snapshots,
+        nextCursor=next_cursor,
     )

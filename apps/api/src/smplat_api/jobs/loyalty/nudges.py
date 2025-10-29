@@ -12,7 +12,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from smplat_api.models.loyalty import LoyaltyMember, LoyaltyNudge
-from smplat_api.services.loyalty import LoyaltyService
+from smplat_api.services.loyalty import LoyaltyService, LoyaltyNudgeDispatchCandidate
 from smplat_api.services.notifications import NotificationService
 
 SessionFactory = Callable[[], AsyncSession] | Callable[[], Awaitable[AsyncSession]]
@@ -66,14 +66,15 @@ async def aggregate_loyalty_nudges(*, session_factory: SessionFactory) -> Dict[s
 
 async def _dispatch_notifications(
     notifications: NotificationService,
-    nudges: list[LoyaltyNudge],
+    nudges: list[LoyaltyNudgeDispatchCandidate],
     *,
     session: AsyncSession,
 ) -> None:
     """Send loyalty nudges to members while reusing session context."""
 
     member_cache: dict[UUID, LoyaltyMember] = {}
-    for nudge in nudges:
+    for candidate in nudges:
+        nudge = candidate.nudge
         member = nudge.member
         if member is None:
             cached = member_cache.get(nudge.member_id)
@@ -88,7 +89,7 @@ async def _dispatch_notifications(
                     continue
                 member_cache[nudge.member_id] = cached
             member = cached
-        await notifications.send_loyalty_nudge(member, nudge)
+        await notifications.send_loyalty_nudge(member, nudge, channels=candidate.channels)
 
 
 __all__ = ["aggregate_loyalty_nudges"]

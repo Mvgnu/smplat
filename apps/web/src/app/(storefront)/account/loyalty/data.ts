@@ -6,6 +6,8 @@ import type {
   LoyaltyNudgeFeed,
   LoyaltyRedemptionPage,
   LoyaltyReward,
+  LoyaltySegmentsSnapshot,
+  LoyaltyVelocityTimeline,
   ReferralConversionPage
 } from "@smplat/types";
 
@@ -131,6 +133,55 @@ export async function fetchReferralConversions(
   }
 
   return (await response.json()) as ReferralConversionPage;
+}
+
+type VelocityFilters = {
+  cursor?: string | null;
+  limit?: number;
+};
+
+export async function fetchLoyaltySegmentsSnapshot(): Promise<LoyaltySegmentsSnapshot> {
+  if (allowBypass || !apiKeyHeader) {
+    return buildBypassSegmentsSnapshot();
+  }
+
+  const response = await fetch(`${apiBase}/api/v1/loyalty/referrals/segments`, {
+    cache: "no-store",
+    headers: { "X-API-Key": apiKeyHeader }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to load loyalty segments: ${response.statusText}`);
+  }
+
+  return (await response.json()) as LoyaltySegmentsSnapshot;
+}
+
+export async function fetchLoyaltyVelocityTimeline(
+  filters: VelocityFilters = {}
+): Promise<LoyaltyVelocityTimeline> {
+  if (allowBypass || !apiKeyHeader) {
+    return buildBypassVelocityTimeline();
+  }
+
+  const params = new URLSearchParams();
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.limit) params.set("limit", String(filters.limit));
+
+  const url = params.size
+    ? `${apiBase}/api/v1/loyalty/analytics/velocity?${params.toString()}`
+    : `${apiBase}/api/v1/loyalty/analytics/velocity`;
+
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { "X-API-Key": apiKeyHeader }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to load loyalty velocity timeline: ${response.statusText}`);
+  }
+
+  return (await response.json()) as LoyaltyVelocityTimeline;
 }
 
 export async function fetchLoyaltyRewards(): Promise<LoyaltyReward[]> {
@@ -280,7 +331,9 @@ export function buildBypassNudges(): LoyaltyNudgeFeed {
         ctaHref: "/account/loyalty#rewards",
         expiresAt,
         priority: 20,
-        metadata: { pointsRemaining: 125 }
+        metadata: { pointsRemaining: 125 },
+        campaignSlug: "expiring_points",
+        channels: ["email", "sms"]
       }
     ]
   };
@@ -351,6 +404,62 @@ export function buildBypassConversions(): ReferralConversionPage {
     convertedPoints: 500,
     lastActivity: new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString()
   };
+}
+
+export function buildBypassSegmentsSnapshot(): LoyaltySegmentsSnapshot {
+  const now = new Date();
+  return {
+    computedAt: now.toISOString(),
+    windowDays: 30,
+    segments: [
+      {
+        slug: "active",
+        label: "Active champions",
+        memberCount: 42,
+        averageInvitesPerMember: 1.6,
+        averageConversionsPerMember: 0.7,
+        averagePointsEarnedPerMember: 180
+      },
+      {
+        slug: "stalled",
+        label: "Stalled patrons",
+        memberCount: 18,
+        averageInvitesPerMember: 0.4,
+        averageConversionsPerMember: 0.1,
+        averagePointsEarnedPerMember: 45
+      },
+      {
+        slug: "at-risk",
+        label: "At-risk members",
+        memberCount: 12,
+        averageInvitesPerMember: 0.1,
+        averageConversionsPerMember: 0,
+        averagePointsEarnedPerMember: 10
+      }
+    ]
+  } satisfies LoyaltySegmentsSnapshot;
+}
+
+export function buildBypassVelocityTimeline(): LoyaltyVelocityTimeline {
+  const now = Date.now();
+  const snapshots = Array.from({ length: 4 }).map((_, index) => {
+    const computedAt = new Date(now - index * 1000 * 60 * 60 * 24 * 7).toISOString();
+    return {
+      computedAt,
+      windowDays: 30,
+      totalInvites: 120 - index * 10,
+      totalConversions: 45 - index * 4,
+      totalPointsEarned: 5400 - index * 320,
+      invitesPerMember: 2.1 - index * 0.2,
+      conversionsPerMember: 0.8 - index * 0.05,
+      pointsPerMember: 210 - index * 12
+    };
+  });
+
+  return {
+    snapshots,
+    nextCursor: null
+  } satisfies LoyaltyVelocityTimeline;
 }
 
 export function allowAuthBypass(): boolean {

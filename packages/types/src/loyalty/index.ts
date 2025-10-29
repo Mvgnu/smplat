@@ -182,6 +182,8 @@ export interface LoyaltyNudgeCard {
   expiresAt?: string | null;
   priority: number;
   metadata: Record<string, unknown>;
+  campaignSlug?: string | null;
+  channels: string[];
 }
 
 export interface LoyaltyNudgeFeed {
@@ -215,4 +217,37 @@ export interface LoyaltyGuardrailSnapshot {
   cooldownUntil?: string | null;
   throttleOverrideActive: boolean;
   overrides: LoyaltyGuardrailOverride[];
+}
+
+export type LoyaltySegmentSlug = "active" | "stalled" | "at-risk" | "inactive";
+
+export interface LoyaltySegmentSummary {
+  slug: LoyaltySegmentSlug;
+  label: string;
+  memberCount: number;
+  averageInvitesPerMember: number;
+  averageConversionsPerMember: number;
+  averagePointsEarnedPerMember: number;
+}
+
+export interface LoyaltySegmentsSnapshot {
+  computedAt: string;
+  windowDays: number;
+  segments: LoyaltySegmentSummary[];
+}
+
+export interface LoyaltyVelocitySnapshot {
+  computedAt: string;
+  windowDays: number;
+  totalInvites: number;
+  totalConversions: number;
+  totalPointsEarned: number;
+  invitesPerMember: number;
+  conversionsPerMember: number;
+  pointsPerMember: number;
+}
+
+export interface LoyaltyVelocityTimeline {
+  snapshots: LoyaltyVelocitySnapshot[];
+  nextCursor?: string | null;
 }

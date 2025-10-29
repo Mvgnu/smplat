@@ -21,9 +21,10 @@ from smplat_api.models.loyalty import (
     LoyaltyRedemptionStatus,
     LoyaltyReward,
     LoyaltyTier,
+    ReferralStatus,
 )
 from smplat_api.models.user import User
-from smplat_api.services.loyalty import LoyaltyService
+from smplat_api.services.loyalty import LoyaltyAnalyticsService, LoyaltyService
 
 
 @pytest.mark.asyncio
@@ -189,6 +190,85 @@ async def test_checkout_intent_confirmation_is_idempotent(app_with_db) -> None:
         stored_intent = intent_result.scalars().one()
         assert stored_intent.status == LoyaltyCheckoutIntentStatus.PENDING
         assert stored_intent.metadata_json.get("note") == "updated"
+
+
+@pytest.mark.asyncio
+async def test_loyalty_segments_and_velocity_endpoints(app_with_db) -> None:
+    app, session_factory = app_with_db
+
+    async with session_factory() as session:
+        tier = LoyaltyTier(slug="insight", name="Insight", point_threshold=Decimal("0"), benefits=[])
+        users = [
+            User(email="segments-active@example.com"),
+            User(email="segments-stalled@example.com"),
+            User(email="segments-risk@example.com"),
+        ]
+        session.add(tier)
+        session.add_all(users)
+        await session.flush()
+
+        service = LoyaltyService(session)
+        members = [await service.ensure_member(user.id) for user in users]
+        now = dt.datetime.now(dt.timezone.utc)
+
+        active_entry = await service.record_ledger_entry(
+            members[0],
+            entry_type=LoyaltyLedgerEntryType.EARN,
+            amount=Decimal("150"),
+            description="Recent activity",
+        )
+        active_entry.occurred_at = now
+
+        stalled_entry = await service.record_ledger_entry(
+            members[1],
+            entry_type=LoyaltyLedgerEntryType.EARN,
+            amount=Decimal("60"),
+            description="Older earn",
+        )
+        stalled_entry.occurred_at = now - dt.timedelta(days=45)
+
+        recent_referral = await service.issue_referral(
+            members[0],
+            invitee_email="converted@example.com",
+            reward_points=Decimal("50"),
+            metadata={},
+            status=ReferralStatus.CONVERTED,
+        )
+        recent_referral.created_at = now - dt.timedelta(days=5)
+        recent_referral.completed_at = now - dt.timedelta(days=3)
+
+        dormant_referral = await service.issue_referral(
+            members[1],
+            invitee_email=None,
+            reward_points=Decimal("25"),
+            metadata={},
+            status=ReferralStatus.SENT,
+        )
+        dormant_referral.created_at = now - dt.timedelta(days=60)
+
+        await session.commit()
+
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        segments_resp = await client.get("/api/v1/loyalty/referrals/segments")
+        assert segments_resp.status_code == 200
+        segments_payload = segments_resp.json()
+        slugs = {segment["slug"] for segment in segments_payload["segments"]}
+        assert {"active", "stalled", "at-risk"}.issubset(slugs)
+        active_segment = next(segment for segment in segments_payload["segments"] if segment["slug"] == "active")
+        assert active_segment["memberCount"] >= 1
+        assert active_segment["averageInvitesPerMember"] >= 1
+
+    async with session_factory() as session:
+        analytics = LoyaltyAnalyticsService(session)
+        await analytics.persist_snapshot()
+        await session.commit()
+
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        velocity_resp = await client.get("/api/v1/loyalty/analytics/velocity")
+        assert velocity_resp.status_code == 200
+        velocity_payload = velocity_resp.json()
+        assert len(velocity_payload["snapshots"]) >= 1
+        assert velocity_payload["nextCursor"] is None
 
 
 @pytest.mark.asyncio
