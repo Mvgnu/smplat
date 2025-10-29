@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Sequence
 from uuid import UUID
 
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from smplat_api.core.settings import get_settings
 from smplat_api.models.fulfillment import FulfillmentTask, FulfillmentTaskStatusEnum
+from smplat_api.models.loyalty import LoyaltyMember, LoyaltyTier
 from smplat_api.models.order import Order, OrderItem, OrderStatusEnum
 from smplat_api.models.payment import Payment
 from smplat_api.models.user import User
@@ -24,6 +26,7 @@ from .templates import (
     render_invoice_overdue,
     render_fulfillment_completion,
     render_fulfillment_retry,
+    render_loyalty_tier_upgrade,
     render_onboarding_concierge_nudge,
     render_payment_success,
     render_weekly_digest,
@@ -387,6 +390,20 @@ class NotificationService:
 
         return _OrderContact(email=user.email, display_name=user.display_name)
 
+    async def _resolve_user_contact(self, user_id: Optional[UUID]) -> Optional[_OrderContact]:
+        """Resolve a direct contact for a user id."""
+
+        if user_id is None:
+            return None
+
+        stmt = select(User).where(User.id == user_id)
+        result = await self._db.execute(stmt)
+        user = result.scalar_one_or_none()
+        if not user or not user.email:
+            return None
+
+        return _OrderContact(email=user.email, display_name=user.display_name)
+
     async def _resolve_workspace_contact(self, workspace_id: Optional[UUID]) -> Optional[_OrderContact]:
         """Resolve the primary workspace contact for billing alerts."""
         if workspace_id is None:
@@ -418,6 +435,45 @@ class NotificationService:
             fulfillment_alerts=preference.fulfillment_alerts,
             marketing_messages=preference.marketing_messages,
             billing_alerts=preference.billing_alerts,
+        )
+
+    async def send_loyalty_tier_upgrade(
+        self,
+        member: LoyaltyMember,
+        tier: LoyaltyTier,
+    ) -> None:
+        """Send milestone notification when a member reaches a tier."""
+
+        if self._backend is None:
+            return
+
+        contact = await self._resolve_user_contact(member.user_id)
+        if contact is None:
+            return
+
+        preferences = await self._get_preferences(member.user_id)
+        if not preferences.marketing_messages:
+            logger.info(
+                "Skipping loyalty tier notification due to preferences",
+                user_id=str(member.user_id),
+            )
+            return
+
+        template = render_loyalty_tier_upgrade(
+            member,
+            tier,
+            contact_name=contact.display_name,
+        )
+        metadata = {
+            "member_id": str(member.id),
+            "tier_id": str(tier.id),
+            "tier_slug": tier.slug,
+        }
+        await self._deliver(
+            contact,
+            template,
+            event_type="loyalty_tier_upgrade",
+            metadata=metadata,
         )
 
     async def _deliver(

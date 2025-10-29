@@ -10,6 +10,7 @@ from typing import Iterable, Sequence
 
 from smplat_api.models.fulfillment import FulfillmentTask
 from smplat_api.models.invoice import Invoice
+from smplat_api.models.loyalty import LoyaltyMember, LoyaltyTier
 from smplat_api.models.order import Order
 from smplat_api.models.payment import Payment
 from smplat_api.models.user import User
@@ -316,6 +317,61 @@ def render_invoice_overdue(invoice: Invoice, contact_name: str | None) -> Render
     </ul>
     <p>We're here to help if you have questions.</p>
     <p>The SMPLAT Finance Team</p>
+  </body>
+</html>"""
+
+    return RenderedTemplate(subject=subject, text_body=text_body, html_body=html_body)
+
+
+def render_loyalty_tier_upgrade(
+    member: LoyaltyMember,
+    tier: LoyaltyTier,
+    *,
+    contact_name: str | None,
+) -> RenderedTemplate:
+    """Render notification when a loyalty member upgrades tiers."""
+
+    greeting = f"Hi {contact_name}," if contact_name else "Hi there,"
+    subject = f"You've reached {tier.name} status on SMPLAT"
+
+    benefits_lines = []
+    if isinstance(tier.benefits, (list, tuple)) and tier.benefits:
+        benefits_lines.extend(["", "New benefits:"])
+        benefits_lines.extend(f"- {html.escape(str(benefit))}" for benefit in tier.benefits)
+
+    text_lines = [
+        greeting,
+        "",
+        f"Congratulations! You've unlocked the {tier.name} tier.",
+        "Your engagement has earned additional perks immediately available in your dashboard.",
+    ]
+    text_lines.extend(benefits_lines)
+    text_lines.extend([
+        "",
+        "Keep building momentum to access the next milestone.",
+        "The SMPLAT Team",
+    ])
+
+    text_body = "\n".join(text_lines)
+
+    benefits_html = ""
+    if isinstance(tier.benefits, (list, tuple)) and tier.benefits:
+        benefit_items = "".join(
+            f"<li>{html.escape(str(benefit))}</li>" for benefit in tier.benefits
+        )
+        benefits_html = f"""
+    <h3>New benefits</h3>
+    <ul>{benefit_items}</ul>
+"""
+
+    html_body = f"""<html>
+  <body>
+    <p>{greeting}</p>
+    <p>Congratulations! You've unlocked the <strong>{html.escape(tier.name)}</strong> tier.</p>
+    <p>Your engagement has earned additional perks immediately available in your dashboard.</p>
+    {benefits_html}
+    <p>Keep building momentum to access the next milestone.</p>
+    <p>The SMPLAT Team</p>
   </body>
 </html>"""
 

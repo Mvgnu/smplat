@@ -63,6 +63,14 @@ from .processor_event import (  # noqa: F401
     record_processor_event,
     register_replay_attempt,
 )
+from .loyalty import (  # noqa: F401
+    LoyaltyLedgerEntry,
+    LoyaltyLedgerEntryType,
+    LoyaltyMember,
+    LoyaltyTier,
+    ReferralInvite,
+    ReferralStatus,
+)
 from .product import (  # noqa: F401
     Product,
     ProductAddOn,

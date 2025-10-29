@@ -3,10 +3,11 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
+import type { LoyaltyTier } from "@smplat/types";
 import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import { cartTotalSelector, useCartStore } from "@/store/cart";
 import { marketingFallbacks } from "../products/marketing-content";
-import { AlertTriangle, BadgeCheck, Clock, ShieldCheck, Users } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Clock, ShieldCheck, Sparkles, Users } from "lucide-react";
 
 const alertDescriptions: Record<string, string> = {
   sla_breach_risk: "Projected clearance exceeds the guaranteed delivery SLA.",
@@ -31,6 +32,13 @@ function formatCurrency(amount: number, currency: string): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
   }).format(amount);
+}
+
+function formatPoints(points: number): string {
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  }).format(points);
 }
 
 type CheckoutState = {
@@ -192,6 +200,8 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loyaltyTiers, setLoyaltyTiers] = useState<LoyaltyTier[]>([]);
+  const [loyaltyStatus, setLoyaltyStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
 
   const currency = items[0]?.currency ?? "USD";
 
@@ -409,6 +419,34 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
     }
   }, [upsellRecommendations, recordOfferEvent]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const fetchTiers = async () => {
+      setLoyaltyStatus("loading");
+      try {
+        const response = await fetch("/api/v1/loyalty/tiers");
+        if (!response.ok) {
+          throw new Error(`Failed to load loyalty tiers: ${response.status}`);
+        }
+        const tiers: LoyaltyTier[] = await response.json();
+        if (!cancelled) {
+          setLoyaltyTiers(tiers.slice(0, 3));
+          setLoyaltyStatus("ready");
+        }
+      } catch (fetchError) {
+        console.warn("Unable to load loyalty tiers", fetchError);
+        if (!cancelled) {
+          setLoyaltyStatus("error");
+        }
+      }
+    };
+
+    void fetchTiers();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -505,7 +543,7 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
         </p>
       </header>
 
-      <section className="grid gap-4 lg:grid-cols-3">
+      <section className="grid gap-4 lg:grid-cols-4">
         {/* meta: trust-module: checkout-guarantee */}
         <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
           <div className="flex items-center gap-3">
@@ -597,6 +635,54 @@ export function CheckoutPageClient({ trustContent }: CheckoutPageClientProps) {
               );
             })}
           </ul>
+        </article>
+        <article className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white">
+              <Sparkles className="h-5 w-5" />
+            </span>
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold text-white">Loyalty perks</h2>
+              <p className="text-sm text-white/60">Earn tiered rewards by completing campaigns and referrals.</p>
+            </div>
+          </div>
+          <div className="mt-4 text-sm text-white/70">
+            {loyaltyStatus === "loading" ? (
+              <p className="animate-pulse text-white/50">Loading tier highlights…</p>
+            ) : loyaltyStatus === "error" ? (
+              <p className="text-white/50">Loyalty program overview temporarily unavailable.</p>
+            ) : loyaltyTiers.length > 0 ? (
+              <ul className="space-y-3">
+                {loyaltyTiers.map((tier) => {
+                  const benefits = Array.isArray(tier.benefits)
+                    ? tier.benefits
+                        .map((benefit) =>
+                          typeof benefit === "string" ? benefit : typeof benefit === "object" && benefit !== null ? JSON.stringify(benefit) : String(benefit)
+                        )
+                        .filter((benefit) => benefit.trim().length > 0)
+                    : [];
+                  const benefitPreview = benefits.slice(0, 2).join(" • ");
+
+                  return (
+                    <li key={tier.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold text-white">{tier.name}</p>
+                        <span className="text-xs text-white/50">{formatPoints(tier.pointThreshold)} pts</span>
+                      </div>
+                      {tier.description ? (
+                        <p className="mt-1 text-xs text-white/60">{tier.description}</p>
+                      ) : null}
+                      {benefitPreview ? (
+                        <p className="mt-2 text-xs text-white/50">{benefitPreview}</p>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-white/50">Tiers unlock as soon as your first order is fulfilled.</p>
+            )}
+          </div>
         </article>
       </section>
 
