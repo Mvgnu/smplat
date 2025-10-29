@@ -29,6 +29,18 @@ export interface ReferralInviteResponse {
   status: string;
   rewardPoints: number;
   inviteeEmail?: string | null;
+  createdAt: string;
+  expiresAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface ReferralInviteCreatePayload {
+  inviteeEmail?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReferralInviteCancelPayload {
+  reason?: string | null;
 }
 
 export interface LoyaltyPointsExpiration {

@@ -6,6 +6,7 @@ import { auth } from "@/server/auth";
 
 const navigation = [
   { href: "/account/loyalty", label: "Loyalty" },
+  { href: "/account/loyalty/referrals", label: "Referrals" },
   { href: "/account/orders", label: "Orders" },
   { href: "/account/settings", label: "Settings" }
 ];

@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # Internal API security
     checkout_api_key: str = ""
 
+    # Loyalty referrals (member surface)
+    referral_member_reward_points: float = 500.0
+    referral_member_max_active_invites: int = 5
+    referral_member_invite_cooldown_seconds: int = 300
+
     # Billing rollout
     billing_rollout_stage: Literal["disabled", "pilot", "ga"] = "pilot"
     billing_rollout_workspaces: list[str] = Field(default_factory=list)

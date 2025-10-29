@@ -1,12 +1,22 @@
 "use server";
 
-import type { LoyaltyRedemption } from "@smplat/types";
+import type {
+  LoyaltyRedemption,
+  ReferralInviteCancelPayload,
+  ReferralInviteCreatePayload,
+  ReferralInviteResponse
+} from "@smplat/types";
 
 import { auth } from "@/server/auth";
+import {
+  cancelMemberReferral,
+  createMemberReferral
+} from "@/lib/loyalty/referrals";
 
 const apiBase = process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const apiKeyHeader = process.env.CHECKOUT_API_KEY || process.env.NEXT_PUBLIC_CHECKOUT_API_KEY;
 const allowBypass = process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "true";
+const bypassUserId = "00000000-0000-0000-0000-000000000001";
 
 export type RedemptionRequestPayload = {
   rewardSlug?: string;
@@ -65,4 +75,47 @@ function buildBypassRedemption(rewardSlug: string): LoyaltyRedemption {
     cancelledAt: null,
     failureReason: null
   };
+}
+
+export async function issueReferralInvite(
+  payload: ReferralInviteCreatePayload
+): Promise<ReferralInviteResponse> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    if (allowBypass) {
+      return createMemberReferral(bypassUserId, payload);
+    }
+    throw new Error("Authentication is required to issue referrals.");
+  }
+
+  try {
+    return await createMemberReferral(session.user.id, payload);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(error.message);
+    }
+    throw new Error("Failed to create referral invite");
+  }
+}
+
+export async function cancelReferralInvite(
+  referralId: string,
+  payload: ReferralInviteCancelPayload = {}
+): Promise<ReferralInviteResponse> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    if (allowBypass) {
+      return cancelMemberReferral(bypassUserId, referralId, payload);
+    }
+    throw new Error("Authentication is required to manage referrals.");
+  }
+
+  try {
+    return await cancelMemberReferral(session.user.id, referralId, payload);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(error.message);
+    }
+    throw new Error("Failed to cancel referral invite");
+  }
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -8,6 +9,7 @@ import type { LoyaltyMemberSummary, LoyaltyReward, LoyaltyRedemption } from "@sm
 import { requestRedemption } from "./loyalty.actions";
 
 const POINTS_DISPLAY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const REFERRAL_REWARD_POINTS = 500;
 
 type LoyaltyHubClientProps = {
   member: LoyaltyMemberSummary;
@@ -115,7 +117,7 @@ export function LoyaltyHubClient({ member, rewards }: LoyaltyHubClientProps) {
         </div>
       </section>
 
-      <section className="grid gap-6 md:grid-cols-2">
+      <section className="grid gap-6 md:grid-cols-3">
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
           <h3 className="text-lg font-semibold">Balances</h3>
           <dl className="mt-4 space-y-3 text-sm text-white/70">
@@ -152,6 +154,22 @@ export function LoyaltyHubClient({ member, rewards }: LoyaltyHubClientProps) {
               ))}
             </ul>
           )}
+        </div>
+
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
+          <h3 className="text-lg font-semibold">Referrals</h3>
+          <p className="mt-2 text-sm text-white/70">
+            Earn {POINTS_DISPLAY.format(REFERRAL_REWARD_POINTS)} pts for every friend who converts.
+          </p>
+          <p className="mt-4 text-sm text-white/70">
+            Your code: <span className="font-semibold text-white">{member.referralCode ?? "—"}</span>
+          </p>
+          <Link
+            className="mt-6 inline-flex w-full items-center justify-center rounded-full border border-white/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white/70 transition hover:border-white/40 hover:text-white"
+            href="/account/loyalty/referrals"
+          >
+            Manage invites
+          </Link>
         </div>
       </section>
 
