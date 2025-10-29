@@ -13,7 +13,11 @@ import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/serv
 import { cartTotalSelector, useCartStore } from "@/store/cart";
 import { marketingFallbacks } from "../products/marketing-content";
 import { AlertTriangle, BadgeCheck, Clock, ShieldCheck, Sparkles, Users } from "lucide-react";
-import { clearResolvedIntents, queueCheckoutIntents } from "@/lib/loyalty/intents";
+import {
+  clearResolvedIntents,
+  queueCheckoutIntents,
+  type CheckoutIntentDraft
+} from "@/lib/loyalty/intents";
 
 const alertDescriptions: Record<string, string> = {
   sla_breach_risk: "Projected clearance exceeds the guaranteed delivery SLA.",
@@ -497,7 +501,7 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
     let queuedIntents: LoyaltyCheckoutIntent[] = [];
     try {
       if (plannedRewardSlug || (planReferralFollowUp && loyaltyMember?.referralCode)) {
-        const intentsToPersist: Array<Omit<LoyaltyCheckoutIntent, "id" | "createdAt">> = [];
+        const intentsToPersist: CheckoutIntentDraft[] = [];
         if (selectedReward) {
           intentsToPersist.push({
             kind: "redemption",

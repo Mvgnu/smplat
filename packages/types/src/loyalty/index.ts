@@ -112,24 +112,42 @@ export interface ReferralConversionPage {
 }
 
 export type LoyaltyCheckoutIntentKind = "redemption" | "referral_share";
+export type LoyaltyCheckoutIntentStatus =
+  | "pending"
+  | "resolved"
+  | "cancelled"
+  | "expired";
 
 export interface LoyaltyCheckoutIntent {
   id: string;
+  clientIntentId: string;
   kind: LoyaltyCheckoutIntentKind;
+  status: LoyaltyCheckoutIntentStatus;
   createdAt: string;
+  orderId?: string | null;
+  channel?: string | null;
   rewardSlug?: string | null;
   rewardName?: string | null;
   pointsCost?: number | null;
   quantity?: number | null;
   referralCode?: string | null;
-  channel?: string | null;
   expiresAt?: string | null;
+  resolvedAt?: string | null;
   metadata?: Record<string, unknown>;
 }
 
 export interface LoyaltyIntentConfirmationPayload {
   orderId: string;
-  intents: LoyaltyCheckoutIntent[];
+  userId: string;
+  intents: Array<
+    Omit<
+      LoyaltyCheckoutIntent,
+      "id" | "status" | "clientIntentId" | "resolvedAt" | "metadata"
+    > & {
+      id: string;
+      metadata?: Record<string, unknown>;
+    }
+  >;
   action: "confirm" | "cancel";
 }
 
@@ -142,4 +160,9 @@ export interface LoyaltyNextActionCard {
   createdAt: string;
   expiresAt?: string | null;
   metadata?: Record<string, unknown>;
+}
+
+export interface LoyaltyNextActionFeed {
+  intents: LoyaltyCheckoutIntent[];
+  cards: LoyaltyNextActionCard[];
 }

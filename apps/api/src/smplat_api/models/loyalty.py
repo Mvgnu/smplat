@@ -85,6 +85,9 @@ class LoyaltyMember(Base):
     point_expirations = relationship(
         "LoyaltyPointExpiration", back_populates="member", cascade="all, delete-orphan"
     )
+    checkout_intents = relationship(
+        "LoyaltyCheckoutIntent", back_populates="member", cascade="all, delete-orphan"
+    )
 
 
 class LoyaltyLedgerEntry(Base):
@@ -120,11 +123,20 @@ class ReferralInvite(Base):
     __tablename__ = "loyalty_referral_invites"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    referrer_id = Column(UUID(as_uuid=True), ForeignKey("loyalty_members.id", ondelete="CASCADE"), nullable=False)
+    referrer_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("loyalty_members.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     code = Column(String, nullable=False, unique=True, index=True)
     invitee_email = Column(String, nullable=True)
     invitee_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
-    status = Column(SqlEnum(ReferralStatus, name="loyalty_referral_status"), nullable=False, default=ReferralStatus.DRAFT, server_default=ReferralStatus.DRAFT.value)
+    status = Column(
+        SqlEnum(ReferralStatus, name="loyalty_referral_status"),
+        nullable=False,
+        default=ReferralStatus.DRAFT,
+        server_default=ReferralStatus.DRAFT.value,
+    )
     reward_points = Column(Numeric(12, 2), nullable=False, default=0, server_default="0")
     notes = Column(Text, nullable=True)
     metadata_json = Column("metadata", JSON, nullable=True)
@@ -134,6 +146,65 @@ class ReferralInvite(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     referrer = relationship("LoyaltyMember", back_populates="referrals")
+
+
+class LoyaltyCheckoutIntentKind(str, Enum):
+    """Kinds of checkout intents tracked for next actions."""
+
+    REDEMPTION = "redemption"
+    REFERRAL_SHARE = "referral_share"
+
+
+class LoyaltyCheckoutIntentStatus(str, Enum):
+    """Lifecycle statuses for checkout intents."""
+
+    PENDING = "pending"
+    RESOLVED = "resolved"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class LoyaltyCheckoutIntent(Base):
+    """Persisted checkout intents enabling cross-surface reminders."""
+
+    __tablename__ = "loyalty_checkout_intents"
+    __table_args__ = (
+        UniqueConstraint("member_id", "external_id", name="uq_loyalty_checkout_intents_member_external"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    member_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("loyalty_members.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    external_id = Column(String, nullable=False)
+    kind = Column(
+        SqlEnum(LoyaltyCheckoutIntentKind, name="loyalty_checkout_intent_kind"),
+        nullable=False,
+    )
+    status = Column(
+        SqlEnum(LoyaltyCheckoutIntentStatus, name="loyalty_checkout_intent_status"),
+        nullable=False,
+        default=LoyaltyCheckoutIntentStatus.PENDING,
+        server_default=LoyaltyCheckoutIntentStatus.PENDING.value,
+    )
+    order_id = Column(String, nullable=True)
+    redemption_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("loyalty_redemptions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    referral_code = Column(String, nullable=True)
+    channel = Column(String, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    member = relationship("LoyaltyMember", back_populates="checkout_intents")
+    redemption = relationship("LoyaltyRedemption")
 
 
 class LoyaltyReward(Base):

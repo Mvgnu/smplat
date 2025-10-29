@@ -12,11 +12,16 @@ import type {
   LoyaltyRedemptionPage,
   LoyaltyReward,
   LoyaltyNextActionCard,
+  LoyaltyNextActionFeed,
   ReferralConversionPage
 } from "@smplat/types";
 
 import { requestRedemption } from "./loyalty.actions";
-import { clearResolvedIntents, consumeLoyaltyNextActions } from "@/lib/loyalty/intents";
+import {
+  clearResolvedIntents,
+  consumeLoyaltyNextActions,
+  persistServerFeed
+} from "@/lib/loyalty/intents";
 
 const POINTS_DISPLAY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const REFERRAL_REWARD_POINTS = 500;
@@ -97,6 +102,7 @@ type LoyaltyHubClientProps = {
   redemptions: LoyaltyRedemptionPage;
   referrals: ReferralConversionPage;
   rewards: LoyaltyReward[];
+  nextActions: LoyaltyNextActionFeed;
 };
 
 type RedemptionFormState = {
@@ -115,11 +121,20 @@ const initialState = (member: LoyaltyMemberSummary): RedemptionFormState => ({
   error: undefined
 });
 
-export function LoyaltyHubClient({ ledger, member, redemptions, referrals, rewards }: LoyaltyHubClientProps) {
+export function LoyaltyHubClient({
+  ledger,
+  member,
+  redemptions,
+  referrals,
+  rewards,
+  nextActions: nextActionFeed
+}: LoyaltyHubClientProps) {
   const [isRedeeming, startRedeem] = useTransition();
   const [state, setState] = useState<RedemptionFormState>(() => initialState(member));
   const [copiedCode, setCopiedCode] = useState(false);
-  const [nextActions, setNextActions] = useState<LoyaltyNextActionCard[]>([]);
+  const [nextActions, setNextActions] = useState<LoyaltyNextActionCard[]>(
+    nextActionFeed.cards
+  );
 
   const sortedRewards = useMemo(
     () => rewards.filter((reward) => reward.isActive).sort((a, b) => a.costPoints - b.costPoints),
@@ -158,15 +173,40 @@ export function LoyaltyHubClient({ ledger, member, redemptions, referrals, rewar
     : "You&rsquo;ve reached the highest tier available.";
 
   useEffect(() => {
-    const actions = consumeLoyaltyNextActions();
-    if (actions.length > 0) {
-      setNextActions(actions);
+    persistServerFeed(nextActionFeed);
+    const fallback = consumeLoyaltyNextActions();
+    if (nextActionFeed.cards.length > 0) {
+      setNextActions(nextActionFeed.cards);
+    } else if (fallback.length > 0) {
+      setNextActions(fallback);
+    } else {
+      setNextActions([]);
     }
-  }, []);
+  }, [nextActionFeed]);
 
   const dismissNextAction = useCallback((id: string) => {
     setNextActions((previous) => previous.filter((action) => action.id !== id));
-    clearResolvedIntents((intent) => intent.id === id);
+    clearResolvedIntents((intent) => intent.id === id || intent.clientIntentId === id);
+    void (async () => {
+      try {
+        const response = await fetch(`/api/loyalty/next-actions/${id}/resolve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "resolved" })
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const feedResponse = await fetch("/api/loyalty/next-actions");
+        if (feedResponse.ok) {
+          const feed = (await feedResponse.json()) as LoyaltyNextActionFeed;
+          persistServerFeed(feed);
+          setNextActions(feed.cards);
+        }
+      } catch (error) {
+        console.warn("Failed to resolve loyalty next action", error);
+      }
+    })();
   }, []);
 
   const handleRedeem = (reward: LoyaltyReward) => {
