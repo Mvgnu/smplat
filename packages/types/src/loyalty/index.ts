@@ -187,3 +187,32 @@ export interface LoyaltyNudgeCard {
 export interface LoyaltyNudgeFeed {
   nudges: LoyaltyNudgeCard[];
 }
+
+export type LoyaltyGuardrailOverrideScope =
+  | 'invite_quota'
+  | 'invite_cooldown'
+  | 'global_throttle';
+
+export interface LoyaltyGuardrailOverride {
+  id: string;
+  scope: LoyaltyGuardrailOverrideScope;
+  justification: string;
+  metadata: Record<string, unknown>;
+  targetMemberId?: string | null;
+  createdByUserId?: string | null;
+  createdAt: string;
+  expiresAt?: string | null;
+  revokedAt?: string | null;
+  isActive: boolean;
+}
+
+export interface LoyaltyGuardrailSnapshot {
+  inviteQuota: number;
+  totalActiveInvites: number;
+  membersAtQuota: number;
+  cooldownSeconds: number;
+  cooldownRemainingSeconds?: number | null;
+  cooldownUntil?: string | null;
+  throttleOverrideActive: boolean;
+  overrides: LoyaltyGuardrailOverride[];
+}

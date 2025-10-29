@@ -1,11 +1,15 @@
 import Link from "next/link";
 
+import { AdminBreadcrumbs, AdminKpiCard, AdminTabNav } from "@/components/admin";
 import {
   fetchOperatorJourneyDetail,
   fetchOperatorJourneys,
-  type OperatorJourneySummary,
+  type OperatorJourneySummary
 } from "@/server/onboarding/journeys";
+import { getOrCreateCsrfToken } from "@/server/security/csrf";
 
+import { ADMIN_PRIMARY_TABS } from "../admin-tabs";
+import { OnboardingFilters } from "./filters";
 import { ManualNudgeForm } from "./manual-nudge-form";
 
 // meta: route: admin/onboarding
@@ -14,19 +18,19 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
   hour: "2-digit",
-  minute: "2-digit",
+  minute: "2-digit"
 });
 
 const riskTone: Record<string, string> = {
   high: "bg-rose-500/15 text-rose-200 border border-rose-500/30",
   medium: "bg-amber-500/15 text-amber-200 border border-amber-500/30",
-  low: "bg-emerald-500/15 text-emerald-200 border border-emerald-500/30",
+  low: "bg-emerald-500/15 text-emerald-200 border border-emerald-500/30"
 };
 
 const statusTone: Record<string, string> = {
   active: "bg-blue-500/15 text-blue-100 border border-blue-500/30",
   stalled: "bg-amber-500/15 text-amber-200 border border-amber-500/30",
-  completed: "bg-emerald-500/15 text-emerald-200 border border-emerald-500/30",
+  completed: "bg-emerald-500/15 text-emerald-200 border border-emerald-500/30"
 };
 
 type AdminOnboardingPageProps = {
@@ -36,6 +40,12 @@ type AdminOnboardingPageProps = {
     referrals?: string;
   };
 };
+
+const ONBOARDING_BREADCRUMBS = [
+  { label: "Control hub", href: "/admin/orders" },
+  { label: "Operations", href: "/admin/onboarding" },
+  { label: "Onboarding" }
+];
 
 function formatPercentage(value: number): string {
   return `${Math.round(value)}%`;
@@ -52,13 +62,19 @@ function journeyLink(summary: OperatorJourneySummary, selected: boolean) {
   return (
     <Link
       href={`/admin/onboarding?journeyId=${summary.journeyId}`}
-      className={`flex flex-col gap-2 rounded-2xl border border-white/10 p-4 transition hover:border-white/20 ${selected ? "bg-white/10" : "bg-black/30"}`}
+      className={`flex flex-col gap-2 rounded-2xl border border-white/10 p-4 transition ${
+        selected ? "bg-white/10" : "bg-black/30 hover:border-white/20"
+      }`}
     >
       <div className="flex items-center justify-between">
         <div className="text-sm font-semibold text-white">
           {summary.orderNumber ?? summary.orderId.slice(0, 8)}
         </div>
-        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusTone[summary.status] ?? "bg-white/10 text-white/70 border border-white/20"}`}>
+        <span
+          className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+            statusTone[summary.status] ?? "bg-white/10 text-white/70 border border-white/20"
+          }`}
+        >
           {summary.status.replace("_", " ")}
         </span>
       </div>
@@ -68,7 +84,11 @@ function journeyLink(summary: OperatorJourneySummary, selected: boolean) {
       </div>
       <div className="flex items-center justify-between text-xs text-white/60">
         <span>{summary.totalTasks - summary.completedTasks} tasks open</span>
-        <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${riskTone[summary.riskLevel] ?? "bg-white/10 text-white/70 border border-white/20"}`}>
+        <span
+          className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${
+            riskTone[summary.riskLevel] ?? "bg-white/10 text-white/70 border border-white/20"
+          }`}
+        >
           {summary.riskLevel} risk
         </span>
       </div>
@@ -76,33 +96,30 @@ function journeyLink(summary: OperatorJourneySummary, selected: boolean) {
   );
 }
 
-export const metadata = {
-  title: "Onboarding",
-};
-
 export default async function AdminOnboardingPage({ searchParams }: AdminOnboardingPageProps) {
   const showStalledOnly = searchParams?.stalled === "true";
   const showReferralsOnly = searchParams?.referrals === "true";
 
   const { summaries, aggregates } = await fetchOperatorJourneys({
     stalled: showStalledOnly,
-    referrals: showReferralsOnly,
+    referrals: showReferralsOnly
   });
+
+  const csrfToken = getOrCreateCsrfToken();
 
   if (summaries.length === 0) {
     return (
-      <main className="mx-auto flex max-w-5xl flex-col gap-12 px-6 py-16 text-white">
-        <header>
-          <p className="text-xs uppercase tracking-[0.3em] text-white/50">Operations</p>
-          <h1 className="mt-2 text-3xl font-semibold">Onboarding journeys</h1>
-          <p className="mt-3 text-white/70">
-            Concierge visibility, stalled-task filters, and referral tracking will show up here as soon as the first orders complete checkout.
+      <div className="space-y-8">
+        <AdminBreadcrumbs items={ONBOARDING_BREADCRUMBS} />
+        <AdminTabNav tabs={ADMIN_PRIMARY_TABS} />
+        <section className="flex min-h-[18rem] flex-col items-center justify-center gap-4 rounded-3xl border border-white/10 bg-white/5 p-12 text-center text-white/60 backdrop-blur">
+          <p className="text-sm uppercase tracking-[0.3em] text-white/50">Operations</p>
+          <h1 className="text-3xl font-semibold text-white">Onboarding command center</h1>
+          <p className="max-w-xl text-sm text-white/70">
+            Concierge visibility, stalled-task filters, and referral tracking will appear as soon as the first orders complete checkout.
           </p>
-        </header>
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-12 text-center text-white/60 backdrop-blur">
-          No onboarding journeys yet.
         </section>
-      </main>
+      </div>
     );
   }
 
@@ -114,46 +131,32 @@ export default async function AdminOnboardingPage({ searchParams }: AdminOnboard
   const detail = await fetchOperatorJourneyDetail(selectedJourneyId);
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-12 px-6 py-16 text-white">
-      <header className="space-y-3">
-        <p className="text-xs uppercase tracking-[0.3em] text-white/50">Operations</p>
-        <h1 className="text-3xl font-semibold">Onboarding command center</h1>
-        <p className="text-white/70">
-          Monitor onboarding journeys, surface stalled workflows, and trigger concierge nudges directly from the operator console.
-        </p>
-      </header>
+    <div className="space-y-8">
+      <AdminBreadcrumbs
+        items={ONBOARDING_BREADCRUMBS}
+        trailingAction={<span className="text-xs uppercase tracking-[0.3em] text-white/40">Concierge SLA: 4h</span>}
+      />
+      <AdminTabNav tabs={ADMIN_PRIMARY_TABS} />
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Journeys" value={aggregates.total} />
-        <StatCard label="Active" value={aggregates.active} />
-        <StatCard label="Stalled" value={aggregates.stalled} tone="warning" />
-        <StatCard label="Referral journeys" value={aggregates.withReferrals} tone="accent" />
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <AdminKpiCard label="Journeys" value={aggregates.total} />
+        <AdminKpiCard label="Active" value={aggregates.active} change={{ direction: "up", label: `+${aggregates.active}` }} />
+        <AdminKpiCard
+          label="Stalled"
+          value={aggregates.stalled}
+          change={{ direction: aggregates.stalled > 0 ? "up" : "flat", label: aggregates.stalled > 0 ? "Needs action" : "Healthy" }}
+        />
+        <AdminKpiCard label="Referral journeys" value={aggregates.withReferrals} footer="Guardrail overrides monitored" />
       </section>
 
       <div className="grid gap-8 lg:grid-cols-[2fr,3fr]">
         <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Journeys</h2>
-            <div className="flex gap-3 text-xs text-white/60">
-              <Link
-                href="/admin/onboarding"
-                className={!showStalledOnly && !showReferralsOnly ? "font-semibold text-white" : "hover:text-white"}
-              >
-                All
-              </Link>
-              <Link
-                href="/admin/onboarding?stalled=true"
-                className={showStalledOnly ? "font-semibold text-white" : "hover:text-white"}
-              >
-                Stalled
-              </Link>
-              <Link
-                href="/admin/onboarding?referrals=true"
-                className={showReferralsOnly ? "font-semibold text-white" : "hover:text-white"}
-              >
-                Referrals
-              </Link>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Journeys</h2>
+              <p className="text-sm text-white/60">Segment and triage onboarding progress across cohorts.</p>
             </div>
+            <OnboardingFilters />
           </div>
           <div className="grid gap-3">
             {summaries.map((summary) => journeyLink(summary, summary.journeyId === selectedJourneyId))}
@@ -169,20 +172,28 @@ export default async function AdminOnboardingPage({ searchParams }: AdminOnboard
               </h2>
             </div>
             <div className="flex items-center gap-3 text-xs text-white/60">
-              <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusTone[detail.status] ?? "bg-white/10 text-white/70 border border-white/20"}`}>
+              <span
+                className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+                  statusTone[detail.status] ?? "bg-white/10 text-white/70 border border-white/20"
+                }`}
+              >
                 {detail.status.replace("_", " ")}
               </span>
-              <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${riskTone[detail.riskLevel] ?? "bg-white/10 text-white/70 border border-white/20"}`}>
+              <span
+                className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] ${
+                  riskTone[detail.riskLevel] ?? "bg-white/10 text-white/70 border border-white/20"
+                }`}
+              >
                 {detail.riskLevel} risk
               </span>
             </div>
           </header>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <SummaryTile label="Progress" value={formatPercentage(detail.progressPercentage)} />
-            <SummaryTile label="Referral" value={detail.referralCode ?? "—"} />
-            <SummaryTile label="Started" value={formatDate(detail.startedAt)} />
-            <SummaryTile label="Updated" value={formatDate(detail.updatedAt)} />
+            <AdminKpiCard label="Progress" value={formatPercentage(detail.progressPercentage)} />
+            <AdminKpiCard label="Referral" value={detail.referralCode ?? "—"} />
+            <AdminKpiCard label="Started" value={formatDate(detail.startedAt)} />
+            <AdminKpiCard label="Updated" value={formatDate(detail.updatedAt)} />
           </div>
 
           <section className="space-y-3">
@@ -209,7 +220,9 @@ export default async function AdminOnboardingPage({ searchParams }: AdminOnboard
               {detail.interactions.slice(0, 6).map((interaction) => (
                 <article key={interaction.id} className="rounded-2xl border border-white/10 bg-black/30 p-4">
                   <div className="flex items-center justify-between text-xs text-white/50">
-                    <span>{interaction.actor} via {interaction.channel}</span>
+                    <span>
+                      {interaction.actor} via {interaction.channel}
+                    </span>
                     <span>{formatDate(interaction.createdAt)}</span>
                   </div>
                   <p className="mt-2 text-sm font-medium text-white">{interaction.summary ?? "Interaction"}</p>
@@ -251,34 +264,10 @@ export default async function AdminOnboardingPage({ searchParams }: AdminOnboard
           <ManualNudgeForm
             journeyId={detail.journeyId}
             tasks={detail.tasks.map((task) => ({ id: task.id, title: task.title, status: task.status }))}
+            csrfToken={csrfToken}
           />
         </section>
       </div>
-    </main>
-  );
-}
-
-function StatCard({ label, value, tone }: { label: string; value: number; tone?: "warning" | "accent" }) {
-  const palette = {
-    warning: "border-amber-400/30 bg-amber-500/10 text-amber-100",
-    accent: "border-emerald-400/30 bg-emerald-500/10 text-emerald-100",
-  } as const;
-  const base = "rounded-2xl border border-white/10 bg-black/30 p-4 text-white";
-  const toneClass = tone ? palette[tone] ?? "" : "";
-
-  return (
-    <div className={`${base} ${toneClass}`}>
-      <p className="text-xs uppercase tracking-[0.3em] text-white/50">{label}</p>
-      <p className="mt-2 text-2xl font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function SummaryTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white/70">
-      <p className="text-xs uppercase tracking-[0.3em] text-white/40">{label}</p>
-      <p className="mt-2 text-lg font-semibold text-white">{value}</p>
     </div>
   );
 }

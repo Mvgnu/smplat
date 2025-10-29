@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// security-lockout: client-preflight-check
+const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 const mapAuthError = (code: string | null) => {
   if (!code) {
@@ -55,6 +57,21 @@ export default function LoginPage() {
     setSuccessMessage(null);
 
     try {
+      const lockoutResponse = await fetch(
+        `${apiBase}/api/v1/auth/lockout?identifier=${encodeURIComponent(trimmedEmail)}`
+      );
+
+      if (lockoutResponse.ok) {
+        const lockoutState: { locked: boolean; retry_after_seconds: number | null } = await lockoutResponse.json();
+        if (lockoutState.locked) {
+          const retrySeconds = lockoutState.retry_after_seconds ?? 0;
+          const retryMinutes = Math.max(1, Math.ceil(retrySeconds / 60));
+          setErrorMessage(`Too many attempts. Try again in about ${retryMinutes} minute${retryMinutes > 1 ? "s" : ""}.`);
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
       const result = await signIn("email", {
         email: trimmedEmail,
         redirect: false,
@@ -62,6 +79,17 @@ export default function LoginPage() {
       });
 
       if (result?.error) {
+        try {
+          await fetch(`${apiBase}/api/v1/auth/attempts`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ identifier: trimmedEmail, outcome: "failure" })
+          });
+        } catch (attemptError) {
+          console.warn("Failed to record auth failure", attemptError);
+        }
         setErrorMessage(mapAuthError(result.error));
         setIsSubmitting(false);
         return;

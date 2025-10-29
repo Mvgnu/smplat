@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 
 import { fetchMemberReferrals } from "@/lib/loyalty/referrals";
-import { auth } from "@/server/auth";
+import { requireRole } from "@/server/auth/policies";
+import { getOrCreateCsrfToken } from "@/server/security/csrf";
 
 import { ReferralHubClient } from "./referrals.client";
 import {
@@ -19,24 +20,40 @@ export const metadata: Metadata = {
 };
 
 export default async function LoyaltyReferralsPage() {
-  const session = await auth();
+  const { session } = await requireRole("member");
+  const csrfToken = getOrCreateCsrfToken();
 
-  if (!session?.user?.id) {
-    if (allowAuthBypass()) {
-      const [member, referrals] = await Promise.all([
-        Promise.resolve(buildBypassMember()),
-        fetchMemberReferrals(bypassUserId)
-      ]);
-      return <ReferralHubClient member={member} referrals={referrals} shareBaseUrl={shareBaseUrl} />;
-    }
+  if (allowAuthBypass()) {
+    const [member, referrals] = await Promise.all([
+      Promise.resolve(buildBypassMember()),
+      fetchMemberReferrals(bypassUserId)
+    ]);
+    return (
+      <ReferralHubClient
+        member={member}
+        referrals={referrals}
+        shareBaseUrl={shareBaseUrl}
+        csrfToken={csrfToken}
+      />
+    );
+  }
 
+  const userId = session.user?.id;
+  if (!userId) {
     throw new Error("Referral hub requires an authenticated user.");
   }
 
   const [member, referrals] = await Promise.all([
-    fetchLoyaltyMember(session.user.id),
-    fetchMemberReferrals(session.user.id)
+    fetchLoyaltyMember(userId),
+    fetchMemberReferrals(userId)
   ]);
 
-  return <ReferralHubClient member={member} referrals={referrals} shareBaseUrl={shareBaseUrl} />;
+  return (
+    <ReferralHubClient
+      member={member}
+      referrals={referrals}
+      shareBaseUrl={shareBaseUrl}
+      csrfToken={csrfToken}
+    />
+  );
 }

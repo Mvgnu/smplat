@@ -112,6 +112,7 @@ type LoyaltyHubClientProps = {
   rewards: LoyaltyReward[];
   nextActions: LoyaltyNextActionFeed;
   nudges: LoyaltyNudgeFeed;
+  csrfToken: string;
 };
 
 type RedemptionFormState = {
@@ -137,7 +138,8 @@ export function LoyaltyHubClient({
   referrals,
   rewards,
   nextActions: nextActionFeed,
-  nudges: nudgeFeed
+  nudges: nudgeFeed,
+  csrfToken
 }: LoyaltyHubClientProps) {
   const [isRedeeming, startRedeem] = useTransition();
   const [state, setState] = useState<RedemptionFormState>(() => initialState(member));
@@ -226,14 +228,14 @@ export function LoyaltyHubClient({
       setNudges((previous) => previous.filter((entry) => entry.id !== card.id));
       void (async () => {
         try {
-          await updateNudgeStatus(card.id, status);
+          await updateNudgeStatus(card.id, status, csrfToken);
         } catch (error) {
           console.warn("Failed to update loyalty nudge", error);
           setNudges((previous) => [card, ...previous]);
         }
       })();
     },
-    []
+    [csrfToken]
   );
 
   const handleRedeem = (reward: LoyaltyReward) => {
@@ -259,7 +261,11 @@ export function LoyaltyHubClient({
 
     startRedeem(async () => {
       try {
-        const redemption = await requestRedemption({ rewardSlug: reward.slug, quantity: 1 });
+        const redemption = await requestRedemption({
+          rewardSlug: reward.slug,
+          quantity: 1,
+          csrfToken
+        });
         setState((previous) => ({
           optimisticBalance: previous.optimisticBalance,
           optimisticOnHold: previous.optimisticOnHold,

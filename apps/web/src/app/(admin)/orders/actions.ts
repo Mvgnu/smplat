@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { requireRole } from "@/server/auth/policies";
 import { updateAdminOrderStatus } from "@/server/orders/admin-orders";
+import { ensureCsrfToken } from "@/server/security/csrf";
 
 export const ORDER_STATUS_OPTIONS = [
   "pending",
@@ -25,6 +27,10 @@ export async function updateOrderStatusAction(
   _prevState: UpdateOrderStatusState,
   formData: FormData
 ): Promise<UpdateOrderStatusState> {
+  await requireRole("operator");
+  const csrfToken = formData.get("csrfToken");
+  ensureCsrfToken({ tokenFromForm: typeof csrfToken === "string" ? csrfToken : null });
+
   const orderId = formData.get("orderId");
   const status = formData.get("status");
 

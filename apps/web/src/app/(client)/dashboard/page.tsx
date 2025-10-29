@@ -1,7 +1,6 @@
 import { Metadata } from "next";
 import { CheckCircle2 } from "lucide-react";
 
-import { auth } from "@/server/auth";
 import { BillingCenter } from "@/components/dashboard/billing/BillingCenter";
 import { fetchBillingCenterPayload } from "@/server/billing/invoices";
 import { fetchCatalogSearchInsights } from "@/server/observability/catalog-insights";
@@ -10,6 +9,8 @@ import { fetchOrderProgress } from "@/server/orders/progress";
 import { fetchInstagramAnalytics } from "@/server/instagram/analytics";
 import { getOrCreateNotificationPreferences, setLastSelectedOrder } from "@/server/notifications/preferences";
 import { fetchOnboardingJourney } from "@/server/onboarding/journeys";
+import { requireRole } from "@/server/auth/policies";
+import { getOrCreateCsrfToken } from "@/server/security/csrf";
 
 import { selectOrderAction, updateNotificationPreferencesAction } from "./actions";
 
@@ -40,12 +41,14 @@ const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 export default async function ClientDashboardPage({ searchParams }: DashboardPageProps) {
-  const session = await auth();
-  const userId = session?.user?.id;
+  const { session } = await requireRole("member");
+  const userId = session.user?.id;
 
   if (!userId) {
     return null;
   }
+
+  const csrfToken = getOrCreateCsrfToken();
 
   const [orders, catalogInsights, instagramAccounts, preferences] = await Promise.all([
     fetchClientOrders(userId, 25),
@@ -147,6 +150,7 @@ export default async function ClientDashboardPage({ searchParams }: DashboardPag
 
               <form action={selectOrderAction} className="flex flex-col gap-4 md:flex-row md:items-end">
                 <input type="hidden" name="userId" value={userId} />
+                <input type="hidden" name="csrfToken" value={csrfToken} />
                 <label className="flex flex-1 flex-col gap-2 text-sm text-white/70">
                   Order
                   <select
@@ -396,6 +400,7 @@ export default async function ClientDashboardPage({ searchParams }: DashboardPag
 
           <form action={updateNotificationPreferencesAction} className="space-y-4">
             <input type="hidden" name="userId" value={userId} />
+            <input type="hidden" name="csrfToken" value={csrfToken} />
             <PreferenceToggle
               id="orderUpdates"
               name="orderUpdates"

@@ -7,7 +7,8 @@ import type {
   ReferralInviteResponse
 } from "@smplat/types";
 
-import { auth } from "@/server/auth";
+import { requireRole } from "@/server/auth/policies";
+import { ensureCsrfToken } from "@/server/security/csrf";
 import {
   cancelMemberReferral,
   createMemberReferral
@@ -23,14 +24,16 @@ export type RedemptionRequestPayload = {
   pointsCost?: number;
   quantity?: number;
   metadata?: Record<string, unknown>;
+  csrfToken?: string;
 };
 
 export async function requestRedemption(payload: RedemptionRequestPayload): Promise<LoyaltyRedemption> {
-  const session = await auth();
-  if (!session?.user?.id) {
-    if (allowBypass) {
-      return buildBypassRedemption(payload.rewardSlug ?? "reward-1");
-    }
+  const { csrfToken: csrfFromPayload, ...requestPayload } = payload;
+  const { session } = await requireRole("member");
+  ensureCsrfToken({ tokenFromForm: csrfFromPayload ?? null });
+  const userId = session.user?.id;
+
+  if (!userId) {
     throw new Error("Authentication is required to redeem rewards.");
   }
 
@@ -39,13 +42,13 @@ export async function requestRedemption(payload: RedemptionRequestPayload): Prom
   }
 
   const body = {
-    rewardSlug: payload.rewardSlug,
-    pointsCost: payload.pointsCost,
-    quantity: payload.quantity ?? 1,
-    metadata: payload.metadata ?? {}
+    rewardSlug: requestPayload.rewardSlug,
+    pointsCost: requestPayload.pointsCost,
+    quantity: requestPayload.quantity ?? 1,
+    metadata: requestPayload.metadata ?? {}
   };
 
-  const response = await fetch(`${apiBase}/api/v1/loyalty/members/${session.user.id}/redemptions`, {
+  const response = await fetch(`${apiBase}/api/v1/loyalty/members/${userId}/redemptions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -78,18 +81,19 @@ function buildBypassRedemption(rewardSlug: string): LoyaltyRedemption {
 }
 
 export async function issueReferralInvite(
-  payload: ReferralInviteCreatePayload
+  payload: ReferralInviteCreatePayload & { csrfToken?: string }
 ): Promise<ReferralInviteResponse> {
-  const session = await auth();
-  if (!session?.user?.id) {
-    if (allowBypass) {
-      return createMemberReferral(bypassUserId, payload);
-    }
+  const { csrfToken: csrfFromPayload, ...requestPayload } = payload;
+  const { session } = await requireRole("member");
+  ensureCsrfToken({ tokenFromForm: csrfFromPayload ?? null });
+  const userId = session.user?.id;
+
+  if (!userId) {
     throw new Error("Authentication is required to issue referrals.");
   }
 
   try {
-    return await createMemberReferral(session.user.id, payload);
+    return await createMemberReferral(userId, requestPayload);
   } catch (error) {
     if (error instanceof Error) {
       throw new Error(error.message);
@@ -100,18 +104,19 @@ export async function issueReferralInvite(
 
 export async function cancelReferralInvite(
   referralId: string,
-  payload: ReferralInviteCancelPayload = {}
+  payload: ReferralInviteCancelPayload & { csrfToken?: string } = {}
 ): Promise<ReferralInviteResponse> {
-  const session = await auth();
-  if (!session?.user?.id) {
-    if (allowBypass) {
-      return cancelMemberReferral(bypassUserId, referralId, payload);
-    }
+  const { csrfToken: csrfFromPayload, ...requestPayload } = payload;
+  const { session } = await requireRole("member");
+  ensureCsrfToken({ tokenFromForm: csrfFromPayload ?? null });
+  const userId = session.user?.id;
+
+  if (!userId) {
     throw new Error("Authentication is required to manage referrals.");
   }
 
   try {
-    return await cancelMemberReferral(session.user.id, referralId, payload);
+    return await cancelMemberReferral(userId, referralId, requestPayload);
   } catch (error) {
     if (error instanceof Error) {
       throw new Error(error.message);
@@ -124,13 +129,14 @@ export type LoyaltyNudgeStatus = "active" | "acknowledged" | "dismissed";
 
 export async function updateNudgeStatus(
   nudgeId: string,
-  status: LoyaltyNudgeStatus
+  status: LoyaltyNudgeStatus,
+  csrfToken?: string
 ): Promise<void> {
-  const session = await auth();
-  if (!session?.user?.id) {
-    if (allowBypass) {
-      return;
-    }
+  const { session } = await requireRole("member");
+  ensureCsrfToken({ tokenFromForm: csrfToken ?? null });
+  const userId = session.user?.id;
+
+  if (!userId) {
     throw new Error("Authentication is required to manage nudges.");
   }
 

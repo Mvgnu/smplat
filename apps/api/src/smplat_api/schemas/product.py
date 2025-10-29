@@ -81,8 +81,37 @@ class ProductResponse(BaseModel):
     base_price: float = Field(..., alias="basePrice")
     currency: str
     status: ProductStatus
+    channel_eligibility: list[str] = Field(default_factory=list, alias="channelEligibility")
     created_at: datetime | None = Field(None, alias="createdAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
+
+
+class ProductMediaAssetResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    id: UUID
+    label: str | None = None
+    asset_url: str = Field(..., alias="assetUrl")
+    created_at: datetime | None = Field(None, alias="createdAt")
+    updated_at: datetime | None = Field(None, alias="updatedAt")
+
+
+class ProductAuditAction(str, Enum):
+    CREATED = "created"
+    UPDATED = "updated"
+    DELETED = "deleted"
+    RESTORED = "restored"
+
+
+class ProductAuditLogEntry(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    id: UUID
+    action: ProductAuditAction
+    actor_email: str | None = Field(None, alias="actorEmail")
+    before_snapshot: dict | None = Field(None, alias="beforeSnapshot")
+    after_snapshot: dict | None = Field(None, alias="afterSnapshot")
+    created_at: datetime | None = Field(None, alias="createdAt")
 
 
 class ProductOptionResponse(BaseModel):
@@ -154,6 +183,8 @@ class ProductDetailResponse(ProductResponse):
     fulfillment_summary: ProductFulfillmentSummary | None = Field(
         default=None, alias="fulfillmentSummary"
     )
+    media_assets: list[ProductMediaAssetResponse] = Field(default_factory=list, alias="mediaAssets")
+    audit_log: list[ProductAuditLogEntry] = Field(default_factory=list, alias="auditLog")
 
 
 class ProductCreate(BaseModel):
@@ -164,6 +195,7 @@ class ProductCreate(BaseModel):
     base_price: float = Field(..., alias="basePrice")
     currency: CurrencyEnum
     status: ProductStatus = ProductStatus.DRAFT
+    channel_eligibility: list[str] = Field(default_factory=list, alias="channelEligibility")
 
 
 class ProductUpdate(BaseModel):
@@ -173,3 +205,11 @@ class ProductUpdate(BaseModel):
     base_price: float | None = Field(None, alias="basePrice")
     currency: CurrencyEnum | None = None
     status: ProductStatus | None = None
+    channel_eligibility: list[str] | None = Field(None, alias="channelEligibility")
+
+
+class ProductAssetCreate(BaseModel):
+    label: str | None = None
+    asset_url: str = Field(..., alias="assetUrl")
+    storage_key: str | None = Field(None, alias="storageKey")
+    metadata: dict | None = None

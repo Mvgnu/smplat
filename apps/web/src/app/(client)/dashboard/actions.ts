@@ -3,9 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { requireRole } from "@/server/auth/policies";
 import { setLastSelectedOrder, updateNotificationPreferences } from "@/server/notifications/preferences";
+import { ensureCsrfToken } from "@/server/security/csrf";
 
 export async function updateNotificationPreferencesAction(formData: FormData) {
+  await requireRole("member");
+  const csrfToken = formData.get("csrfToken");
+  ensureCsrfToken({ tokenFromForm: typeof csrfToken === "string" ? csrfToken : null });
+
   const userId = formData.get("userId");
   if (!userId || typeof userId !== "string") {
     throw new Error("Missing user identifier for preferences update.");
@@ -29,6 +35,10 @@ export async function updateNotificationPreferencesAction(formData: FormData) {
 }
 
 export async function selectOrderAction(formData: FormData) {
+  await requireRole("member");
+  const csrfToken = formData.get("csrfToken");
+  ensureCsrfToken({ tokenFromForm: typeof csrfToken === "string" ? csrfToken : null });
+
   const userId = formData.get("userId");
   const orderId = formData.get("orderId");
 
