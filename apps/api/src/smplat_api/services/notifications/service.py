@@ -199,6 +199,74 @@ class NotificationService:
             },
         )
 
+    async def send_checkout_recovery_prompt(
+        self,
+        order: Order,
+        *,
+        stage: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Send a reminder encouraging the customer to resume checkout."""
+
+        if self._backend is None:
+            return
+
+        contact = await self._resolve_order_contact(order)
+        if contact is None:
+            return
+
+        preferences = await self._get_preferences(order.user_id)
+        if not preferences.order_updates:
+            logger.info(
+                "Skipping checkout recovery prompt due to notification preferences",
+                order_id=str(order.id),
+            )
+            return
+
+        subject = f"Action needed: finish checkout for order {order.order_number}"
+        body_lines = [
+            f"Hi {contact.display_name or 'there'},",
+            "",
+            "We noticed your checkout is still in progress and needs a quick follow-up.",
+            f"Current step: {stage.replace('_', ' ').title()}.",
+            "",
+            "You can resume your checkout anytime using the secure link below.",
+            f"Order total: €{float(order.total):.2f}",
+            "",
+            "Resume here: https://app.smplat.test/checkout",
+            "",
+            "If you ran into trouble, reply to this email and our operators will help.",
+            "",
+            "Thanks,",
+            "The SMPLAT Team",
+        ]
+        text_body = "\n".join(body_lines)
+
+        html_body = f"""<html>
+  <body>
+    <p>Hi {contact.display_name or 'there'},</p>
+    <p>We noticed your checkout is still in progress and needs a quick follow-up.</p>
+    <p><strong>Current step:</strong> {stage.replace('_', ' ').title()}.</p>
+    <p>Order total: €{float(order.total):.2f}</p>
+    <p><a href=\"https://app.smplat.test/checkout\">Resume your checkout</a> whenever you're ready.</p>
+    <p>If you ran into trouble, reply to this email and our operators will help.</p>
+    <p>Thanks,<br />The SMPLAT Team</p>
+  </body>
+</html>"""
+
+        template = RenderedTemplate(subject=subject, text_body=text_body, html_body=html_body)
+        await self._deliver(
+            contact,
+            template,
+            event_type="checkout_recovery_prompt",
+            metadata={
+                "order_id": str(order.id),
+                "order_number": order.order_number,
+                "stage": stage,
+                **(metadata or {}),
+            },
+        )
+
     async def send_payment_success(self, payment: Payment) -> None:
         """Send a receipt when payment is marked as succeeded."""
         if self._backend is None:

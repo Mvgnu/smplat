@@ -7,6 +7,7 @@ import { CheckCircle2, Gift, Sparkles } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 import type {
+  CheckoutOrchestration,
   LoyaltyCheckoutIntent,
   LoyaltyNextActionFeed,
   LoyaltyNudgeCard,
@@ -18,6 +19,7 @@ import {
   persistServerFeed
 } from "@/lib/loyalty/intents";
 import { LoyaltyNudgeRail } from "@/components/loyalty/nudge-rail";
+import { CheckoutRecoveryBanner } from "@/components/checkout/recovery-banner";
 import { useCartStore } from "@/store/cart";
 
 type RemoteOnboardingTask = {
@@ -70,6 +72,11 @@ export default function CheckoutSuccessPage() {
   const [checkoutIntents, setCheckoutIntents] = useState<LoyaltyCheckoutIntent[]>([]);
   const [intentSyncStatus, setIntentSyncStatus] = useState<"idle" | "syncing" | "synced" | "error">("idle");
   const [nudges, setNudges] = useState<LoyaltyNudgeCard[]>([]);
+  const [orchestration, setOrchestration] = useState<CheckoutOrchestration | null>(null);
+  const [orchestrationState, setOrchestrationState] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [orchestrationError, setOrchestrationError] = useState<string | null>(null);
 
   const fallbackReferral = useMemo(() => {
     if (!orderId) {
@@ -239,6 +246,52 @@ export default function CheckoutSuccessPage() {
   }, [clear]);
 
   useEffect(() => {
+    if (!orderId) {
+      setOrchestration(null);
+      setOrchestrationState("idle");
+      setOrchestrationError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setOrchestrationState("loading");
+
+    const loadOrchestration = async () => {
+      try {
+        const response = await fetch(`/api/checkout/orchestrations/${orderId}`, {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const payload = (await response.json()) as CheckoutOrchestration;
+        if (!cancelled) {
+          setOrchestration(payload);
+          setOrchestrationState("ready");
+          setOrchestrationError(null);
+        }
+      } catch (error) {
+        if (cancelled || error instanceof DOMException) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "Unable to load checkout orchestration";
+        setOrchestration(null);
+        setOrchestrationState("error");
+        setOrchestrationError(message);
+      }
+    };
+
+    void loadOrchestration();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [orderId]);
+
+  useEffect(() => {
     const intents = consumeSuccessIntents(orderId);
     if (intents.length > 0) {
       setCheckoutIntents(intents);
@@ -389,6 +442,13 @@ export default function CheckoutSuccessPage() {
         <p className="mt-2 text-xs uppercase tracking-[0.3em] text-white/40">Journey status: {journeyStatus}</p>
       ) : null}
     </section>
+
+      <CheckoutRecoveryBanner
+        orchestration={orchestration}
+        pendingIntents={checkoutIntents.length}
+        loading={orchestrationState === "loading" && Boolean(orderId)}
+        error={orchestrationState === "error" ? orchestrationError : null}
+      />
 
       <LoyaltyNudgeRail
         title="Real-time loyalty nudges"

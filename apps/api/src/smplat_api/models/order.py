@@ -54,6 +54,9 @@ class Order(Base):
     # Relationships
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="order", cascade="all, delete-orphan")
+    checkout_orchestration = relationship(
+        "CheckoutOrchestration", back_populates="order", uselist=False
+    )
 
 
 class OrderItem(Base):

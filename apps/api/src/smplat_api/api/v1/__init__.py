@@ -21,6 +21,7 @@ from .endpoints import (
     payments,
     products,
     trust,
+    checkout,
     loyalty,
 )
 
@@ -29,6 +30,7 @@ router.include_router(health.router, tags=["Health"])
 router.include_router(auth.router)
 router.include_router(products.router)
 router.include_router(payments.router)
+router.include_router(checkout.router)
 router.include_router(orders.router)
 router.include_router(onboarding.router)
 router.include_router(operator_onboarding.router)
