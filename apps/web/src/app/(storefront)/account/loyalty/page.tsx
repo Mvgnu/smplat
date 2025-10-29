@@ -3,10 +3,16 @@ import type { Metadata } from "next";
 import { auth } from "@/server/auth";
 import {
   allowAuthBypass,
+  buildBypassConversions,
+  buildBypassLedgerPage,
   buildBypassMember,
+  buildBypassRedemptions,
   buildBypassRewards,
+  fetchLoyaltyLedger,
   fetchLoyaltyMember,
-  fetchLoyaltyRewards
+  fetchLoyaltyRedemptions,
+  fetchLoyaltyRewards,
+  fetchReferralConversions
 } from "./data";
 import { LoyaltyHubClient } from "./loyalty.client";
 
@@ -20,16 +26,35 @@ export default async function LoyaltyHubPage() {
 
   if (!session?.user?.id) {
     if (allowAuthBypass()) {
-      return <LoyaltyHubClient member={buildBypassMember()} rewards={buildBypassRewards()} />;
+      return (
+        <LoyaltyHubClient
+          ledger={buildBypassLedgerPage()}
+          member={buildBypassMember()}
+          redemptions={buildBypassRedemptions()}
+          referrals={buildBypassConversions()}
+          rewards={buildBypassRewards()}
+        />
+      );
     }
 
     throw new Error("Loyalty hub requires an authenticated user.");
   }
 
-  const [member, rewards] = await Promise.all([
+  const [member, rewards, ledger, redemptions, referrals] = await Promise.all([
     fetchLoyaltyMember(session.user.id),
-    fetchLoyaltyRewards()
+    fetchLoyaltyRewards(),
+    fetchLoyaltyLedger(),
+    fetchLoyaltyRedemptions(),
+    fetchReferralConversions({ statuses: ["converted", "sent", "cancelled", "expired"] })
   ]);
 
-  return <LoyaltyHubClient member={member} rewards={rewards} />;
+  return (
+    <LoyaltyHubClient
+      ledger={ledger}
+      member={member}
+      redemptions={redemptions}
+      referrals={referrals}
+      rewards={rewards}
+    />
+  );
 }

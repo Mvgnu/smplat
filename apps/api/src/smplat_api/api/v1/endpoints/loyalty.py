@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, root_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,9 +17,20 @@ from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.api.dependencies.session import require_member_session
 from smplat_api.core.settings import settings
 from smplat_api.db.session import get_session
-from smplat_api.models.loyalty import LoyaltyRedemption, ReferralInvite, ReferralStatus
+from smplat_api.models.loyalty import (
+    LoyaltyLedgerEntry,
+    LoyaltyLedgerEntryType,
+    LoyaltyRedemption,
+    LoyaltyRedemptionStatus,
+    ReferralInvite,
+    ReferralStatus,
+)
 from smplat_api.models.user import User
-from smplat_api.services.loyalty import LoyaltyService
+from smplat_api.services.loyalty import (
+    LoyaltyService,
+    decode_time_uuid_cursor,
+    encode_time_uuid_cursor,
+)
 
 
 router = APIRouter(prefix="/loyalty", tags=["loyalty"])
@@ -134,6 +145,45 @@ class RedemptionResponse(BaseModel):
     failureReason: Optional[str]
 
 
+class LedgerEntryResponse(BaseModel):
+    id: UUID
+    occurredAt: datetime
+    entryType: str
+    amount: float
+    description: Optional[str]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LedgerWindowResponse(BaseModel):
+    entries: List[LedgerEntryResponse]
+    nextCursor: Optional[str]
+
+
+class RedemptionWindowResponse(BaseModel):
+    redemptions: List[RedemptionResponse]
+    nextCursor: Optional[str]
+    pendingCount: int
+
+
+class ReferralConversionResponse(BaseModel):
+    id: UUID
+    code: str
+    status: str
+    rewardPoints: float
+    inviteeEmail: Optional[str]
+    createdAt: datetime
+    updatedAt: datetime
+    completedAt: Optional[datetime]
+
+
+class ReferralConversionWindowResponse(BaseModel):
+    invites: List[ReferralConversionResponse]
+    nextCursor: Optional[str]
+    statusCounts: dict[str, int]
+    convertedPoints: float
+    lastActivity: Optional[datetime]
+
+
 class RedemptionFulfillRequest(BaseModel):
     description: Optional[str] = Field(None, description="Override description for the ledger entry")
     metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata to attach to the redemption")
@@ -202,6 +252,140 @@ async def get_loyalty_member(
             )
             for window in snapshot.expiring_points
         ],
+    )
+
+
+@router.get("/ledger", response_model=LedgerWindowResponse)
+async def list_member_ledger_history(
+    limit: int = Query(25, ge=1, le=100),
+    cursor: str | None = Query(None, description="Opaque cursor for pagination"),
+    types: list[str] | None = Query(None, description="Filter ledger entry types"),
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> LedgerWindowResponse:
+    """Return member ledger entries with pagination."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+
+    entry_types: list[LoyaltyLedgerEntryType] | None = None
+    if types:
+        entry_types = []
+        for value in types:
+            try:
+                entry_types.append(LoyaltyLedgerEntryType(value))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Unsupported ledger type: {value}") from exc
+
+    decoded_cursor = None
+    if cursor:
+        try:
+            decoded_cursor = decode_time_uuid_cursor(cursor)
+        except Exception as exc:  # pragma: no cover - defensive for bad cursors
+            raise HTTPException(status_code=400, detail="Invalid ledger cursor") from exc
+
+    entries, next_cursor = await service.list_member_ledger_entries(
+        member,
+        limit=limit,
+        cursor=decoded_cursor,
+        entry_types=entry_types,
+    )
+
+    return LedgerWindowResponse(
+        entries=[_serialize_ledger_entry(entry) for entry in entries],
+        nextCursor=encode_time_uuid_cursor(*next_cursor) if next_cursor else None,
+    )
+
+
+@router.get("/redemptions", response_model=RedemptionWindowResponse)
+async def list_member_redemption_history(
+    limit: int = Query(25, ge=1, le=100),
+    cursor: str | None = Query(None, description="Opaque cursor for pagination"),
+    statuses: list[str] | None = Query(None, description="Filter redemption statuses"),
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> RedemptionWindowResponse:
+    """Return member redemption history with pagination."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+
+    redemption_statuses: list[LoyaltyRedemptionStatus] | None = None
+    if statuses:
+        redemption_statuses = []
+        for value in statuses:
+            try:
+                redemption_statuses.append(LoyaltyRedemptionStatus(value))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Unsupported redemption status: {value}") from exc
+
+    decoded_cursor = None
+    if cursor:
+        try:
+            decoded_cursor = decode_time_uuid_cursor(cursor)
+        except Exception as exc:  # pragma: no cover
+            raise HTTPException(status_code=400, detail="Invalid redemption cursor") from exc
+
+    redemptions, next_cursor = await service.list_member_redemptions(
+        member,
+        limit=limit,
+        cursor=decoded_cursor,
+        statuses=redemption_statuses,
+    )
+    pending_count = await service.count_member_redemptions(
+        member, statuses=[LoyaltyRedemptionStatus.REQUESTED]
+    )
+
+    return RedemptionWindowResponse(
+        redemptions=[_serialize_redemption(redemption) for redemption in redemptions],
+        nextCursor=encode_time_uuid_cursor(*next_cursor) if next_cursor else None,
+        pendingCount=pending_count,
+    )
+
+
+@router.get("/referrals/conversions", response_model=ReferralConversionWindowResponse)
+async def list_member_referral_conversions(
+    limit: int = Query(25, ge=1, le=100),
+    cursor: str | None = Query(None, description="Opaque cursor for pagination"),
+    statuses: list[str] | None = Query(None, description="Filter referral statuses"),
+    current_user: User = Depends(require_member_session),
+    db: AsyncSession = Depends(get_session),
+) -> ReferralConversionWindowResponse:
+    """Return referral conversion invites and aggregates."""
+
+    service = LoyaltyService(db)
+    member = await service.ensure_member(current_user.id)
+
+    referral_statuses: list[ReferralStatus] | None = None
+    if statuses:
+        referral_statuses = []
+        for value in statuses:
+            try:
+                referral_statuses.append(ReferralStatus(value))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Unsupported referral status: {value}") from exc
+
+    decoded_cursor = None
+    if cursor:
+        try:
+            decoded_cursor = decode_time_uuid_cursor(cursor)
+        except Exception as exc:  # pragma: no cover
+            raise HTTPException(status_code=400, detail="Invalid referral cursor") from exc
+
+    invites, next_cursor = await service.list_member_referral_conversions(
+        member,
+        limit=limit,
+        cursor=decoded_cursor,
+        statuses=referral_statuses,
+    )
+    summary = await service.referral_conversion_summary(member)
+
+    return ReferralConversionWindowResponse(
+        invites=[_serialize_referral_conversion(invite) for invite in invites],
+        nextCursor=encode_time_uuid_cursor(*next_cursor) if next_cursor else None,
+        statusCounts=summary.get("status_counts", {}),
+        convertedPoints=float(summary.get("converted_points", Decimal("0"))),
+        lastActivity=summary.get("last_activity"),
     )
 
 
@@ -382,6 +566,19 @@ def _serialize_referral(referral: ReferralInvite) -> ReferralIssueResponse:
     )
 
 
+def _serialize_referral_conversion(referral: ReferralInvite) -> ReferralConversionResponse:
+    return ReferralConversionResponse(
+        id=referral.id,
+        code=referral.code,
+        status=referral.status.value,
+        rewardPoints=float(referral.reward_points or 0),
+        inviteeEmail=referral.invitee_email,
+        createdAt=referral.created_at,
+        updatedAt=referral.updated_at,
+        completedAt=referral.completed_at,
+    )
+
+
 def _serialize_redemption(redemption: LoyaltyRedemption) -> RedemptionResponse:
     return RedemptionResponse(
         id=redemption.id,
@@ -394,6 +591,18 @@ def _serialize_redemption(redemption: LoyaltyRedemption) -> RedemptionResponse:
         fulfilledAt=redemption.fulfilled_at,
         cancelledAt=redemption.cancelled_at,
         failureReason=redemption.failure_reason,
+    )
+
+
+def _serialize_ledger_entry(entry: LoyaltyLedgerEntry) -> LedgerEntryResponse:
+    metadata = entry.metadata_json or {}
+    return LedgerEntryResponse(
+        id=entry.id,
+        occurredAt=entry.occurred_at,
+        entryType=entry.entry_type.value,
+        amount=float(entry.amount or 0),
+        description=entry.description,
+        metadata=dict(metadata),
     )
 
 
