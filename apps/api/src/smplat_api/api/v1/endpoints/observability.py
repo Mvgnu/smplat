@@ -10,6 +10,7 @@ from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.observability.catalog import get_catalog_store
 from smplat_api.observability.fulfillment import get_fulfillment_store
 from smplat_api.observability.payments import get_payment_store
+from smplat_api.observability.scheduler import get_catalog_scheduler_store
 
 
 router = APIRouter(prefix="/observability", tags=["Observability"])
@@ -75,6 +76,7 @@ async def get_prometheus_metrics() -> PlainTextResponse:
     fulfillment_snapshot = get_fulfillment_store().snapshot().as_dict()
     payments_snapshot = get_payment_store().snapshot().as_dict()
     catalog_snapshot = get_catalog_store().snapshot().as_dict()
+    scheduler_snapshot = get_catalog_scheduler_store().snapshot()
 
     lines: list[str] = []
 
@@ -199,6 +201,113 @@ async def get_prometheus_metrics() -> PlainTextResponse:
             catalog_metrics.get("average_results_per_search", 0.0),
         )
     )
+
+    scheduler_totals = scheduler_snapshot.totals
+    lines.extend(
+        _format_metric(
+            "smplat_catalog_scheduler_runs_total",
+            "Total catalog scheduler dispatches",
+            scheduler_totals.get("runs", 0),
+        )
+    )
+    lines.extend(
+        _format_metric(
+            "smplat_catalog_scheduler_success_total",
+            "Successful catalog scheduler runs",
+            scheduler_totals.get("success", 0),
+        )
+    )
+    lines.extend(
+        _format_metric(
+            "smplat_catalog_scheduler_run_failures_total",
+            "Catalog scheduler runs that exhausted retries",
+            scheduler_totals.get("run_failures", 0),
+        )
+    )
+    lines.extend(
+        _format_metric(
+            "smplat_catalog_scheduler_attempt_failures_total",
+            "Catalog scheduler attempts that failed",
+            scheduler_totals.get("attempt_failures", 0),
+        )
+    )
+    lines.extend(
+        _format_metric(
+            "smplat_catalog_scheduler_retries_total",
+            "Catalog scheduler retries triggered",
+            scheduler_totals.get("retries", 0),
+        )
+    )
+
+    for job_id, job_snapshot in scheduler_snapshot.jobs.items():
+        labels = {"job_id": job_id, "task": job_snapshot.task}
+        lines.extend(
+            _format_metric(
+                "smplat_catalog_scheduler_job_runs_total",
+                "Catalog scheduler dispatches per job",
+                job_snapshot.totals.get("runs", 0),
+                labels=labels,
+            )
+        )
+        lines.extend(
+            _format_metric(
+                "smplat_catalog_scheduler_job_success_total",
+                "Successful scheduler runs per job",
+                job_snapshot.totals.get("success", 0),
+                labels=labels,
+            )
+        )
+        lines.extend(
+            _format_metric(
+                "smplat_catalog_scheduler_job_run_failures_total",
+                "Scheduler runs per job that exhausted retries",
+                job_snapshot.totals.get("run_failures", 0),
+                labels=labels,
+            )
+        )
+        lines.extend(
+            _format_metric(
+                "smplat_catalog_scheduler_job_retries_total",
+                "Retries issued per scheduler job",
+                job_snapshot.totals.get("retries", 0),
+                labels=labels,
+            )
+        )
+        lines.extend(
+            _format_metric(
+                "smplat_catalog_scheduler_job_consecutive_failures",
+                "Consecutive scheduler run failures per job",
+                job_snapshot.totals.get("consecutive_failures", 0),
+                labels=labels,
+            )
+        )
+        total_runtime = job_snapshot.timings.get("total_runtime_seconds", 0.0)
+        lines.extend(
+            _format_metric(
+                "smplat_catalog_scheduler_job_runtime_seconds_total",
+                "Total runtime seconds per scheduler job",
+                total_runtime,
+                labels=labels,
+            )
+        )
+        if job_snapshot.last_success_at:
+            lines.extend(
+                _format_metric(
+                    "smplat_catalog_scheduler_job_last_success_timestamp",
+                    "Last successful scheduler run timestamp",
+                    job_snapshot.last_success_at.timestamp(),
+                    labels=labels,
+                )
+            )
+        if job_snapshot.last_error_at:
+            lines.extend(
+                _format_metric(
+                    "smplat_catalog_scheduler_job_last_error_timestamp",
+                    "Last scheduler error timestamp",
+                    job_snapshot.last_error_at.timestamp(),
+                    labels=labels,
+                )
+            )
 
     body = "\n".join(lines) + "\n"
     return PlainTextResponse(content=body, media_type="text/plain; version=0.0.4")
