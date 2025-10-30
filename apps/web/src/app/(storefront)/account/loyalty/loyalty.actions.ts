@@ -17,7 +17,6 @@ import { serverTelemetry } from "@/server/observability/tracing";
 
 const apiBase = process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const apiKeyHeader = process.env.CHECKOUT_API_KEY || process.env.NEXT_PUBLIC_CHECKOUT_API_KEY;
-const allowBypass = process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "true";
 const bypassUserId = "00000000-0000-0000-0000-000000000001";
 
 export type RedemptionRequestPayload = {
@@ -30,7 +29,12 @@ export type RedemptionRequestPayload = {
 
 async function requestRedemptionImpl(payload: RedemptionRequestPayload): Promise<LoyaltyRedemption> {
   const { csrfToken: csrfFromPayload, ...requestPayload } = payload;
-  const { session } = await requireRole("member");
+  const { session } = await requireRole("member", {
+    context: {
+      route: "storefront.loyalty.requestRedemption",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: csrfFromPayload ?? null });
   const userId = session.user?.id;
 
@@ -38,7 +42,7 @@ async function requestRedemptionImpl(payload: RedemptionRequestPayload): Promise
     throw new Error("Authentication is required to redeem rewards.");
   }
 
-  if (allowBypass) {
+  if (!apiKeyHeader) {
     return buildBypassRedemption(payload.rewardSlug ?? "reward-1");
   }
 
@@ -91,7 +95,12 @@ async function issueReferralInviteImpl(
   payload: ReferralInviteCreatePayload & { csrfToken?: string }
 ): Promise<ReferralInviteResponse> {
   const { csrfToken: csrfFromPayload, ...requestPayload } = payload;
-  const { session } = await requireRole("member");
+  const { session } = await requireRole("member", {
+    context: {
+      route: "storefront.loyalty.issueReferral",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: csrfFromPayload ?? null });
   const userId = session.user?.id;
 
@@ -120,7 +129,12 @@ async function cancelReferralInviteImpl(
   payload: ReferralInviteCancelPayload & { csrfToken?: string } = {}
 ): Promise<ReferralInviteResponse> {
   const { csrfToken: csrfFromPayload, ...requestPayload } = payload;
-  const { session } = await requireRole("member");
+  const { session } = await requireRole("member", {
+    context: {
+      route: "storefront.loyalty.cancelReferral",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: csrfFromPayload ?? null });
   const userId = session.user?.id;
 
@@ -151,7 +165,12 @@ async function updateNudgeStatusImpl(
   status: LoyaltyNudgeStatus,
   csrfToken?: string
 ): Promise<void> {
-  const { session } = await requireRole("member");
+  const { session } = await requireRole("member", {
+    context: {
+      route: "storefront.loyalty.updateNudge",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: csrfToken ?? null });
   const userId = session.user?.id;
 
@@ -159,7 +178,7 @@ async function updateNudgeStatusImpl(
     throw new Error("Authentication is required to manage nudges.");
   }
 
-  if (allowBypass) {
+  if (!apiKeyHeader) {
     return;
   }
 

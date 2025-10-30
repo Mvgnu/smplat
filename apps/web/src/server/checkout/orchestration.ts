@@ -7,7 +7,6 @@ import type { CheckoutOrchestration } from "@smplat/types";
 const apiBaseUrl =
   process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const apiKeyHeader = process.env.CHECKOUT_API_KEY ?? process.env.NEXT_PUBLIC_CHECKOUT_API_KEY;
-const allowBypass = process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "true";
 
 const defaultHeaders: HeadersInit = apiKeyHeader
   ? { "X-API-Key": apiKeyHeader, "Content-Type": "application/json" }
@@ -53,7 +52,7 @@ export async function fetchCheckoutOrchestration(
     return null;
   }
 
-  if (allowBypass || !apiKeyHeader) {
+  if (!apiKeyHeader) {
     return buildBypassOrchestration(orderId);
   }
 

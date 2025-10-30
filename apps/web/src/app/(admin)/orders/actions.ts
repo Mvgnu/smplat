@@ -27,7 +27,12 @@ export { initialState as updateOrderStatusInitialState };
 export const updateOrderStatusAction = serverTelemetry.wrapServerAction(
   "admin.orders.updateStatus",
   async (_prevState: UpdateOrderStatusState, formData: FormData): Promise<UpdateOrderStatusState> => {
-    await requireRole("operator");
+    await requireRole("operator", {
+      context: {
+        route: "admin.orders.updateStatus",
+        method: "POST"
+      }
+    });
     const csrfToken = formData.get("csrfToken");
     ensureCsrfToken({ tokenFromForm: typeof csrfToken === "string" ? csrfToken : null });
 

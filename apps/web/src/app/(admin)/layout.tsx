@@ -6,7 +6,7 @@ import { requireRole } from "@/server/auth/policies";
 
 // meta: layout: admin-root
 
-const NAV_ITEMS: AdminNavItem[] = [
+const BASE_NAV_ITEMS: AdminNavItem[] = [
   {
     href: "/admin/orders",
     label: "Orders",
@@ -34,15 +34,32 @@ type AdminRootLayoutProps = {
 };
 
 export default async function AdminRootLayout({ children }: AdminRootLayoutProps) {
-  const { session } = await requireRole("operator", { redirectTo: "/login?next=/admin" });
+  const { session } = await requireRole("operator", {
+    redirectTo: "/login?next=/admin",
+    context: {
+      route: "admin.layout",
+      method: "GET"
+    }
+  });
 
   const operatorName = session?.user?.name ?? "Operator";
   const roleLabel = session?.user?.role ? session.user.role.toString().replaceAll("_", " ") : "operator";
 
+  const navItems: AdminNavItem[] = session?.user?.role === "ADMIN"
+    ? [
+        ...BASE_NAV_ITEMS,
+        {
+          href: "/admin/security",
+          label: "Security",
+          description: "Review access attempts"
+        }
+      ]
+    : BASE_NAV_ITEMS;
+
   return (
     <SessionProviderBoundary session={session}>
       <AdminShell
-        navItems={NAV_ITEMS}
+        navItems={navItems}
         title={`${operatorName} workspace`}
         subtitle="Monitor orders, loyalty health, and merchandising workflows in one unified control center."
         sidebarFooter={

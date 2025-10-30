@@ -16,7 +16,13 @@ type AccountLayoutProps = {
 };
 
 export default async function AccountLayout({ children }: AccountLayoutProps) {
-  const { session } = await requireRole("member", { redirectTo: "/login?next=/account/loyalty" });
+  const { session } = await requireRole("member", {
+    redirectTo: "/login?next=/account/loyalty",
+    context: {
+      route: "storefront.account.layout",
+      method: "GET"
+    }
+  });
 
   return (
     <SessionProviderBoundary session={session}>

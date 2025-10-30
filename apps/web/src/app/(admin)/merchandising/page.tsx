@@ -13,6 +13,7 @@ import { BundleForm } from "./bundle-form";
 import { ProductAuditLog } from "./product-audit-log";
 import { ProductChannelForm } from "./product-channel-form";
 import { ProductStatusForm } from "./product-status-form";
+import { OptionMatrixEditor } from "./option-matrix-editor";
 import { fetchCatalogBundles } from "@/server/catalog/bundles";
 import { fetchProductDetail, fetchProductSummaries } from "@/server/catalog/products";
 import { getOrCreateCsrfToken } from "@/server/security/csrf";
@@ -132,6 +133,13 @@ export default async function AdminMerchandisingPage() {
                   />
                 </div>
               <AssetUploadForm productId={product.id} csrfToken={csrfToken} />
+              {detail ? (
+                <OptionMatrixEditor product={detail} csrfToken={csrfToken} />
+              ) : (
+                <p className="rounded-2xl border border-white/10 bg-black/40 p-4 text-sm text-white/60">
+                  Configuration editing is unavailable for this product while offline.
+                </p>
+              )}
               <div className="rounded-2xl border border-white/10 bg-black/40 p-4 text-xs text-white/60">
                 <h5 className="text-xs uppercase tracking-[0.3em] text-white/40">Assets</h5>
                 {detail?.mediaAssets.length ? (

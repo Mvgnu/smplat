@@ -58,15 +58,42 @@ model Session {
   userId       String   @map("user_id")
   expires      DateTime
   roleSnapshot UserRole? @map("role_snapshot")
-  permissions  String[]  @default([]) @db.Text[]
+  permissions  String[] @default([])
   ipAddress    String?  @map("ip_address")
   userAgent    String?  @map("user_agent")
+  deviceFingerprint String? @map("device_fingerprint")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   user User @relation("UserSessions", fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("sessions")
+}
+
+enum AccessDecision {
+  ALLOWED
+  DENIED
+  REDIRECTED
+  RATE_LIMITED
+}
+
+model AccessEvent {
+  id               String          @id @default(uuid()) @db.Uuid
+  userId           String?         @map("user_id")
+  serviceAccountId String?         @map("service_account_id")
+  subjectEmail     String?         @map("subject_email")
+  route            String          @map("route")
+  method           String?         @map("method")
+  requiredTier     String          @map("required_tier")
+  decision         AccessDecision  @default(DENIED)
+  reason           String?         @map("reason")
+  metadata         Json?           @map("metadata")
+  createdAt        DateTime        @default(now()) @map("created_at")
+
+  @@index([route])
+  @@index([userId])
+  @@index([serviceAccountId])
+  @@map("access_events")
 }
 
 model VerificationToken {
@@ -316,6 +343,7 @@ model Order {
   user    User? @relation("UserOrders", fields: [userId], references: [id], onDelete: SetNull)
   items   OrderItem[]
   payments Payment[]
+  invoiceLineItems InvoiceLineItem[]
 
   @@map("orders")
 }

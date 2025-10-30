@@ -9,9 +9,11 @@ import { requireRole } from "@/server/auth/policies";
 import { upsertCatalogBundle, deleteCatalogBundle } from "@/server/catalog/bundles";
 import {
   attachProductAsset,
+  replaceProductConfiguration,
   updateProductChannels,
   updateProductStatus,
   restoreProductFromAudit,
+  type ProductConfigurationInput,
 } from "@/server/catalog/products";
 import { ensureCsrfToken } from "@/server/security/csrf";
 import { serverTelemetry } from "@/server/observability/tracing";
@@ -55,7 +57,12 @@ async function updateProductChannelsActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireRole("operator");
+  await requireRole("operator", {
+    context: {
+      route: "admin.merchandising.updateChannels",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: String(formData.get("csrfToken") ?? "") });
 
   const productId = formData.get("productId");
@@ -79,7 +86,12 @@ async function updateProductStatusActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireRole("operator");
+  await requireRole("operator", {
+    context: {
+      route: "admin.merchandising.updateStatus",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: String(formData.get("csrfToken") ?? "") });
 
   const productId = formData.get("productId");
@@ -109,7 +121,12 @@ async function uploadProductAssetActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireRole("operator");
+  await requireRole("operator", {
+    context: {
+      route: "admin.merchandising.uploadAsset",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: String(formData.get("csrfToken") ?? "") });
 
   const productId = formData.get("productId");
@@ -133,11 +150,172 @@ async function uploadProductAssetActionImpl(
   }
 }
 
+function parseMetadata(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseNumber(value: unknown, fallback = 0): number {
+  const coerced = typeof value === "string" && value.trim() !== "" ? Number(value) : Number(value);
+  return Number.isFinite(coerced) ? coerced : fallback;
+}
+
+function parseBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes";
+  }
+  return false;
+}
+
+function parseConfigurationPayload(raw: unknown): ProductConfigurationInput {
+  const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+
+  const optionGroupsRaw = Array.isArray(source.optionGroups) ? (source.optionGroups as unknown[]) : [];
+  const optionGroups = optionGroupsRaw.map((entry, index) => {
+    const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    const optionsRaw = Array.isArray(item.options) ? (item.options as unknown[]) : [];
+    const options = optionsRaw.map((optionEntry, optionIndex) => {
+      const option = optionEntry && typeof optionEntry === "object" ? (optionEntry as Record<string, unknown>) : {};
+      return {
+        id: typeof option.id === "string" && option.id.length > 0 ? option.id : null,
+        name: typeof option.name === "string" ? option.name : `Option ${optionIndex + 1}`,
+        description: typeof option.description === "string" ? option.description : null,
+        priceDelta: parseNumber(option.priceDelta, 0),
+        displayOrder: parseNumber(option.displayOrder, optionIndex),
+        metadata: parseMetadata(option.metadata ?? option.metadataJson),
+      };
+    });
+
+    const groupType = item.groupType === "multiple" ? "multiple" : "single";
+
+    return {
+      id: typeof item.id === "string" && item.id.length > 0 ? item.id : null,
+      name: typeof item.name === "string" ? item.name : `Group ${index + 1}`,
+      description: typeof item.description === "string" ? item.description : null,
+      groupType,
+      isRequired: parseBoolean(item.isRequired),
+      displayOrder: parseNumber(item.displayOrder, index),
+      metadata: parseMetadata(item.metadata ?? item.metadataJson),
+      options,
+    };
+  });
+
+  const addOnsRaw = Array.isArray(source.addOns) ? (source.addOns as unknown[]) : [];
+  const addOns = addOnsRaw.map((entry, index) => {
+    const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    return {
+      id: typeof item.id === "string" && item.id.length > 0 ? item.id : null,
+      label: typeof item.label === "string" ? item.label : `Add-on ${index + 1}`,
+      description: typeof item.description === "string" ? item.description : null,
+      priceDelta: parseNumber(item.priceDelta, 0),
+      isRecommended: parseBoolean(item.isRecommended),
+      displayOrder: parseNumber(item.displayOrder, index),
+    };
+  });
+
+  const customFieldsRaw = Array.isArray(source.customFields) ? (source.customFields as unknown[]) : [];
+  const allowedFieldTypes = new Set(["text", "url", "number"]);
+  const customFields = customFieldsRaw.map((entry, index) => {
+    const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    const fieldType = typeof item.fieldType === "string" && allowedFieldTypes.has(item.fieldType)
+      ? (item.fieldType as "text" | "url" | "number")
+      : "text";
+    return {
+      id: typeof item.id === "string" && item.id.length > 0 ? item.id : null,
+      label: typeof item.label === "string" ? item.label : `Field ${index + 1}`,
+      fieldType,
+      placeholder: typeof item.placeholder === "string" ? item.placeholder : null,
+      helpText: typeof item.helpText === "string" ? item.helpText : null,
+      isRequired: parseBoolean(item.isRequired),
+      displayOrder: parseNumber(item.displayOrder, index),
+    };
+  });
+
+  const plansRaw = Array.isArray(source.subscriptionPlans) ? (source.subscriptionPlans as unknown[]) : [];
+  const allowedBillingCycles = new Set(["one_time", "monthly", "quarterly", "annual"]);
+  const subscriptionPlans = plansRaw.map((entry, index) => {
+    const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    const billingCycle =
+      typeof item.billingCycle === "string" && allowedBillingCycles.has(item.billingCycle)
+        ? (item.billingCycle as "one_time" | "monthly" | "quarterly" | "annual")
+        : "one_time";
+    return {
+      id: typeof item.id === "string" && item.id.length > 0 ? item.id : null,
+      label: typeof item.label === "string" ? item.label : `Plan ${index + 1}`,
+      description: typeof item.description === "string" ? item.description : null,
+      billingCycle,
+      priceMultiplier:
+        item.priceMultiplier != null && Number.isFinite(Number(item.priceMultiplier))
+          ? Number(item.priceMultiplier)
+          : null,
+      priceDelta:
+        item.priceDelta != null && Number.isFinite(Number(item.priceDelta))
+          ? Number(item.priceDelta)
+          : null,
+      isDefault: parseBoolean(item.isDefault),
+      displayOrder: parseNumber(item.displayOrder, index),
+    };
+  });
+
+  return { optionGroups, addOns, customFields, subscriptionPlans } satisfies ProductConfigurationInput;
+}
+
+async function updateProductConfigurationActionImpl(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireRole("admin", {
+    context: {
+      route: "admin.merchandising.updateConfiguration",
+      method: "POST"
+    }
+  });
+  ensureCsrfToken({ tokenFromForm: String(formData.get("csrfToken") ?? "") });
+
+  const productId = formData.get("productId");
+  const configurationRaw = formData.get("configuration");
+
+  if (typeof productId !== "string" || productId.length === 0) {
+    return { success: false, error: "Missing product identifier." };
+  }
+
+  if (typeof configurationRaw !== "string" || configurationRaw.length === 0) {
+    return { success: false, error: "Missing configuration payload." };
+  }
+
+  try {
+    const parsedJson = JSON.parse(configurationRaw) as unknown;
+    const configuration = parseConfigurationPayload(parsedJson);
+    await replaceProductConfiguration(productId, configuration);
+    revalidatePath("/admin/merchandising");
+    return { success: true };
+  } catch (error) {
+    const message =
+      error instanceof SyntaxError
+        ? "Configuration payload is not valid JSON."
+        : error instanceof Error
+          ? error.message
+          : "Failed to update configuration.";
+    return { success: false, error: message };
+  }
+}
+
 async function upsertBundleActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireRole("admin");
+  await requireRole("admin", {
+    context: {
+      route: "admin.merchandising.upsertBundle",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: String(formData.get("csrfToken") ?? "") });
 
   const id = formData.get("bundleId");
@@ -191,7 +369,12 @@ async function deleteBundleActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireRole("admin");
+  await requireRole("admin", {
+    context: {
+      route: "admin.merchandising.deleteBundle",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: String(formData.get("csrfToken") ?? "") });
 
   const bundleId = formData.get("bundleId");
@@ -215,7 +398,12 @@ async function restoreProductFromAuditActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  await requireRole("admin");
+  await requireRole("admin", {
+    context: {
+      route: "admin.merchandising.restoreProduct",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: String(formData.get("csrfToken") ?? "") });
 
   const logId = formData.get("logId");
@@ -251,6 +439,12 @@ export const uploadProductAssetAction = serverTelemetry.wrapServerAction(
   "admin.merchandising.uploadAsset",
   uploadProductAssetActionImpl,
   { "server.action.feature": "merchandising", "server.action.operation": "upload_asset" }
+);
+
+export const updateProductConfigurationAction = serverTelemetry.wrapServerAction(
+  "admin.merchandising.updateConfiguration",
+  updateProductConfigurationActionImpl,
+  { "server.action.feature": "merchandising", "server.action.operation": "update_configuration" }
 );
 
 export const upsertBundleAction = serverTelemetry.wrapServerAction(

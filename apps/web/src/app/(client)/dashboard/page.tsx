@@ -41,7 +41,12 @@ const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 export default async function ClientDashboardPage({ searchParams }: DashboardPageProps) {
-  const { session } = await requireRole("member");
+  const { session } = await requireRole("member", {
+    context: {
+      route: "client.dashboard.page",
+      method: "GET"
+    }
+  });
   const userId = session.user?.id;
 
   if (!userId) {

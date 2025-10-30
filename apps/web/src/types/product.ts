@@ -14,6 +14,7 @@ export type ProductOptionGroup = {
   groupType: "single" | "multiple";
   isRequired: boolean;
   displayOrder: number;
+  metadataJson?: Record<string, unknown> | null;
   options: ProductOption[];
 };
 
@@ -87,9 +88,13 @@ export type ProductDetail = {
   basePrice: number;
   currency: string;
   status: "draft" | "active" | "archived";
+  channelEligibility: string[];
+  updatedAt?: string;
   optionGroups: ProductOptionGroup[];
   addOns: ProductAddOn[];
   customFields: ProductCustomField[];
   subscriptionPlans: ProductSubscriptionPlan[];
   fulfillmentSummary?: ProductFulfillmentSummary | null;
+  mediaAssets?: { id: string; assetUrl: string; label?: string | null }[];
+  auditLog?: { id: string; action: string; createdAt: string }[];
 };

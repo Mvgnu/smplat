@@ -12,6 +12,11 @@ poetry run pytest
 
 See `/docs` for full architecture decisions.
 
+## Product Configuration APIs
+- `PUT /api/v1/products/{productId}/options` transactionally replaces option groups, add-ons, custom fields, and subscription plans. Omitted collections are deleted.
+- `POST /api/v1/products` and `PATCH /api/v1/products/{productId}` accept a `configuration` payload to provision nested relationships alongside base product fields.
+- Price deltas are validated in the range [-100000, 100000] and subscription billing cycles are limited to `one_time`, `monthly`, `quarterly`, or `annual`.
+
 ## Billing Gateway Integration
 - Hosted Stripe Checkout session endpoint: `POST /api/v1/billing/invoices/{invoiceId}/checkout` (requires `X-API-Key`) persists durable session rows linked to invoices for lifecycle analytics.
 - Hosted checkout lifecycle endpoints: `GET /api/v1/billing/sessions` + `GET /api/v1/billing/sessions/{sessionId}` expose workspace-scoped visibility, while `POST /api/v1/billing/sessions/{sessionId}/regenerate` triggers operator retries with optimistic locking on `updatedAt`.

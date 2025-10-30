@@ -7,9 +7,13 @@ import { renderSignInEmail } from "@smplat/shared";
 import type { DefaultSession } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import type { UserRole } from "@prisma/client";
+import { computeFingerprintFromRequest } from "./fingerprint";
 
 const apiBaseUrl =
   process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+const lockoutThreshold = Number.parseInt(process.env.AUTH_LOCKOUT_THRESHOLD ?? "5", 10);
+const lockoutWindowMinutes = Number.parseInt(process.env.AUTH_LOCKOUT_WINDOW_MINUTES ?? "15", 10);
 
 // security-lockout: auth-attempt-telemetry
 async function trackAuthAttempt(identifier: string | null | undefined, outcome: "success" | "failure") {
@@ -85,20 +89,66 @@ export const authConfig: NextAuthConfig = {
     }
   },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger }, request) {
+      const mutableToken = token as JWT & {
+        id?: string;
+        role?: UserRole;
+        permissions?: string[];
+        deviceFingerprint?: string | null;
+        deviceIp?: string | null;
+        deviceUserAgent?: string | null;
+        deviceMismatch?: boolean;
+        lockoutThreshold?: number;
+        lockoutWindowMinutes?: number;
+      };
+
       if (user) {
         const userWithRole = user as { id?: string; role?: UserRole | null };
-        token.id = userWithRole.id ?? token.sub;
+        mutableToken.id = userWithRole.id ?? mutableToken.sub;
         if (userWithRole.role) {
-          token.role = userWithRole.role;
+          mutableToken.role = userWithRole.role;
         }
-        token.permissions = resolvePermissions(userWithRole.role ?? token.role ?? null);
+        mutableToken.permissions = resolvePermissions(userWithRole.role ?? mutableToken.role ?? null);
+        const fingerprint = computeFingerprintFromRequest(request);
+        mutableToken.deviceFingerprint = fingerprint.hash;
+        mutableToken.deviceIp = fingerprint.ip;
+        mutableToken.deviceUserAgent = fingerprint.userAgent;
+        mutableToken.deviceMismatch = false;
       }
-      return token as JWT & { id?: string; role?: UserRole; permissions?: string[] };
+      if (!user || trigger !== "signIn") {
+        const fingerprint = computeFingerprintFromRequest(request);
+        if (fingerprint.hash) {
+          if (!mutableToken.deviceFingerprint) {
+            mutableToken.deviceFingerprint = fingerprint.hash;
+            mutableToken.deviceIp = fingerprint.ip;
+            mutableToken.deviceUserAgent = fingerprint.userAgent;
+            mutableToken.deviceMismatch = false;
+          } else if (mutableToken.deviceFingerprint !== fingerprint.hash) {
+            mutableToken.deviceMismatch = true;
+          } else {
+            mutableToken.deviceMismatch = false;
+          }
+        }
+      }
+
+      mutableToken.lockoutThreshold = lockoutThreshold;
+      mutableToken.lockoutWindowMinutes = lockoutWindowMinutes;
+
+      return mutableToken;
     },
     async session({ session, token }) {
       if (session.user) {
-        const jwtToken = token as JWT & { id?: string; role?: UserRole; permissions?: string[] };
+        const jwtToken = token as JWT & {
+          id?: string;
+          role?: UserRole;
+          permissions?: string[];
+          deviceFingerprint?: string | null;
+          deviceIp?: string | null;
+          deviceUserAgent?: string | null;
+          deviceMismatch?: boolean;
+          lockoutThreshold?: number;
+          lockoutWindowMinutes?: number;
+        };
         const mutableUser = session.user as DefaultSession["user"] & {
           id?: string;
           role?: UserRole;
@@ -107,6 +157,38 @@ export const authConfig: NextAuthConfig = {
         mutableUser.id = jwtToken.id ?? jwtToken.sub ?? mutableUser.id ?? "";
         mutableUser.role = jwtToken.role ?? mutableUser.role;
         mutableUser.permissions = Array.from(new Set([...(mutableUser.permissions ?? []), ...(jwtToken.permissions ?? [])]));
+
+        const security = (session as DefaultSession & {
+          security?: {
+            deviceBinding: {
+              valid: boolean;
+              fingerprint: string | null;
+              ip: string | null;
+              userAgent: string | null;
+            };
+            lockout: {
+              threshold: number;
+              windowMinutes: number;
+            };
+          };
+        }).security ?? {
+          deviceBinding: { valid: true, fingerprint: null, ip: null, userAgent: null },
+          lockout: { threshold: lockoutThreshold, windowMinutes: lockoutWindowMinutes }
+        };
+
+        security.deviceBinding = {
+          valid: jwtToken.deviceMismatch !== true,
+          fingerprint: jwtToken.deviceFingerprint ?? null,
+          ip: jwtToken.deviceIp ?? null,
+          userAgent: jwtToken.deviceUserAgent ?? null
+        };
+
+        security.lockout = {
+          threshold: jwtToken.lockoutThreshold ?? lockoutThreshold,
+          windowMinutes: jwtToken.lockoutWindowMinutes ?? lockoutWindowMinutes
+        };
+
+        (session as DefaultSession & { security?: typeof security }).security = security;
       }
       return session;
     }
@@ -117,13 +199,22 @@ export const authConfig: NextAuthConfig = {
         return;
       }
 
-      const jwtToken = token as JWT & { role?: UserRole; permissions?: string[] };
+      const jwtToken = token as JWT & {
+        role?: UserRole;
+        permissions?: string[];
+        deviceFingerprint?: string | null;
+        deviceIp?: string | null;
+        deviceUserAgent?: string | null;
+      };
       try {
         await prisma.session.update({
           where: { sessionToken: session.sessionToken },
           data: {
             roleSnapshot: jwtToken.role ?? null,
-            permissions: jwtToken.permissions ?? []
+            permissions: jwtToken.permissions ?? [],
+            deviceFingerprint: jwtToken.deviceFingerprint ?? null,
+            ipAddress: jwtToken.deviceIp ?? null,
+            userAgent: jwtToken.deviceUserAgent ?? null
           }
         });
       } catch (error) {
@@ -137,13 +228,22 @@ export const authConfig: NextAuthConfig = {
         return;
       }
 
-      const jwtToken = token as JWT & { role?: UserRole; permissions?: string[] };
+      const jwtToken = token as JWT & {
+        role?: UserRole;
+        permissions?: string[];
+        deviceFingerprint?: string | null;
+        deviceIp?: string | null;
+        deviceUserAgent?: string | null;
+      };
       try {
         await prisma.session.update({
           where: { sessionToken: session.sessionToken },
           data: {
             roleSnapshot: jwtToken.role ?? null,
-            permissions: jwtToken.permissions ?? []
+            permissions: jwtToken.permissions ?? [],
+            deviceFingerprint: jwtToken.deviceFingerprint ?? null,
+            ipAddress: jwtToken.deviceIp ?? null,
+            userAgent: jwtToken.deviceUserAgent ?? null
           }
         });
       } catch (error) {

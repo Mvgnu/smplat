@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from smplat_api.db.session import get_session
 from smplat_api.schemas.product import (
     ProductAssetCreate,
+    ProductConfigurationMutation,
     ProductCreate,
     ProductDetailResponse,
     ProductAuditLogEntry,
@@ -126,3 +127,21 @@ async def restore_product(log_id: UUID, service: ProductService = Depends(get_pr
     if not restored:
         raise HTTPException(status_code=404, detail="Audit log not found or cannot restore")
     return ProductDetailResponse.model_validate(restored)
+
+
+@router.put(
+    "/{product_id}/options",
+    summary="Replace product configuration",
+    response_model=ProductDetailResponse,
+)
+async def replace_product_configuration(
+    product_id: UUID,
+    payload: ProductConfigurationMutation,
+    service: ProductService = Depends(get_product_service),
+) -> ProductDetailResponse:
+    product = await service.get_product_by_id(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    updated = await service.apply_configuration(product, payload, replace_missing=True)
+    return ProductDetailResponse.model_validate(updated)

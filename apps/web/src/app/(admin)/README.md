@@ -10,6 +10,10 @@ This route group hosts the operator control hub. Layout expectations:
   wrapper in `loyalty/actions.ts` + `guardrail-override-form.tsx` to keep overrides optimistic and auditable.
 - The merchandising surface (`merchandising/page.tsx`) hydrates product summaries, audit trails, bundle definitions, and asset
   uploads through `@/server/catalog` helpers. Use the local upload integration (`merchandising/actions.ts`) for small media
-  assets and the audit restore form when rolling back an operator change.
+  assets and the audit restore form when rolling back an operator change. The option matrix editor (`merchandising/option-matrix-editor.tsx`)
+  binds to `updateProductConfigurationAction`, serialises configuration JSON, and surfaces a live checkout preview using
+  `ProductConfigurator`—reference it when extending dynamic product setup workflows.
+- The security observability surface (`security/page.tsx`) aggregates access events, highlights escalations targeting admin
+  resources, and should remain restricted to platform administrators.
 
 Design tokens lean on Tailwind's dark theme: charcoal backgrounds (`#05070B` / `bg-black/30`), white typography, and blue/emerald accent glows. Extend tokens by updating `@/components/admin/README.md` alongside usage sites.

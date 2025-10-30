@@ -8,7 +8,12 @@ import { setLastSelectedOrder, updateNotificationPreferences } from "@/server/no
 import { ensureCsrfToken } from "@/server/security/csrf";
 
 export async function updateNotificationPreferencesAction(formData: FormData) {
-  await requireRole("member");
+  await requireRole("member", {
+    context: {
+      route: "client.dashboard.updateNotificationPreferences",
+      method: "POST"
+    }
+  });
   const csrfToken = formData.get("csrfToken");
   ensureCsrfToken({ tokenFromForm: typeof csrfToken === "string" ? csrfToken : null });
 
@@ -35,7 +40,12 @@ export async function updateNotificationPreferencesAction(formData: FormData) {
 }
 
 export async function selectOrderAction(formData: FormData) {
-  await requireRole("member");
+  await requireRole("member", {
+    context: {
+      route: "client.dashboard.selectOrder",
+      method: "POST"
+    }
+  });
   const csrfToken = formData.get("csrfToken");
   ensureCsrfToken({ tokenFromForm: typeof csrfToken === "string" ? csrfToken : null });
 

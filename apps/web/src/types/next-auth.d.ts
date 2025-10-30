@@ -8,6 +8,18 @@ declare module "next-auth" {
       role?: UserRole;
       permissions?: string[];
     }) | null;
+    security?: {
+      deviceBinding: {
+        valid: boolean;
+        fingerprint: string | null;
+        ip: string | null;
+        userAgent: string | null;
+      };
+      lockout: {
+        threshold: number;
+        windowMinutes: number;
+      };
+    };
   }
 
   interface User {
@@ -22,5 +34,11 @@ declare module "next-auth/jwt" {
     id?: string;
     role?: UserRole;
     permissions?: string[];
+    deviceFingerprint?: string | null;
+    deviceIp?: string | null;
+    deviceUserAgent?: string | null;
+    deviceMismatch?: boolean;
+    lockoutThreshold?: number;
+    lockoutWindowMinutes?: number;
   }
 }

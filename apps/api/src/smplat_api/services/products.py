@@ -11,12 +11,23 @@ from sqlalchemy.orm import selectinload
 from smplat_api.models import Product
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.models.product import (
+    ProductAddOn,
     ProductAuditLog,
+    ProductCustomField,
     ProductMediaAsset,
+    ProductOption,
     ProductOptionGroup,
+    ProductOptionGroupTypeEnum,
+    ProductSubscriptionPlan,
+    ProductSubscriptionBillingCycleEnum,
     ProductStatusEnum,
+    ProductCustomFieldTypeEnum,
 )
-from smplat_api.schemas.product import ProductCreate, ProductUpdate
+from smplat_api.schemas.product import (
+    ProductConfigurationMutation,
+    ProductCreate,
+    ProductUpdate,
+)
 
 
 class ProductService:
@@ -80,6 +91,8 @@ class ProductService:
         self._session.add(product)
         await self._session.commit()
         await self._session.refresh(product)
+        if data.configuration is not None:
+            product = await self.apply_configuration(product, data.configuration, replace_missing=True)
         await self._record_audit(product, action="created", before=None, after=self._serialize_snapshot(product))
         await self._session.commit()
         return product
@@ -105,6 +118,10 @@ class ProductService:
 
         await self._session.commit()
         await self._session.refresh(product)
+
+        if data.configuration is not None:
+            product = await self.apply_configuration(product, data.configuration, replace_missing=False)
+
         await self._record_audit(
             product,
             action="updated",
@@ -281,3 +298,247 @@ class ProductService:
             else str(product.status),
             "channel_eligibility": list(product.channel_eligibility or []),
         }
+
+    async def apply_configuration(
+        self,
+        product: Product,
+        config: ProductConfigurationMutation,
+        *,
+        replace_missing: bool,
+    ) -> Product:
+        if config is None:
+            return product
+
+        async def _mutate() -> None:
+            await self._session.refresh(
+                product,
+                attribute_names=[
+                    "option_groups",
+                    "add_ons",
+                    "custom_fields",
+                    "subscription_plans",
+                ],
+            )
+
+            if config.option_groups is not None or replace_missing:
+                await self._sync_option_groups(product, list(config.option_groups or []))
+            if config.add_ons is not None or replace_missing:
+                await self._sync_add_ons(product, list(config.add_ons or []))
+            if config.custom_fields is not None or replace_missing:
+                await self._sync_custom_fields(product, list(config.custom_fields or []))
+            if config.subscription_plans is not None or replace_missing:
+                await self._sync_subscription_plans(product, list(config.subscription_plans or []))
+
+            await self._record_audit(
+                product,
+                action="configuration_updated",
+                before=None,
+                after={
+                    "option_groups": len(product.option_groups),
+                    "add_ons": len(product.add_ons),
+                    "custom_fields": len(product.custom_fields),
+                    "subscription_plans": len(product.subscription_plans),
+                },
+            )
+
+        if self._session.in_transaction():
+            await _mutate()
+        else:
+            async with self._session.begin():
+                await _mutate()
+
+        await self._session.flush()
+        self._session.expire(
+            product,
+            attribute_names=[
+                "option_groups",
+                "add_ons",
+                "custom_fields",
+                "subscription_plans",
+            ],
+        )
+
+        return await self.get_product_by_id(product.id) or product
+
+    async def _sync_option_groups(
+        self,
+        product: Product,
+        payload: list["ProductOptionGroupWrite"],
+    ) -> None:
+        from smplat_api.schemas.product import ProductOptionGroupWrite  # avoid circular import
+
+        groups_by_id: dict[str, ProductOptionGroup] = {
+            str(group.id): group for group in list(product.option_groups)
+        }
+        seen_ids: set[str] = set()
+
+        for index, incoming in enumerate(payload):
+            assert isinstance(incoming, ProductOptionGroupWrite)
+            key = str(incoming.id) if incoming.id else None
+            group = groups_by_id.get(key or "") if key else None
+            if group is None:
+                group = ProductOptionGroup(
+                    id=uuid4(),
+                    product_id=product.id,
+                )
+                self._session.add(group)
+                product.option_groups.append(group)
+
+            group.name = incoming.name
+            group.description = incoming.description
+            group.group_type = ProductOptionGroupTypeEnum(
+                incoming.group_type.value
+                if hasattr(incoming.group_type, "value")
+                else str(incoming.group_type)
+            )
+            group.is_required = incoming.is_required
+            group.display_order = incoming.display_order if incoming.display_order is not None else index
+            group.metadata_json = incoming.metadata or {}
+
+            await self._sync_options(group, incoming.options or [])
+
+            seen_ids.add(str(group.id))
+
+        for group in list(product.option_groups):
+            if str(group.id) not in seen_ids:
+                product.option_groups.remove(group)
+                await self._session.delete(group)
+
+    async def _sync_options(self, group: ProductOptionGroup, payload: list["ProductOptionWrite"]) -> None:
+        from smplat_api.schemas.product import ProductOptionWrite
+
+        options_by_id: dict[str, ProductOption] = {str(option.id): option for option in list(group.options)}
+        seen_ids: set[str] = set()
+
+        for index, incoming in enumerate(payload):
+            assert isinstance(incoming, ProductOptionWrite)
+            key = str(incoming.id) if incoming.id else None
+            option = options_by_id.get(key or "") if key else None
+            if option is None:
+                option = ProductOption(id=uuid4(), group_id=group.id)
+                self._session.add(option)
+                group.options.append(option)
+
+            option.name = incoming.name
+            option.description = incoming.description
+            option.price_delta = Decimal(str(incoming.price_delta))
+            option.metadata_json = incoming.metadata or {}
+            option.display_order = incoming.display_order if incoming.display_order is not None else index
+
+            seen_ids.add(str(option.id))
+
+        for option in list(group.options):
+            if str(option.id) not in seen_ids:
+                group.options.remove(option)
+                await self._session.delete(option)
+
+    async def _sync_add_ons(self, product: Product, payload: list["ProductAddOnWrite"]) -> None:
+        from smplat_api.schemas.product import ProductAddOnWrite
+
+        add_ons_by_id: dict[str, ProductAddOn] = {str(add_on.id): add_on for add_on in list(product.add_ons)}
+        seen_ids: set[str] = set()
+
+        for index, incoming in enumerate(payload):
+            assert isinstance(incoming, ProductAddOnWrite)
+            key = str(incoming.id) if incoming.id else None
+            add_on = add_ons_by_id.get(key or "") if key else None
+            if add_on is None:
+                add_on = ProductAddOn(id=uuid4(), product_id=product.id)
+                self._session.add(add_on)
+                product.add_ons.append(add_on)
+
+            add_on.label = incoming.label
+            add_on.description = incoming.description
+            add_on.price_delta = Decimal(str(incoming.price_delta))
+            add_on.is_recommended = incoming.is_recommended
+            add_on.display_order = incoming.display_order if incoming.display_order is not None else index
+
+            seen_ids.add(str(add_on.id))
+
+        for add_on in list(product.add_ons):
+            if str(add_on.id) not in seen_ids:
+                product.add_ons.remove(add_on)
+                await self._session.delete(add_on)
+
+    async def _sync_custom_fields(
+        self,
+        product: Product,
+        payload: list["ProductCustomFieldWrite"],
+    ) -> None:
+        from smplat_api.schemas.product import ProductCustomFieldWrite
+
+        fields_by_id: dict[str, ProductCustomField] = {
+            str(field.id): field for field in list(product.custom_fields)
+        }
+        seen_ids: set[str] = set()
+
+        for index, incoming in enumerate(payload):
+            assert isinstance(incoming, ProductCustomFieldWrite)
+            key = str(incoming.id) if incoming.id else None
+            field = fields_by_id.get(key or "") if key else None
+            if field is None:
+                field = ProductCustomField(id=uuid4(), product_id=product.id)
+                self._session.add(field)
+                product.custom_fields.append(field)
+
+            field.label = incoming.label
+            field.field_type = ProductCustomFieldTypeEnum(
+                incoming.field_type.value
+                if hasattr(incoming.field_type, "value")
+                else str(incoming.field_type)
+            )
+            field.placeholder = incoming.placeholder
+            field.help_text = incoming.help_text
+            field.is_required = incoming.is_required
+            field.display_order = incoming.display_order if incoming.display_order is not None else index
+
+            seen_ids.add(str(field.id))
+
+        for field in list(product.custom_fields):
+            if str(field.id) not in seen_ids:
+                product.custom_fields.remove(field)
+                await self._session.delete(field)
+
+    async def _sync_subscription_plans(
+        self,
+        product: Product,
+        payload: list["ProductSubscriptionPlanWrite"],
+    ) -> None:
+        from smplat_api.schemas.product import ProductSubscriptionPlanWrite
+
+        plans_by_id: dict[str, ProductSubscriptionPlan] = {
+            str(plan.id): plan for plan in list(product.subscription_plans)
+        }
+        seen_ids: set[str] = set()
+
+        for index, incoming in enumerate(payload):
+            assert isinstance(incoming, ProductSubscriptionPlanWrite)
+            key = str(incoming.id) if incoming.id else None
+            plan = plans_by_id.get(key or "") if key else None
+            if plan is None:
+                plan = ProductSubscriptionPlan(id=uuid4(), product_id=product.id)
+                self._session.add(plan)
+                product.subscription_plans.append(plan)
+
+            plan.label = incoming.label
+            plan.description = incoming.description
+            plan.billing_cycle = ProductSubscriptionBillingCycleEnum(
+                incoming.billing_cycle.value
+                if hasattr(incoming.billing_cycle, "value")
+                else str(incoming.billing_cycle)
+            )
+            plan.price_multiplier = (
+                Decimal(str(incoming.price_multiplier)) if incoming.price_multiplier is not None else None
+            )
+            plan.price_delta = (
+                Decimal(str(incoming.price_delta)) if incoming.price_delta is not None else None
+            )
+            plan.is_default = incoming.is_default
+            plan.display_order = incoming.display_order if incoming.display_order is not None else index
+
+            seen_ids.add(str(plan.id))
+
+        for plan in list(product.subscription_plans):
+            if str(plan.id) not in seen_ids:
+                product.subscription_plans.remove(plan)
+                await self._session.delete(plan)
