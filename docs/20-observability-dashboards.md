@@ -31,6 +31,7 @@ Import `docs/20-grafana-dashboard.json` into Grafana (Dashboard → Import → U
 - **Stripe Webhook Failures** – time series of failed webhooks grouped by event type.
 - **Top Catalog Queries** – 5 highest-frequency search queries to assess merchandising demand.
 - **Catalog Zero-Result Rate** – stat or time series panel plotting `smplat_catalog_zero_results_rate` with alert thresholds that mirror the CI SLO.
+- **Loyalty Pipeline Health** – new row featuring referral invite acceptance, guardrail overrides, and nudge dispatch counts sourced from the `/api/v1/loyalty` analytics endpoints. Pair the panels with OTLP traces (filter on `server.action.feature="loyalty"`).
 
 ## Alert Rules
 
@@ -88,6 +89,7 @@ This ensures deployments halt if telemetry deviates before the change reaches pr
 
 - Promote the **Top Catalog Queries** panel into a weekly report for merchandising; export the table or back the panel with a Prometheus recording rule that captures the top N queries.
 - Establish SLOs around catalog health (for example, `zero_results_rate < 2%`, `search_latency_p95 < 500ms`) and encode them either as alerting rules or as thresholds in the GitHub Action variables.
+- Mirror the Loyalty Pipeline Health row in Grafana: add panels for `smplat_loyalty_referral_events_total`, `smplat_loyalty_guardrail_overrides_total`, and `smplat_loyalty_nudges_dispatched_total`, and back them with alerts when acceptance drops below configured baselines.
 - Annotate Grafana with campaign launches or bundle experiments so query trends can be correlated with CMS changes.
 - Share anomalies or fast-rising queries with the marketing team to tune CMS bundles and recommendation blocks on `/products`.
 - Leverage the new storefront insights block on `/products` (trending queries, top categories, zero-result rate) as a quick glance view; ensure it stays aligned with the Prometheus/Grafana data by periodically validating both sources against each other.

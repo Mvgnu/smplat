@@ -7,6 +7,7 @@ from smplat_api.app import create_app
 from smplat_api.core.settings import settings
 from smplat_api.observability.catalog import get_catalog_store
 from smplat_api.observability.fulfillment import get_fulfillment_store
+from smplat_api.observability.loyalty import get_loyalty_store
 from smplat_api.observability.payments import get_payment_store
 
 
@@ -52,6 +53,7 @@ async def test_prometheus_metrics_requires_key() -> None:
     app = create_app()
     store = get_catalog_store()
     store.reset()
+    get_loyalty_store().reset()
 
     previous_key = settings.checkout_api_key
     settings.checkout_api_key = "prom-key"
@@ -69,6 +71,7 @@ async def test_record_and_retrieve_catalog_search_snapshot() -> None:
     app = create_app()
     store = get_catalog_store()
     store.reset()
+    get_loyalty_store().reset()
 
     previous_key = settings.checkout_api_key
     settings.checkout_api_key = "snapshot-key"
@@ -113,6 +116,7 @@ async def test_prometheus_metrics_output() -> None:
     get_catalog_store().reset()
     get_fulfillment_store().reset()
     get_payment_store().reset()
+    get_loyalty_store().reset()
 
     previous_key = settings.checkout_api_key
     settings.checkout_api_key = "prom-key"

@@ -45,3 +45,8 @@
   `POST /api/v1/auth/attempts`. Successful session creation notifies the API through NextAuth events to reset counters.
 - Incident checklist: flush Redis keys matching `auth:*` after validating the event window, rotate API tokens if suspicious
   traffic replays originate off-network, and coordinate with ops before widening thresholds.
+
+## Operational telemetry
+- Poll `/api/v1/health/readyz` alongside `/healthz` to confirm fulfillment, recovery, scheduler, and digest workers are ready.
+- Structured JSON logs now include `service`, `trace_id`, and `span_id`. Search for `server_action_failed` to correlate web
+  server action failures with FastAPI traces captured via OTLP exporters.

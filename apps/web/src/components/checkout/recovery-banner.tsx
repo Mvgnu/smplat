@@ -44,6 +44,14 @@ export function CheckoutRecoveryBanner({
   loading,
   error
 }: CheckoutRecoveryBannerProps) {
+  const latestEvent = useMemo(() => {
+    const events = orchestration?.events ?? [];
+    if (!events.length) {
+      return null;
+    }
+    return events[events.length - 1];
+  }, [orchestration?.events]);
+
   if (loading) {
     return (
       <div
@@ -77,12 +85,6 @@ export function CheckoutRecoveryBanner({
   const nextAction = orchestration.nextActionAt
     ? formatDistanceToNow(new Date(orchestration.nextActionAt), { addSuffix: true })
     : null;
-  const latestEvent = useMemo(() => {
-    if (!orchestration.events.length) {
-      return null;
-    }
-    return orchestration.events[orchestration.events.length - 1];
-  }, [orchestration.events]);
 
   const statusLabel = orchestration.status.replace("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 

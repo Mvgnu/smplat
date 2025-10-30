@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.observability.catalog import get_catalog_store
 from smplat_api.observability.fulfillment import get_fulfillment_store
+from smplat_api.observability.loyalty import get_loyalty_store
 from smplat_api.observability.payments import get_payment_store
 from smplat_api.observability.scheduler import get_catalog_scheduler_store
 
@@ -77,6 +78,7 @@ async def get_prometheus_metrics() -> PlainTextResponse:
     payments_snapshot = get_payment_store().snapshot().as_dict()
     catalog_snapshot = get_catalog_store().snapshot().as_dict()
     scheduler_snapshot = get_catalog_scheduler_store().snapshot()
+    loyalty_snapshot = get_loyalty_store().snapshot().as_dict()
 
     lines: list[str] = []
 
@@ -201,6 +203,63 @@ async def get_prometheus_metrics() -> PlainTextResponse:
             catalog_metrics.get("average_results_per_search", 0.0),
         )
     )
+
+    loyalty_referrals = loyalty_snapshot.get("referrals", {})
+    for event, value in loyalty_referrals.items():
+        lines.extend(
+            _format_metric(
+                "smplat_loyalty_referral_events_total",
+                "Loyalty referral events grouped by outcome",
+                value,
+                labels={"event": event},
+            )
+        )
+
+    loyalty_guardrails = loyalty_snapshot.get("guardrails", {})
+    for key, value in loyalty_guardrails.items():
+        if key == "total_overrides":
+            lines.extend(
+                _format_metric(
+                    "smplat_loyalty_guardrail_overrides_total",
+                    "Guardrail overrides created grouped by scope",
+                    value,
+                    labels={"scope": "all"},
+                )
+            )
+            continue
+
+        if key.startswith("scope:"):
+            scope = key.split(":", 1)[1]
+        else:
+            scope = key
+        lines.extend(
+            _format_metric(
+                "smplat_loyalty_guardrail_overrides_total",
+                "Guardrail overrides created grouped by scope",
+                value,
+                labels={"scope": scope},
+            )
+        )
+
+    loyalty_nudges = loyalty_snapshot.get("nudges", {})
+    for nudge_type, value in loyalty_nudges.get("by_type", {}).items():
+        lines.extend(
+            _format_metric(
+                "smplat_loyalty_nudges_dispatched_total",
+                "Loyalty nudge dispatch counts grouped by type",
+                value,
+                labels={"type": nudge_type},
+            )
+        )
+    for channel, value in loyalty_nudges.get("by_channel", {}).items():
+        lines.extend(
+            _format_metric(
+                "smplat_loyalty_nudge_channels_total",
+                "Loyalty nudge dispatch counts grouped by channel",
+                value,
+                labels={"channel": channel},
+            )
+        )
 
     scheduler_totals = scheduler_snapshot.totals
     lines.extend(
