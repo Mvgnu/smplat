@@ -13,6 +13,7 @@ import {
   cancelMemberReferral,
   createMemberReferral
 } from "@/lib/loyalty/referrals";
+import { serverTelemetry } from "@/server/observability/tracing";
 
 const apiBase = process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const apiKeyHeader = process.env.CHECKOUT_API_KEY || process.env.NEXT_PUBLIC_CHECKOUT_API_KEY;
@@ -27,7 +28,7 @@ export type RedemptionRequestPayload = {
   csrfToken?: string;
 };
 
-export async function requestRedemption(payload: RedemptionRequestPayload): Promise<LoyaltyRedemption> {
+async function requestRedemptionImpl(payload: RedemptionRequestPayload): Promise<LoyaltyRedemption> {
   const { csrfToken: csrfFromPayload, ...requestPayload } = payload;
   const { session } = await requireRole("member");
   ensureCsrfToken({ tokenFromForm: csrfFromPayload ?? null });
@@ -65,6 +66,12 @@ export async function requestRedemption(payload: RedemptionRequestPayload): Prom
   return (await response.json()) as LoyaltyRedemption;
 }
 
+export const requestRedemption = serverTelemetry.wrapServerAction(
+  "storefront.loyalty.requestRedemption",
+  requestRedemptionImpl,
+  { "server.action.feature": "loyalty", "server.action.surface": "storefront" }
+);
+
 function buildBypassRedemption(rewardSlug: string): LoyaltyRedemption {
   return {
     id: `stub-${rewardSlug}-${Date.now()}`,
@@ -80,7 +87,7 @@ function buildBypassRedemption(rewardSlug: string): LoyaltyRedemption {
   };
 }
 
-export async function issueReferralInvite(
+async function issueReferralInviteImpl(
   payload: ReferralInviteCreatePayload & { csrfToken?: string }
 ): Promise<ReferralInviteResponse> {
   const { csrfToken: csrfFromPayload, ...requestPayload } = payload;
@@ -102,7 +109,13 @@ export async function issueReferralInvite(
   }
 }
 
-export async function cancelReferralInvite(
+export const issueReferralInvite = serverTelemetry.wrapServerAction(
+  "storefront.loyalty.issueReferral",
+  issueReferralInviteImpl,
+  { "server.action.feature": "loyalty", "server.action.surface": "storefront" }
+);
+
+async function cancelReferralInviteImpl(
   referralId: string,
   payload: ReferralInviteCancelPayload & { csrfToken?: string } = {}
 ): Promise<ReferralInviteResponse> {
@@ -125,9 +138,15 @@ export async function cancelReferralInvite(
   }
 }
 
+export const cancelReferralInvite = serverTelemetry.wrapServerAction(
+  "storefront.loyalty.cancelReferral",
+  cancelReferralInviteImpl,
+  { "server.action.feature": "loyalty", "server.action.surface": "storefront" }
+);
+
 export type LoyaltyNudgeStatus = "active" | "acknowledged" | "dismissed";
 
-export async function updateNudgeStatus(
+async function updateNudgeStatusImpl(
   nudgeId: string,
   status: LoyaltyNudgeStatus,
   csrfToken?: string
@@ -158,3 +177,9 @@ export async function updateNudgeStatus(
     throw new Error(message || "Failed to update loyalty nudge");
   }
 }
+
+export const updateNudgeStatus = serverTelemetry.wrapServerAction(
+  "storefront.loyalty.updateNudge",
+  updateNudgeStatusImpl,
+  { "server.action.feature": "loyalty", "server.action.surface": "storefront" }
+);
