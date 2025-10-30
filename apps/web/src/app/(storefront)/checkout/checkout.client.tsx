@@ -319,11 +319,11 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
       .map((item) => item.deliveryEstimate)
       .filter((estimate): estimate is NonNullable<typeof estimate> => Boolean(estimate));
 
-    let minDays: number | undefined;
-    let maxDays: number | undefined;
-    let totalAverage = 0;
-    let averageCount = 0;
-    let confidence: string | undefined;
+    let fallbackMinDays: number | undefined;
+    let fallbackMaxDays: number | undefined;
+    let fallbackAverageSum = 0;
+    let fallbackAverageCount = 0;
+    let fallbackConfidence: string | undefined;
     const narrativeSegments = new Set<string>();
 
     if (trustContent.guaranteeDescription) {
@@ -332,17 +332,23 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
 
     estimates.forEach((estimate) => {
       if (typeof estimate.minDays === "number") {
-        minDays = typeof minDays === "number" ? Math.min(minDays, estimate.minDays) : estimate.minDays;
+        fallbackMinDays =
+          typeof fallbackMinDays === "number"
+            ? Math.min(fallbackMinDays, estimate.minDays)
+            : estimate.minDays;
       }
       if (typeof estimate.maxDays === "number") {
-        maxDays = typeof maxDays === "number" ? Math.max(maxDays, estimate.maxDays) : estimate.maxDays;
+        fallbackMaxDays =
+          typeof fallbackMaxDays === "number"
+            ? Math.max(fallbackMaxDays, estimate.maxDays)
+            : estimate.maxDays;
       }
       if (typeof estimate.averageDays === "number") {
-        totalAverage += estimate.averageDays;
-        averageCount += 1;
+        fallbackAverageSum += estimate.averageDays;
+        fallbackAverageCount += 1;
       }
-      if (!confidence && estimate.confidence) {
-        confidence = estimate.confidence;
+      if (!fallbackConfidence && estimate.confidence) {
+        fallbackConfidence = estimate.confidence;
       }
       if (estimate.narrative) {
         narrativeSegments.add(estimate.narrative);
@@ -351,30 +357,62 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
       }
     });
 
-    let averageDays = averageCount > 0 ? Math.round(totalAverage / averageCount) : undefined;
+    const convertMinutesToDays = (minutes: number | null | undefined, mode: "ceil" | "round" = "round") => {
+      if (typeof minutes !== "number" || Number.isNaN(minutes)) {
+        return null;
+      }
+      const days = minutes / (60 * 24);
+      const normalized = mode === "ceil" ? Math.ceil(days) : Math.round(days);
+      return Math.max(1, normalized);
+    };
 
-    if (typeof averageDays !== "number" && typeof minDays === "number" && typeof maxDays === "number") {
-      averageDays = Math.round((minDays + maxDays) / 2);
-    }
+    const deliveryTimeline = trustContent.deliveryTimeline;
+    const resolvedTimeline = deliveryTimeline.resolved;
 
-    if (typeof minDays !== "number") {
-      minDays = 10;
-    }
-    if (typeof maxDays !== "number") {
-      maxDays = 14;
-    }
+    const minDays =
+      convertMinutesToDays(resolvedTimeline?.minMinutes, "round") ??
+      (typeof fallbackMinDays === "number" ? fallbackMinDays : convertMinutesToDays(deliveryTimeline.fallbackMinMinutes, "round")) ??
+      10;
+    const maxDays =
+      convertMinutesToDays(resolvedTimeline?.maxMinutes ?? resolvedTimeline?.p90Minutes, "ceil") ??
+      (typeof fallbackMaxDays === "number" ? fallbackMaxDays : convertMinutesToDays(deliveryTimeline.fallbackMaxMinutes, "ceil")) ??
+      14;
+
+    let averageDays =
+      convertMinutesToDays(resolvedTimeline?.averageMinutes ?? resolvedTimeline?.p50Minutes, "round") ??
+      (fallbackAverageCount > 0 ? Math.round(fallbackAverageSum / fallbackAverageCount) : undefined) ??
+      convertMinutesToDays(deliveryTimeline.fallbackAverageMinutes, "round") ??
+      (typeof fallbackMinDays === "number" && typeof fallbackMaxDays === "number"
+        ? Math.round((fallbackMinDays + fallbackMaxDays) / 2)
+        : undefined);
+
     if (typeof averageDays !== "number") {
       averageDays = Math.round((minDays + maxDays) / 2);
     }
 
-    if (!confidence) {
-      confidence = "Verified timeline";
+    const confidence =
+      resolvedTimeline?.confidence ??
+      deliveryTimeline.fallbackConfidence ??
+      fallbackConfidence ??
+      "Verified timeline";
+
+    if (deliveryTimeline.narrative) {
+      narrativeSegments.add(deliveryTimeline.narrative);
+    }
+    if (resolvedTimeline?.fallbackCopy) {
+      narrativeSegments.add(resolvedTimeline.fallbackCopy);
+    }
+    if (resolvedTimeline?.alerts?.length) {
+      resolvedTimeline.alerts
+        .map((code) => alertDescriptions[code] ?? null)
+        .filter((message): message is string => Boolean(message))
+        .forEach((message) => narrativeSegments.add(message));
     }
 
     const narrative = Array.from(narrativeSegments).join(" ");
 
     return { minDays, maxDays, averageDays, confidence, narrative };
-  }, [items, trustContent.guaranteeDescription]);
+  }, [items, trustContent.deliveryTimeline, trustContent.guaranteeDescription]);
 
   // meta: trust-module: checkout-performance
   const performanceSnapshots = useMemo(
