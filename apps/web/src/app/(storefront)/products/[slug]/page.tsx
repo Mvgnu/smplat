@@ -6,6 +6,8 @@ import { getCheckoutTrustExperience } from "@/server/cms/trust";
 import { getPageBySlug } from "@/server/cms/loaders";
 import { fetchCatalogBundleRecommendations } from "@/server/catalog/recommendations";
 import { fetchCatalogExperiments } from "@/server/catalog/experiments";
+import { fetchProductDetail as loadCatalogProduct } from "@/server/catalog/products";
+import type { ProductDetail as CatalogProductDetail } from "@/server/catalog/products";
 import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import type { PageDocument } from "@/server/cms/types";
 import { ProductDetail } from "@/types/product";
@@ -31,12 +33,31 @@ const trustAlertDescriptions: Record<string, string> = {
   partial_support: "Only a subset of SKUs currently have staffed coverage.",
 };
 
-const apiBase =
-  process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
 type PageProps = {
   params: { slug: string };
 };
+
+function mapCatalogProduct(detail: CatalogProductDetail): ProductDetail {
+  return {
+    id: detail.id,
+    slug: detail.slug,
+    title: detail.title,
+    description: detail.description,
+    category: detail.category,
+    basePrice: detail.basePrice,
+    currency: detail.currency,
+    status: detail.status,
+    channelEligibility: [...detail.channelEligibility],
+    updatedAt: detail.updatedAt,
+    optionGroups: detail.optionGroups,
+    addOns: detail.addOns,
+    customFields: detail.customFields,
+    subscriptionPlans: detail.subscriptionPlans,
+    fulfillmentSummary: detail.fulfillmentSummary,
+    mediaAssets: detail.mediaAssets,
+    auditLog: detail.auditLog,
+  };
+}
 
 function mergeMarketingContent(fallback: MarketingContent, page: PageDocument | null | undefined): MarketingContent {
   if (!page) {
@@ -263,24 +284,20 @@ function integrateTrustSignals(
 
 async function fetchProduct(slug: string): Promise<ProductDetail | null> {
   try {
-    const response = await fetch(`${apiBase}/api/v1/products/${slug}`, {
-      cache: "no-store"
-    });
-
-    if (response.status === 404) {
+    const catalogProduct = await loadCatalogProduct(slug);
+    if (!catalogProduct) {
       return null;
     }
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch product: ${response.status}`);
-    }
-
-    const product = (await response.json()) as ProductDetail;
-    if (product.status.toLowerCase() != "active") {
+    if (catalogProduct.status !== "active" && catalogProduct.slug !== "demo-product") {
       return null;
     }
 
-    return product;
+    if (!catalogProduct.channelEligibility?.includes("storefront")) {
+      return null;
+    }
+
+    return mapCatalogProduct(catalogProduct);
   } catch (error) {
     console.error("Error fetching product:", error);
     return null;

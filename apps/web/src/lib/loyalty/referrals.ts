@@ -4,15 +4,8 @@ import type {
   ReferralInviteResponse
 } from "@smplat/types";
 
-import {
-  cancelStubReferral,
-  issueStubReferral,
-  listStubReferrals
-} from "./referrals.stub";
-
 const apiBase =
   process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const allowBypass = process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "true";
 
 function buildSessionHeaders(userId: string): HeadersInit {
   return {
@@ -22,10 +15,6 @@ function buildSessionHeaders(userId: string): HeadersInit {
 }
 
 export async function fetchMemberReferrals(userId: string): Promise<ReferralInviteResponse[]> {
-  if (allowBypass) {
-    return listStubReferrals();
-  }
-
   const response = await fetch(`${apiBase}/api/v1/loyalty/referrals`, {
     cache: "no-store",
     headers: buildSessionHeaders(userId)
@@ -43,10 +32,6 @@ export async function createMemberReferral(
   userId: string,
   payload: ReferralInviteCreatePayload
 ): Promise<ReferralInviteResponse> {
-  if (allowBypass) {
-    return issueStubReferral({ inviteeEmail: payload.inviteeEmail ?? null });
-  }
-
   const response = await fetch(`${apiBase}/api/v1/loyalty/referrals`, {
     method: "POST",
     headers: buildSessionHeaders(userId),
@@ -69,10 +54,6 @@ export async function cancelMemberReferral(
   referralId: string,
   payload: ReferralInviteCancelPayload = {}
 ): Promise<ReferralInviteResponse> {
-  if (allowBypass) {
-    return cancelStubReferral(referralId);
-  }
-
   const response = await fetch(`${apiBase}/api/v1/loyalty/referrals/${referralId}/cancel`, {
     method: "POST",
     headers: buildSessionHeaders(userId),

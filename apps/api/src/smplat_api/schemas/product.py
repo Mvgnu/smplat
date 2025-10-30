@@ -187,6 +187,77 @@ class ProductDetailResponse(ProductResponse):
     audit_log: list[ProductAuditLogEntry] = Field(default_factory=list, alias="auditLog")
 
 
+class ProductOptionWrite(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID | None = Field(None, alias="id")
+    name: str
+    description: str | None = None
+    price_delta: float = Field(0.0, alias="priceDelta", ge=-100000, le=100000)
+    metadata: dict | None = Field(None, alias="metadata")
+    display_order: int = Field(0, alias="displayOrder", ge=0)
+
+
+class ProductOptionGroupWrite(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID | None = Field(None, alias="id")
+    name: str
+    description: str | None = None
+    group_type: ProductOptionGroupType = Field(..., alias="groupType")
+    is_required: bool = Field(False, alias="isRequired")
+    display_order: int = Field(0, alias="displayOrder", ge=0)
+    metadata: dict | None = Field(None, alias="metadata")
+    options: list[ProductOptionWrite] = Field(default_factory=list, alias="options")
+
+
+class ProductAddOnWrite(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID | None = Field(None, alias="id")
+    label: str
+    description: str | None = None
+    price_delta: float = Field(0.0, alias="priceDelta", ge=-100000, le=100000)
+    is_recommended: bool = Field(False, alias="isRecommended")
+    display_order: int = Field(0, alias="displayOrder", ge=0)
+
+
+class ProductCustomFieldWrite(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID | None = Field(None, alias="id")
+    label: str
+    field_type: ProductCustomFieldType = Field(..., alias="fieldType")
+    placeholder: str | None = None
+    help_text: str | None = Field(None, alias="helpText")
+    is_required: bool = Field(False, alias="isRequired")
+    display_order: int = Field(0, alias="displayOrder", ge=0)
+
+
+class ProductSubscriptionPlanWrite(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID | None = Field(None, alias="id")
+    label: str
+    description: str | None = None
+    billing_cycle: ProductSubscriptionBillingCycle = Field(..., alias="billingCycle")
+    price_multiplier: float | None = Field(None, alias="priceMultiplier", ge=0)
+    price_delta: float | None = Field(None, alias="priceDelta", ge=-100000, le=100000)
+    is_default: bool = Field(False, alias="isDefault")
+    display_order: int = Field(0, alias="displayOrder", ge=0)
+
+
+class ProductConfigurationMutation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    option_groups: list[ProductOptionGroupWrite] | None = Field(None, alias="optionGroups")
+    add_ons: list[ProductAddOnWrite] | None = Field(None, alias="addOns")
+    custom_fields: list[ProductCustomFieldWrite] | None = Field(None, alias="customFields")
+    subscription_plans: list[ProductSubscriptionPlanWrite] | None = Field(
+        None, alias="subscriptionPlans"
+    )
+
+
 class ProductCreate(BaseModel):
     slug: str
     title: str
@@ -196,6 +267,7 @@ class ProductCreate(BaseModel):
     currency: CurrencyEnum
     status: ProductStatus = ProductStatus.DRAFT
     channel_eligibility: list[str] = Field(default_factory=list, alias="channelEligibility")
+    configuration: ProductConfigurationMutation | None = Field(None, alias="configuration")
 
 
 class ProductUpdate(BaseModel):
@@ -206,6 +278,7 @@ class ProductUpdate(BaseModel):
     currency: CurrencyEnum | None = None
     status: ProductStatus | None = None
     channel_eligibility: list[str] | None = Field(None, alias="channelEligibility")
+    configuration: ProductConfigurationMutation | None = Field(None, alias="configuration")
 
 
 class ProductAssetCreate(BaseModel):

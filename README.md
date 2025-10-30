@@ -100,6 +100,9 @@ Maintain secrets in your platform secret manager (1Password, Vault, Doppler) and
 | Web (Next.js) | `NEXTAUTH_SECRET` | Encrypts NextAuth JWT + session cookies. |
 | Web (Next.js) | `NEXTAUTH_URL` | External base URL required for callback construction. |
 | Web (Next.js) | `CHECKOUT_API_KEY` | Shared key for storefront proxy routes and FastAPI checkout endpoints. |
+| Web (Next.js) | `MAINTENANCE_SERVICE_ACCOUNTS` | JSON array describing maintenance/service accounts (id, name, allowed tiers). |
+| Web (Next.js) | `MAINTENANCE_TOKEN_SECRET` | HMAC secret for issuing signed maintenance override tokens. |
+| Web (Next.js) | `AUTH_LOCKOUT_THRESHOLD`, `AUTH_LOCKOUT_WINDOW_MINUTES` | Configure lockout telemetry surfaced to operators during session binding. |
 | Web (Next.js) | `PAYLOAD_API_TOKEN`, `PAYLOAD_PREVIEW_SECRET`, `PAYLOAD_REVALIDATE_SECRET` | Authenticate CMS preview + webhook flows. |
 | Web (Next.js) | `RESEND_API_KEY` or SMTP credentials | Outbound email for auth and notifications. |
 | Web (Next.js) | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Client-side Stripe proxy credentials and webhook verification. |

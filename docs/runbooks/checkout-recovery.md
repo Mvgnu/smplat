@@ -17,7 +17,7 @@
 2. Confirm `/api/v1/checkout/orchestrations/:id` returns the persisted stage and that posting an event advances to the next stage.
 3. Seed a pending orchestration with `next_action_at` in the past, run `monitor_checkout_orchestrations`, and verify a new event with note "Recovery sweep executed" is recorded.
 4. Validate notification preferences by toggling `order_updates` for a member and rerunning the job—emails should be skipped and logged when disabled.
-5. In bypass mode (`NEXT_PUBLIC_E2E_AUTH_BYPASS=true`), ensure the success page renders a mocked orchestration without calling the API.
+5. When no checkout API key is configured (local maintenance mode), ensure the success page renders a mocked orchestration without calling the API.
 
 ## Failure triage
 - **API 404**: Indicates the order id was not found. Confirm the order exists and the orchestration row was created; the GET endpoint calls `get_or_create` to lazily seed if missing.

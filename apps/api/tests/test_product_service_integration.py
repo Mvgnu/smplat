@@ -5,8 +5,20 @@ from decimal import Decimal
 import pytest
 
 from smplat_api.models.customer_profile import CurrencyEnum
-from smplat_api.models.product import ProductStatusEnum
-from smplat_api.schemas.product import ProductCreate, ProductUpdate
+from smplat_api.models.product import ProductStatusEnum, ProductSubscriptionBillingCycleEnum
+from smplat_api.schemas.product import (
+    ProductAddOnWrite,
+    ProductConfigurationMutation,
+    ProductCreate,
+    ProductCustomFieldType,
+    ProductCustomFieldWrite,
+    ProductOptionGroupType,
+    ProductOptionGroupWrite,
+    ProductOptionWrite,
+    ProductSubscriptionBillingCycle,
+    ProductSubscriptionPlanWrite,
+    ProductUpdate,
+)
 from smplat_api.services.products import ProductService
 
 
@@ -115,3 +127,77 @@ async def test_product_audit_restore(session_factory):
         restored = await service.restore_from_audit(target_entry.id)
         assert restored is not None
         assert restored.title == "Audit Target"
+
+
+@pytest.mark.asyncio
+async def test_product_configuration_upsert_and_patch(session_factory):
+    async with session_factory() as session:
+        service = ProductService(session)
+
+        configuration = ProductConfigurationMutation(
+            option_groups=[
+                ProductOptionGroupWrite(
+                    name="Color",
+                    description="Select a palette",
+                    group_type=ProductOptionGroupType.SINGLE,
+                    is_required=True,
+                    display_order=0,
+                    options=[
+                        ProductOptionWrite(name="Crimson", priceDelta=15.0, displayOrder=0),
+                        ProductOptionWrite(name="Azure", priceDelta=0.0, displayOrder=1),
+                    ],
+                )
+            ],
+            add_ons=[
+                ProductAddOnWrite(
+                    label="Expedited Setup",
+                    description="Launch within 48 hours",
+                    priceDelta=75.0,
+                    isRecommended=True,
+                    displayOrder=0,
+                )
+            ],
+            custom_fields=[
+                ProductCustomFieldWrite(
+                    label="Brand Hex",
+                    field_type=ProductCustomFieldType.TEXT,
+                    is_required=True,
+                    display_order=0,
+                )
+            ],
+            subscription_plans=[
+                ProductSubscriptionPlanWrite(
+                    label="Monthly",
+                    billing_cycle=ProductSubscriptionBillingCycle.MONTHLY,
+                    price_multiplier=1.25,
+                    is_default=True,
+                    display_order=0,
+                )
+            ],
+        )
+
+        created = await service.create_product(
+            ProductCreate(
+                slug="configurable",
+                title="Configurable Campaign",
+                description="Flexible merchandising",
+                category="flex",
+                basePrice=300.0,
+                currency=CurrencyEnum.EUR,
+                status=ProductStatusEnum.ACTIVE,
+                channelEligibility=["storefront"],
+                configuration=configuration,
+            )
+        )
+
+        assert created.option_groups and len(created.option_groups[0].options) == 2
+        assert float(created.option_groups[0].options[0].price_delta) == 15.0
+        assert created.add_ons and created.add_ons[0].is_recommended is True
+        assert created.custom_fields and created.custom_fields[0].is_required is True
+        assert created.subscription_plans and created.subscription_plans[0].billing_cycle == ProductSubscriptionBillingCycleEnum.MONTHLY
+
+        patch_configuration = ProductConfigurationMutation(add_ons=[])
+        patched = await service.update_product(created, ProductUpdate(configuration=patch_configuration))
+
+        assert patched.option_groups and len(patched.option_groups[0].options) == 2
+        assert patched.add_ons == []

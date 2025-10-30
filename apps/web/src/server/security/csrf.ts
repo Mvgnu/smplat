@@ -45,7 +45,7 @@ export function ensureCsrfToken(options: EnsureOptions = {}): void {
     return;
   }
 
-  if (process.env.NODE_ENV !== "production" || process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "true") {
+  if (process.env.NODE_ENV !== "production") {
     console.warn("CSRF token missing or invalid – bypass permitted in non-production environment.");
     return;
   }

@@ -24,7 +24,12 @@ export const metadata: Metadata = {
 };
 
 export default async function LoyaltyReferralsPage() {
-  const { session } = await requireRole("member");
+  const { session } = await requireRole("member", {
+    context: {
+      route: "storefront.account.loyalty.referrals.page",
+      method: "GET"
+    }
+  });
   const csrfToken = getOrCreateCsrfToken();
 
   if (allowAuthBypass()) {

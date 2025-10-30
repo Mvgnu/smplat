@@ -13,7 +13,6 @@ import type {
 
 const apiBase = process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const apiKeyHeader = process.env.CHECKOUT_API_KEY || process.env.NEXT_PUBLIC_CHECKOUT_API_KEY;
-const allowBypass = process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "true";
 
 export async function fetchLoyaltyMember(userId: string): Promise<LoyaltyMemberSummary> {
   const response = await fetch(`${apiBase}/api/v1/loyalty/members/${userId}`, {
@@ -141,7 +140,7 @@ type VelocityFilters = {
 };
 
 export async function fetchLoyaltySegmentsSnapshot(): Promise<LoyaltySegmentsSnapshot> {
-  if (allowBypass || !apiKeyHeader) {
+  if (!apiKeyHeader) {
     return buildBypassSegmentsSnapshot();
   }
 
@@ -160,7 +159,7 @@ export async function fetchLoyaltySegmentsSnapshot(): Promise<LoyaltySegmentsSna
 export async function fetchLoyaltyVelocityTimeline(
   filters: VelocityFilters = {}
 ): Promise<LoyaltyVelocityTimeline> {
-  if (allowBypass || !apiKeyHeader) {
+  if (!apiKeyHeader) {
     return buildBypassVelocityTimeline();
   }
 
@@ -510,5 +509,5 @@ export function buildBypassVelocityTimeline(): LoyaltyVelocityTimeline {
 }
 
 export function allowAuthBypass(): boolean {
-  return allowBypass;
+  return !apiKeyHeader;
 }

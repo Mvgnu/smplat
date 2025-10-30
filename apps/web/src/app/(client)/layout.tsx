@@ -7,7 +7,13 @@ type ClientLayoutProps = {
 };
 
 export default async function ClientLayout({ children }: ClientLayoutProps) {
-  const { session } = await requireRole("member", { redirectTo: "/login" });
+  const { session } = await requireRole("member", {
+    redirectTo: "/login",
+    context: {
+      route: "client.layout",
+      method: "GET"
+    }
+  });
 
   const displayName = session.user?.name ?? session.user?.email ?? "Client";
 

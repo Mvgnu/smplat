@@ -22,7 +22,12 @@ export type GuardrailOverrideFormInput = {
 export async function submitGuardrailOverride(
   input: GuardrailOverrideFormInput
 ): Promise<LoyaltyGuardrailOverride> {
-  const { session } = await requireRole("operator");
+  const { session } = await requireRole("operator", {
+    context: {
+      route: "admin.loyalty.submitGuardrailOverride",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: input.csrfToken });
 
   const override = await createGuardrailOverride({

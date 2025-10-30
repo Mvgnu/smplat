@@ -11,7 +11,6 @@ import type {
 const apiBaseUrl =
   process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const apiKeyHeader = process.env.CHECKOUT_API_KEY ?? process.env.NEXT_PUBLIC_CHECKOUT_API_KEY;
-const allowBypass = process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "true";
 
 type GuardrailOverrideInput = {
   scope: LoyaltyGuardrailOverrideScope;
@@ -55,7 +54,7 @@ export function buildBypassGuardrailSnapshot(): LoyaltyGuardrailSnapshot {
 }
 
 export async function fetchGuardrailSnapshot(): Promise<LoyaltyGuardrailSnapshot> {
-  if (allowBypass || !apiKeyHeader) {
+  if (!apiKeyHeader) {
     return buildBypassGuardrailSnapshot();
   }
 
@@ -74,7 +73,7 @@ export async function fetchGuardrailSnapshot(): Promise<LoyaltyGuardrailSnapshot
 export async function createGuardrailOverride(
   input: GuardrailOverrideInput
 ): Promise<LoyaltyGuardrailOverride> {
-  if (allowBypass || !apiKeyHeader) {
+  if (!apiKeyHeader) {
     const now = new Date();
     return {
       id: `override-${now.getTime()}`,

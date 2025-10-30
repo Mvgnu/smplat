@@ -4,10 +4,7 @@ import type { Session } from "next-auth";
 import type { UserRole } from "@prisma/client";
 
 import { auth } from "./index";
-
-const allowBypass = process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS === "true";
-const bypassUserId = "00000000-0000-0000-0000-000000000001";
-const bypassEmail = "bypass@example.com";
+import { recordAccessEvent } from "../security/access-events";
 
 const roleRank: Record<UserRole, number> = {
   CLIENT: 0,
@@ -27,8 +24,13 @@ const defaultRedirect = "/login";
 
 export type RequireRoleOptions = {
   redirectTo?: string;
-  allowBypass?: boolean;
   onDenied?: () => never;
+  context?: {
+    route?: string;
+    method?: string;
+    serviceAccountId?: string;
+    subjectEmail?: string;
+  };
 };
 
 type RequireRoleResult = {
@@ -46,48 +48,23 @@ function ensureRole(role: UserRole | undefined | null, requiredTier: RoleTier): 
   return typeof rank === "number" && rank >= requiredRank;
 }
 
-function fallbackRole(requiredTier: RoleTier): UserRole | null {
-  if (requiredTier === "member") {
-    return allowBypass ? "CLIENT" : null;
-  }
-
-  if (requiredTier === "operator") {
-    return allowBypass ? "FINANCE" : null;
-  }
-
-  return null;
-}
-
-function buildBypassSession(role: UserRole): Session {
-  const expires = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString();
-  return {
-    user: {
-      id: bypassUserId,
-      email: bypassEmail,
-      name: "Bypass User",
-      role,
-      permissions: role === "ADMIN" ? ["admin:all"] : role === "FINANCE" ? ["operator:manage"] : ["member:read"]
-    },
-    expires
-  } as Session;
-}
-
 export async function requireRole(requiredTier: RoleTier, options: RequireRoleOptions = {}): Promise<RequireRoleResult> {
   const session = await auth();
   const redirectTo = options.redirectTo ?? defaultRedirect;
-  const bypassEnabled = allowBypass || options.allowBypass;
+  const context = options.context ?? {};
+  const route = context.route ?? "unknown";
+  const method = context.method;
 
   if (!session?.user) {
-    if (bypassEnabled) {
-      const bypassRole = fallbackRole(requiredTier);
-      if (bypassRole) {
-        return {
-          session: buildBypassSession(bypassRole),
-          role: bypassRole
-        };
-      }
-    }
-
+    await recordAccessEvent({
+      decision: "redirected",
+      reason: "unauthenticated",
+      route,
+      method,
+      requiredTier,
+      serviceAccountId: context.serviceAccountId,
+      subjectEmail: context.subjectEmail ?? null
+    });
     if (options.onDenied) {
       return options.onDenied();
     }
@@ -98,12 +75,32 @@ export async function requireRole(requiredTier: RoleTier, options: RequireRoleOp
   const resolvedRole = session.user.role;
 
   if (!ensureRole(resolvedRole, requiredTier)) {
+    await recordAccessEvent({
+      decision: "denied",
+      reason: "insufficient_role",
+      route,
+      method,
+      requiredTier,
+      userId: session.user.id,
+      subjectEmail: session.user.email ?? null,
+      serviceAccountId: context.serviceAccountId
+    });
     if (options.onDenied) {
       return options.onDenied();
     }
 
     throw new Error("User does not have permission to access this resource.");
   }
+
+  await recordAccessEvent({
+    decision: "allowed",
+    route,
+    method,
+    requiredTier,
+    userId: session.user.id,
+    subjectEmail: session.user.email ?? null,
+    serviceAccountId: context.serviceAccountId
+  });
 
   return { session: session as Session, role: resolvedRole };
 }

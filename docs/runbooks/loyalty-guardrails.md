@@ -27,7 +27,7 @@ temporarily relaxing limits.
 
 ## Testing & Bypass
 
-- Playwright tests set `NEXT_PUBLIC_E2E_AUTH_BYPASS=true`, activating the
+- Playwright tests run without a checkout API key, activating the
   in-memory snapshot in `guardrails.ts`. This enables UI verification without a
   running API.
 - API coverage lives in `apps/api/tests/test_loyalty_guardrails.py` and asserts

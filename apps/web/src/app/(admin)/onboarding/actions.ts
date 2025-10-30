@@ -19,7 +19,12 @@ export type ManualNudgeInput = {
 };
 
 export async function sendManualNudge(input: ManualNudgeInput): Promise<void> {
-  await requireRole("operator");
+  await requireRole("operator", {
+    context: {
+      route: "admin.onboarding.sendManualNudge",
+      method: "POST"
+    }
+  });
   ensureCsrfToken({ tokenFromForm: input.csrfToken });
 
   if (!input.journeyId) {
