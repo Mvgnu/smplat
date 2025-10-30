@@ -43,6 +43,13 @@ The API response includes `fallback_copy`, which storefronts display when alerts
 
 Operator dashboards should subscribe to these codes for proactive paging (e.g., send a Slack alert when `sla_breach_risk` is emitted for longer than two fetch cycles).
 
+### Checkout delivery timeline
+
+- The Next.js resolver (`apps/web/src/server/cms/trust.ts`) now binds `fulfillment_delivery_sla_forecast` to the checkout delivery timeline module. The resolver converts forecast minutes into kickoff/average/full-activation day ranges and persists the resolved payload on `CheckoutTrustExperience.deliveryTimeline.resolved`.
+- The storefront prefers live forecast data when available; fallback ranges defined in Payload populate the module if the metric is `missing`, `unsupported`, or flagged with alerts.
+- `/trust-preview/checkout` now renders the delivery timeline for both draft and live experiences so operators can compare fallback copy with live forecast badges. Use the preview to confirm confidence labels, alert codes, and raw minute values before publishing CMS updates.
+- When forecast alerts trigger, the storefront appends the human-readable alert descriptions to the timeline narrative. Verify Payload copy remains actionable while alerts persist.
+
 ## Regenerating metrics
 
 1. Call `POST /api/v1/trust/metrics/purge` with the relevant `metric_id` (or omit the field to flush all metrics). The endpoint responds with the purged identifiers.

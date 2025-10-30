@@ -14,6 +14,7 @@ import {
   restoreProductFromAudit,
 } from "@/server/catalog/products";
 import { ensureCsrfToken } from "@/server/security/csrf";
+import { serverTelemetry } from "@/server/observability/tracing";
 
 export type ActionState = {
   success: boolean;
@@ -50,7 +51,7 @@ function extractFormChannels(formData: FormData): string[] {
   return Array.from(normalized);
 }
 
-export async function updateProductChannelsAction(
+async function updateProductChannelsActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
@@ -74,7 +75,7 @@ export async function updateProductChannelsAction(
   }
 }
 
-export async function updateProductStatusAction(
+async function updateProductStatusActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
@@ -104,7 +105,7 @@ export async function updateProductStatusAction(
   }
 }
 
-export async function uploadProductAssetAction(
+async function uploadProductAssetActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
@@ -132,7 +133,7 @@ export async function uploadProductAssetAction(
   }
 }
 
-export async function upsertBundleAction(
+async function upsertBundleActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
@@ -186,7 +187,7 @@ export async function upsertBundleAction(
   }
 }
 
-export async function deleteBundleAction(
+async function deleteBundleActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
@@ -210,7 +211,7 @@ export async function deleteBundleAction(
   }
 }
 
-export async function restoreProductFromAuditAction(
+async function restoreProductFromAuditActionImpl(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
@@ -233,3 +234,39 @@ export async function restoreProductFromAuditAction(
     };
   }
 }
+
+export const updateProductChannelsAction = serverTelemetry.wrapServerAction(
+  "admin.merchandising.updateChannels",
+  updateProductChannelsActionImpl,
+  { "server.action.feature": "merchandising", "server.action.operation": "update_channels" }
+);
+
+export const updateProductStatusAction = serverTelemetry.wrapServerAction(
+  "admin.merchandising.updateStatus",
+  updateProductStatusActionImpl,
+  { "server.action.feature": "merchandising", "server.action.operation": "update_status" }
+);
+
+export const uploadProductAssetAction = serverTelemetry.wrapServerAction(
+  "admin.merchandising.uploadAsset",
+  uploadProductAssetActionImpl,
+  { "server.action.feature": "merchandising", "server.action.operation": "upload_asset" }
+);
+
+export const upsertBundleAction = serverTelemetry.wrapServerAction(
+  "admin.merchandising.upsertBundle",
+  upsertBundleActionImpl,
+  { "server.action.feature": "merchandising", "server.action.operation": "upsert_bundle" }
+);
+
+export const deleteBundleAction = serverTelemetry.wrapServerAction(
+  "admin.merchandising.deleteBundle",
+  deleteBundleActionImpl,
+  { "server.action.feature": "merchandising", "server.action.operation": "delete_bundle" }
+);
+
+export const restoreProductFromAuditAction = serverTelemetry.wrapServerAction(
+  "admin.merchandising.restoreProduct",
+  restoreProductFromAuditActionImpl,
+  { "server.action.feature": "merchandising", "server.action.operation": "restore_product" }
+);

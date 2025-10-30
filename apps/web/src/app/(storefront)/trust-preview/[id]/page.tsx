@@ -139,6 +139,69 @@ function SnapshotsPreview({ experience }: { experience: CheckoutTrustExperience 
   );
 }
 
+function TimelinePreview({ experience }: { experience: CheckoutTrustExperience }) {
+  const timeline = experience.deliveryTimeline;
+  const resolved = timeline.resolved;
+
+  const formatMinutes = (value: number | null | undefined): string | null => {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      return null;
+    }
+    if (value >= 60) {
+      const days = value / (60 * 24);
+      if (days >= 1) {
+        return `${days.toFixed(1)}d`;
+      }
+      return `${Math.round(value / 60)}h`;
+    }
+    return `${Math.round(value)}m`;
+  };
+
+  const min = formatMinutes(resolved?.minMinutes ?? timeline.fallbackMinMinutes ?? null);
+  const avg = formatMinutes(resolved?.averageMinutes ?? timeline.fallbackAverageMinutes ?? null);
+  const max = formatMinutes(
+    resolved?.maxMinutes ?? resolved?.p90Minutes ?? timeline.fallbackMaxMinutes ?? null,
+  );
+
+  return (
+    <section className="space-y-3">
+      <h3 className="text-sm font-semibold text-white">Delivery timeline</h3>
+      <div className="space-y-2 rounded-2xl border border-white/10 bg-white/5 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-white">{timeline.headline}</p>
+            <p className="text-xs text-white/60">{timeline.narrative}</p>
+          </div>
+          <span className="text-xs text-white/50">{formatMetricState(timeline.metric)}</span>
+        </div>
+        <dl className="grid grid-cols-3 gap-3 text-xs text-white/70">
+          <div>
+            <dt className="text-white/50">Min</dt>
+            <dd className="text-sm font-semibold text-white">{min ?? "n/a"}</dd>
+          </div>
+          <div>
+            <dt className="text-white/50">Avg</dt>
+            <dd className="text-sm font-semibold text-white">{avg ?? "n/a"}</dd>
+          </div>
+          <div>
+            <dt className="text-white/50">Max</dt>
+            <dd className="text-sm font-semibold text-white">{max ?? "n/a"}</dd>
+          </div>
+        </dl>
+        {resolved?.confidence ? (
+          <p className="text-xs text-white/50">Confidence: {resolved.confidence}</p>
+        ) : timeline.fallbackConfidence ? (
+          <p className="text-xs text-white/50">Confidence: {timeline.fallbackConfidence}</p>
+        ) : null}
+        {resolved?.alerts?.length ? (
+          <p className="text-xs text-white/50">Alerts: {resolved.alerts.join(", ")}</p>
+        ) : null}
+        <MetricDetails metric={timeline.metric} />
+      </div>
+    </section>
+  );
+}
+
 export default async function TrustPreviewPage({ params, searchParams }: PageProps) {
   const slug = params.id || "checkout";
   const previewToken = process.env.CHECKOUT_PREVIEW_TOKEN ?? "";
@@ -179,6 +242,7 @@ export default async function TrustPreviewPage({ params, searchParams }: PagePro
           </div>
           <AssurancesPreview experience={draftExperience} />
           <SnapshotsPreview experience={draftExperience} />
+          <TimelinePreview experience={draftExperience} />
         </article>
 
         <article className="space-y-6 rounded-3xl border border-emerald-400/30 bg-emerald-500/10 p-6 backdrop-blur">
@@ -190,6 +254,7 @@ export default async function TrustPreviewPage({ params, searchParams }: PagePro
           </div>
           <AssurancesPreview experience={liveExperience} />
           <SnapshotsPreview experience={liveExperience} />
+          <TimelinePreview experience={liveExperience} />
         </article>
       </section>
     </main>

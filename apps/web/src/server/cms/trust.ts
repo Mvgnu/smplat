@@ -1,4 +1,10 @@
 import { cache } from "react";
+
+import {
+  CheckoutDeliveryTimeline,
+  CheckoutDeliveryTimelineResolved,
+  deriveDeliveryTimelineResolution,
+} from "./delivery-timeline";
 import "server-only";
 
 import { z } from "zod";
@@ -139,6 +145,7 @@ export type CheckoutTrustExperience = {
   performanceSnapshots: CheckoutPerformanceSnapshot[];
   testimonials: CheckoutTestimonial[];
   bundleOffers: CheckoutBundleOffer[];
+  deliveryTimeline: CheckoutDeliveryTimeline;
 };
 
 const metricBindingSchema = z
@@ -210,6 +217,18 @@ const checkoutTrustSchema = z.object({
         savings: z.string().optional(),
       })
     )
+    .optional(),
+  deliveryTimeline: z
+    .object({
+      id: z.string().optional(),
+      headline: z.string().optional(),
+      narrative: z.string().optional(),
+      fallbackMinMinutes: z.number().optional(),
+      fallbackMaxMinutes: z.number().optional(),
+      fallbackAverageMinutes: z.number().optional(),
+      fallbackConfidence: z.string().optional(),
+      metric: metricBindingSchema,
+    })
     .optional(),
 });
 
@@ -360,6 +379,22 @@ const fallbackExperience: CheckoutTrustExperience = {
       savings: "Save 8%",
     },
   ],
+  deliveryTimeline: {
+    id: "delivery-forecast",
+    headline: "Verified delivery forecast",
+    narrative:
+      "Forecast blends fulfillment backlog, staffing rosters, and completion history so operators keep launch windows on track.",
+    fallbackMinMinutes: 10 * 24 * 60,
+    fallbackMaxMinutes: 14 * 24 * 60,
+    fallbackAverageMinutes: 12 * 24 * 60,
+    fallbackConfidence: "Verified timeline",
+    metric: {
+      metricId: "fulfillment_delivery_sla_forecast",
+      metricSource: "fulfillment",
+      freshnessWindowMinutes: 120,
+      provenanceNote: "Projected clearance horizon across all fulfillment pods.",
+    },
+  },
 };
 
 type TrustMetricResolution = {
@@ -573,6 +608,16 @@ const cloneExperience = (experience: CheckoutTrustExperience): CheckoutTrustExpe
   })),
   testimonials: experience.testimonials.map((testimonial) => ({ ...testimonial })),
   bundleOffers: experience.bundleOffers.map((bundle) => ({ ...bundle })),
+  deliveryTimeline: {
+    ...experience.deliveryTimeline,
+    metric: cloneMetric(experience.deliveryTimeline.metric),
+    resolved: experience.deliveryTimeline.resolved
+      ? {
+          ...experience.deliveryTimeline.resolved,
+          alerts: [...(experience.deliveryTimeline.resolved.alerts ?? [])],
+        }
+      : undefined,
+  },
 });
 
 const createMetricVerification = (
@@ -706,6 +751,34 @@ const normalizeCheckoutTrust = (doc: unknown): CheckoutTrustExperience | null =>
     })
     .filter(Boolean) as CheckoutBundleOffer[];
 
+  const deliveryTimelineInput = data.deliveryTimeline ?? {};
+  const deliveryTimeline: CheckoutDeliveryTimeline = {
+    id: deliveryTimelineInput.id ?? fallbackExperience.deliveryTimeline.id,
+    headline:
+      deliveryTimelineInput.headline ??
+      fallbackExperience.deliveryTimeline.headline,
+    narrative:
+      deliveryTimelineInput.narrative ??
+      fallbackExperience.deliveryTimeline.narrative,
+    fallbackMinMinutes:
+      typeof deliveryTimelineInput.fallbackMinMinutes === "number"
+        ? deliveryTimelineInput.fallbackMinMinutes
+        : fallbackExperience.deliveryTimeline.fallbackMinMinutes,
+    fallbackMaxMinutes:
+      typeof deliveryTimelineInput.fallbackMaxMinutes === "number"
+        ? deliveryTimelineInput.fallbackMaxMinutes
+        : fallbackExperience.deliveryTimeline.fallbackMaxMinutes,
+    fallbackAverageMinutes:
+      typeof deliveryTimelineInput.fallbackAverageMinutes === "number"
+        ? deliveryTimelineInput.fallbackAverageMinutes
+        : fallbackExperience.deliveryTimeline.fallbackAverageMinutes,
+    fallbackConfidence:
+      deliveryTimelineInput.fallbackConfidence ??
+      fallbackExperience.deliveryTimeline.fallbackConfidence,
+    metric: createMetricVerification(deliveryTimelineInput.metric ?? undefined),
+    resolved: undefined,
+  };
+
   return {
     slug,
     guaranteeHeadline: data.guaranteeHeadline ?? fallbackExperience.guaranteeHeadline,
@@ -715,6 +788,7 @@ const normalizeCheckoutTrust = (doc: unknown): CheckoutTrustExperience | null =>
     performanceSnapshots,
     testimonials,
     bundleOffers,
+    deliveryTimeline,
   } satisfies CheckoutTrustExperience;
 };
 
@@ -735,6 +809,7 @@ const buildMetricRequests = (
 
   experience.assurances.forEach((assurance) => register(assurance.metric));
   experience.performanceSnapshots.forEach((snapshot) => register(snapshot.metric));
+  register(experience.deliveryTimeline.metric);
 
   const requests: TrustMetricRequestPayload[] = [];
   registry.forEach((metrics, metricId) => {
@@ -927,6 +1002,10 @@ const resolveExperienceMetrics = async (experience: CheckoutTrustExperience): Pr
 
     return snapshot;
   });
+
+  experience.deliveryTimeline.resolved = deriveDeliveryTimelineResolution(
+    experience.deliveryTimeline,
+  );
 };
 
 const mergeWithFallback = (
@@ -956,6 +1035,12 @@ const mergeWithFallback = (
       (experience?.bundleOffers?.length ?? 0) > 0
         ? experience!.bundleOffers
         : fallbackExperience.bundleOffers,
+    deliveryTimeline: {
+      ...fallbackExperience.deliveryTimeline,
+      ...(experience?.deliveryTimeline ?? fallbackExperience.deliveryTimeline),
+      metric: experience?.deliveryTimeline?.metric ?? fallbackExperience.deliveryTimeline.metric,
+      resolved: experience?.deliveryTimeline?.resolved,
+    },
   });
 };
 

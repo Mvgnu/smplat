@@ -21,3 +21,8 @@ Each document provides repeatable, end-to-end procedures for responding to event
 
 - The admin merchandising workflow is documented in [`merchandising-console.md`](./merchandising-console.md).
 - Covers product channel gating, asset uploads, bundle CRUD, staging promotion, and QA expectations.
+
+## Incident Response
+
+- Use [`incident-response.md`](./incident-response.md) to coordinate detection, mitigation, and
+  postmortem steps across API workers and web surfaces.
