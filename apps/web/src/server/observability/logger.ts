@@ -4,17 +4,19 @@ type LogLevel = "info" | "warn" | "error";
 
 type LogMeta = Record<string, unknown> | undefined;
 
-const write = (level: LogLevel, message: string, meta: LogMeta) => {
+const serialize = (payload: Record<string, unknown>) => JSON.stringify(payload);
+
+const write = (level: LogLevel, message: string, namespace: string, meta: LogMeta) => {
   const payload = {
     // meta: logger=structured
-    namespace: "cms",
+    namespace,
     level,
     message,
     timestamp: new Date().toISOString(),
     ...meta
-  };
+  } satisfies Record<string, unknown>;
 
-  const serialized = JSON.stringify(payload);
+  const serialized = serialize(payload);
   if (level === "error") {
     console.error(serialized);
     return;
@@ -26,8 +28,12 @@ const write = (level: LogLevel, message: string, meta: LogMeta) => {
   console.log(serialized);
 };
 
-export const cmsLogger = {
-  info: (message: string, meta?: Record<string, unknown>) => write("info", message, meta),
-  warn: (message: string, meta?: Record<string, unknown>) => write("warn", message, meta),
-  error: (message: string, meta?: Record<string, unknown>) => write("error", message, meta)
-};
+const buildLogger = (namespace: string) => ({
+  info: (message: string, meta?: Record<string, unknown>) => write("info", message, namespace, meta),
+  warn: (message: string, meta?: Record<string, unknown>) => write("warn", message, namespace, meta),
+  error: (message: string, meta?: Record<string, unknown>) => write("error", message, namespace, meta)
+});
+
+export const cmsLogger = buildLogger("cms");
+export const appLogger = buildLogger("app");
+export const buildStructuredLogger = buildLogger;

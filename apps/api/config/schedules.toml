@@ -40,6 +40,15 @@ base_backoff_seconds = 30
 max_backoff_seconds = 300
 jitter_seconds = 10
 
+[jobs.loyalty_nudge_dispatcher]
+id = "loyalty-nudge-dispatcher"
+task = "smplat_api.jobs.loyalty.nudge_dispatcher.dispatch_loyalty_nudges"
+cron = "5-59/10 * * * *"
+max_attempts = 3
+base_backoff_seconds = 30
+max_backoff_seconds = 300
+jitter_seconds = 10
+
 [jobs.loyalty_analytics_snapshot]
 id = "loyalty-analytics-snapshot"
 task = "smplat_api.jobs.loyalty.analytics.capture_loyalty_analytics_snapshot"

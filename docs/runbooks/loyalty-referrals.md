@@ -46,13 +46,14 @@ This runbook captures operational guidance for the loyalty tier system and refer
 
 ## Scheduler & Jobs
 - `run_loyalty_progression` (APScheduler) grants weekly streak bonuses, processes expirations via `LoyaltyService.expire_scheduled_points`, and emits job telemetry. Configure via `CatalogJobScheduler` when enabling loyalty cadence.
-- `aggregate_loyalty_nudges` (APScheduler) runs every 10 minutes via the `loyalty_nudge_aggregation` job in `apps/api/config/schedules.toml`. It first invokes `LoyaltyService.aggregate_nudge_candidates` to refresh persisted nudges, then uses `collect_nudge_dispatch_batch` + `NotificationService.send_loyalty_nudge` to fan-out across email/push backends while respecting marketing preferences, per-nudge cooldowns, and `mark_nudges_triggered` updates.
+- `aggregate_loyalty_nudges` (APScheduler) runs every 10 minutes via the `loyalty_nudge_aggregation` job in `apps/api/config/schedules.toml`. It invokes `LoyaltyService.aggregate_nudge_candidates` to refresh persisted nudges and persists any new/updated records for downstream dispatch.
+- `dispatch_loyalty_nudges` (APScheduler) runs five minutes after aggregation via the `loyalty_nudge_dispatcher` schedule. It pulls `collect_nudge_dispatch_batch`, plans multi-channel delivery order (email → SMS → push fallback), fans out via `NotificationService.send_loyalty_nudge`, and calls `mark_nudges_triggered` to record dispatch events + cooldown timestamps. Observability counters increment per nudge type/channel.
 - `capture_loyalty_analytics_snapshot` (APScheduler) executes nightly via the `loyalty_analytics_snapshot` schedule to persist segmentation + velocity analytics for dashboards.
 - Health snapshots surface through scheduler telemetry endpoints—verify `loyalty` sweep metrics are present before campaign launches.
 
 ## Notifications
 Tier upgrades trigger the `NotificationService.send_loyalty_tier_upgrade` helper which honors marketing preferences and renders the `render_loyalty_tier_upgrade` template. Templates live alongside other notification assets to keep formatting consistent.
-Loyalty nudges now hydrate from `loyalty_nudge_campaigns` to determine channel preference ordering (email, SMS, push) before invoking `NotificationService.send_loyalty_nudge`, which records a `loyalty_nudge_dispatch_events` row per delivery and reuses marketing preference checks. Scheduler-driven fan-out should call `mark_nudges_triggered` after dispatch so cooldown windows hold, and storefront polling rails (loyalty hub, referral hub, checkout success) provide same-session visibility into pending nudges.
+Loyalty nudges now hydrate from `loyalty_nudge_campaigns` to determine channel preference ordering. The dispatcher iterates through the ordered channels with automatic fallback (email → SMS → push) and records a `loyalty_nudge_dispatch_events` row for the channel that successfully delivered while reusing marketing preference checks. Scheduler-driven fan-out calls `mark_nudges_triggered` after dispatch so cooldown windows hold, and storefront polling rails (loyalty hub, referral hub, checkout success) provide same-session visibility into pending nudges.
 
 ## QA Checklist
 1. Apply migrations via `poetry run alembic upgrade head` from `apps/api`.

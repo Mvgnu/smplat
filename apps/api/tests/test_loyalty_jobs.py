@@ -7,10 +7,13 @@ import pytest
 
 from sqlalchemy import select
 
+from smplat_api.jobs.loyalty.nudge_dispatcher import dispatch_loyalty_nudges
 from smplat_api.jobs.loyalty.nudges import aggregate_loyalty_nudges
 from smplat_api.models.loyalty import (
     LoyaltyMember,
     LoyaltyNudge,
+    LoyaltyNudgeDispatchEvent,
+    LoyaltyNudgeChannel,
     LoyaltyPointExpiration,
     LoyaltyPointExpirationStatus,
     LoyaltyTier,
@@ -22,8 +25,8 @@ from smplat_api.services.notifications import InMemoryEmailBackend, Notification
 
 
 @pytest.mark.asyncio
-async def test_loyalty_nudge_job_refreshes_and_dispatches(session_factory, monkeypatch) -> None:
-    """Nudge aggregation job should persist nudges and dispatch notifications."""
+async def test_loyalty_nudge_jobs_refresh_and_dispatch(session_factory, monkeypatch) -> None:
+    """Aggregation refreshes nudges and dispatcher fans out notifications."""
 
     monkeypatch.setattr(
         NotificationService,
@@ -60,8 +63,13 @@ async def test_loyalty_nudge_job_refreshes_and_dispatches(session_factory, monke
 
     assert summary["members_refreshed"] >= 1
     assert summary["nudges_refreshed"] >= 1
-    assert summary["dispatch_attempts"] >= 1
-    assert summary["notifications_sent"] == summary["dispatch_attempts"]
+    assert summary["pending_dispatch"] >= 1
+
+    dispatch_summary = await dispatch_loyalty_nudges(session_factory=session_factory)
+
+    assert dispatch_summary["dispatch_attempts"] >= 1
+    assert dispatch_summary["notifications_sent"] == dispatch_summary["dispatch_attempts"]
+    assert dispatch_summary["fallback_dispatches"] == 0
 
     async with session_factory() as session:
         nudges = (await session.execute(select(LoyaltyNudge))).scalars().all()
@@ -74,3 +82,57 @@ async def test_loyalty_nudge_job_refreshes_and_dispatches(session_factory, monke
         assert member is not None
         cards = await LoyaltyService(session).list_member_nudges(member, now=dt.datetime.now(dt.timezone.utc))
         assert cards
+
+
+@pytest.mark.asyncio
+async def test_loyalty_nudge_dispatcher_fallback(session_factory, monkeypatch) -> None:
+    """Dispatcher should attempt fallback channels when the primary channel is unavailable."""
+
+    monkeypatch.setattr(
+        NotificationService,
+        "_build_default_backend",
+        lambda self: None,
+    )
+
+    async with session_factory() as session:
+        service = LoyaltyService(session)
+
+        tier = LoyaltyTier(slug="fallback", name="Fallback", point_threshold=Decimal("0"), benefits=[])
+        user = User(
+            email="fallback@example.com",
+            display_name="Fallback Member",
+            phone_number="+15555550123",
+        )
+        session.add_all([tier, user])
+        await session.flush()
+
+        preference = NotificationPreference(user_id=user.id, marketing_messages=True)
+        session.add(preference)
+        await session.flush()
+
+        member = await service.ensure_member(user.id)
+        now = dt.datetime.now(dt.timezone.utc)
+
+        expiration = LoyaltyPointExpiration(
+            member_id=member.id,
+            points=Decimal("15"),
+            consumed_points=Decimal("0"),
+            expires_at=now + dt.timedelta(days=2),
+            status=LoyaltyPointExpirationStatus.SCHEDULED,
+        )
+        session.add(expiration)
+        await session.commit()
+
+    await aggregate_loyalty_nudges(session_factory=session_factory)
+    dispatch_summary = await dispatch_loyalty_nudges(session_factory=session_factory)
+
+    assert dispatch_summary["dispatch_attempts"] >= 1
+    assert dispatch_summary["notifications_sent"] == 1
+    assert dispatch_summary["fallback_dispatches"] == 1
+
+    async with session_factory() as session:
+        events = (
+            await session.execute(select(LoyaltyNudgeDispatchEvent))
+        ).scalars().all()
+        assert events
+        assert any(event.channel == LoyaltyNudgeChannel.SMS for event in events)
