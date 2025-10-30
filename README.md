@@ -77,4 +77,38 @@ Full-stack platform for social media service storefronts.
 - Set `CHECKOUT_API_KEY` in both `apps/api/.env` and `apps/web/.env`; the frontend proxies checkout requests through `/api/checkout` and attaches the key via `X-API-Key`.
 - Payload seeds include product landing pages so storefront detail routes render CMS-driven hero, metrics, testimonials, and FAQs. Set `CMS_PROVIDER=sanity` in `apps/web/.env` if you need to temporarily fall back to Sanity and ensure the matching Sanity datasets are seeded.
 
+## Security & Authentication
+
+### RBAC & Session Enforcement
+- Server-side middleware (`apps/web/middleware.ts`) protects `/admin`, `/dashboard`, `/account`, and sensitive REST routes. Requests without an authenticated session are redirected to `/login` with the original URL preserved in the `next` query string.
+- Role tiers map to Prisma `UserRole` values through `requireRole` (`apps/web/src/server/auth/policies.ts`). Layouts and server actions call this helper before hydrating client boundaries to ensure admin and operator tooling never renders for unauthorized users.
+- CSRF protection uses a double-submit token issued by `getOrCreateCsrfToken` and verified by `ensureCsrfToken` inside server actions. Storefront forms must post the hidden `smplatCsrfToken` field or send the `x-smplat-csrf` header.
+
+### HTTP & Session Hardening
+- Security headers (CSP, HSTS, Permissions-Policy, X-Frame-Options) are configured in `apps/web/next.config.mjs`. Adjust allowlists by editing the `selfCsp` array and redeploying.
+- Rate limiting and lockout policies are enforced at two layers:
+  - Edge middleware throttles `/api/auth`, `/api/checkout`, `/api/loyalty`, and `/api/onboarding` calls. Defaults allow 10 auth attempts/min and 20–30 calls/min for other surfaces.
+  - The FastAPI auth service tracks brute-force attempts in Redis (`apps/api/src/smplat_api/services/auth/lockout_service.py`). Five failures in five minutes trigger a 15-minute lock.
+- Production deployments must set `NODE_ENV=production` so NextAuth issues `__Host-` prefixed cookies with `SameSite=Lax` and `Secure`.
+- Review [`docs/runbooks/security.md`](./docs/runbooks/security.md) for onboarding, promotion, and incident response procedures.
+
+### Environment Secrets
+Maintain secrets in your platform secret manager (1Password, Vault, Doppler) and inject them at deploy time. Minimum variables per service:
+
+| Surface | Variable | Purpose |
+| --- | --- | --- |
+| Web (Next.js) | `NEXTAUTH_SECRET` | Encrypts NextAuth JWT + session cookies. |
+| Web (Next.js) | `NEXTAUTH_URL` | External base URL required for callback construction. |
+| Web (Next.js) | `CHECKOUT_API_KEY` | Shared key for storefront proxy routes and FastAPI checkout endpoints. |
+| Web (Next.js) | `PAYLOAD_API_TOKEN`, `PAYLOAD_PREVIEW_SECRET`, `PAYLOAD_REVALIDATE_SECRET` | Authenticate CMS preview + webhook flows. |
+| Web (Next.js) | `RESEND_API_KEY` or SMTP credentials | Outbound email for auth and notifications. |
+| Web (Next.js) | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Client-side Stripe proxy credentials and webhook verification. |
+| API (FastAPI) | `SECRET_KEY` | Cryptographic signing + CSRF token validation. |
+| API (FastAPI) | `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET` | Payment capture and webhook validation. |
+| API (FastAPI) | `LEXOFFICE_CLIENT_ID`, `LEXOFFICE_CLIENT_SECRET` | Optional invoicing integration. |
+| API (FastAPI) | `SENTRY_DSN` | Structured error + trace export. |
+| Shared | `DATABASE_URL`, `REDIS_URL` | Primary Postgres and Redis connection strings. |
+
+Rotate secrets after incident response events and record changes in the security runbook. Use environment-specific `.env` files for local development only.
+
 Refer to `/docs` for architecture, roadmap, and implementation details.
