@@ -9,10 +9,14 @@ from smplat_api.core.settings import settings
 from smplat_api.db.session import async_session
 from .api.routes import api_router
 from .core.logging import configure_logging
+from .observability.tracing import configure_tracing
 from .services.fulfillment import TaskProcessor
 from .services.notifications import WeeklyDigestScheduler
 from .scheduling import CatalogJobScheduler
 from .workers import BundleExperimentGuardrailWorker, HostedSessionRecoveryWorker
+
+
+APP_VERSION = "0.1.0"
 
 
 def _session_factory():
@@ -154,15 +158,26 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Application factory for SMPLAT FastAPI service."""
-    configure_logging()
+    configure_logging(
+        service_name="smplat-api",
+        environment=settings.environment,
+        version=APP_VERSION,
+    )
 
     app = FastAPI(
         title="SMPLAT API",
-        version="0.1.0",
+        version=APP_VERSION,
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         lifespan=lifespan,
+    )
+
+    configure_tracing(
+        app,
+        service_name="smplat-api",
+        service_version=APP_VERSION,
+        environment=settings.environment,
     )
 
     app.include_router(api_router)
@@ -172,7 +187,7 @@ def create_app() -> FastAPI:
         return {
             "status": "ok",
             "environment": settings.environment,
-            "version": "0.1.0",
+            "version": APP_VERSION,
         }
 
     return app

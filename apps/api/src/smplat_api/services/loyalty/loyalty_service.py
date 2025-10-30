@@ -44,6 +44,7 @@ from smplat_api.models.loyalty import (
 from smplat_api.models.user import User
 from smplat_api.services.notifications import NotificationService
 from smplat_api.core.settings import settings
+from smplat_api.observability.loyalty import get_loyalty_store
 
 
 CHECKOUT_INTENT_DEFAULT_TTL = timedelta(days=14)
@@ -175,6 +176,7 @@ class LoyaltyService:
         self._db = db_session
         self._notifications = notification_service or NotificationService(db_session)
         self._campaign_cache: dict[str, NudgeCampaignConfig] | None = None
+        self._observability = get_loyalty_store()
 
     async def _get_campaigns(self) -> dict[str, NudgeCampaignConfig]:
         """Load loyalty nudge campaigns from persistence."""
@@ -219,6 +221,58 @@ class LoyaltyService:
         if not resolved:
             resolved = [LoyaltyNudgeChannel.EMAIL]
         return resolved
+
+    def _plan_dispatch_channels(
+        self,
+        nudge: LoyaltyNudge,
+        campaign: NudgeCampaignConfig,
+        *,
+        now: datetime,
+    ) -> list[LoyaltyNudgeChannel]:
+        """Plan channel order for dispatch with fallback escalation."""
+
+        base_channels = self._normalize_channels(
+            nudge.channel_preferences or campaign.channels
+        )
+        if not base_channels:
+            base_channels = [LoyaltyNudgeChannel.EMAIL]
+
+        events = sorted(
+            list(nudge.dispatch_events or []),
+            key=lambda event: event.sent_at
+            if event.sent_at is not None
+            else datetime.min.replace(tzinfo=timezone.utc),
+        )
+        attempted: list[LoyaltyNudgeChannel] = []
+        for event in events:
+            channel_value = (
+                event.channel.value
+                if isinstance(event.channel, LoyaltyNudgeChannel)
+                else str(event.channel)
+            )
+            try:
+                attempted.append(LoyaltyNudgeChannel(channel_value))
+            except ValueError:
+                logger.warning(
+                    "Ignoring unsupported dispatch event channel", channel=channel_value
+                )
+
+        # Always append SMS/PUSH for fallback sequencing to ensure multi-channel fan-out.
+        fallback_order: list[LoyaltyNudgeChannel] = []
+        for channel in [*base_channels, LoyaltyNudgeChannel.SMS, LoyaltyNudgeChannel.PUSH]:
+            if channel not in fallback_order:
+                fallback_order.append(channel)
+
+        # Prioritize channels that have not yet been attempted for this nudge.
+        plan: list[LoyaltyNudgeChannel] = [
+            channel for channel in fallback_order if channel not in attempted
+        ]
+        plan.extend(channel for channel in fallback_order if channel in attempted)
+
+        if not plan:
+            plan = [LoyaltyNudgeChannel.EMAIL]
+
+        return plan
 
     @staticmethod
     def _resolve_campaign(
@@ -389,6 +443,7 @@ class LoyaltyService:
         self._db.add(referral)
         await self._db.flush()
         logger.info("Issued referral invite", code=code, member_id=str(member.id))
+        self._observability.record_referral_event("issued")
         return referral
 
     async def list_member_referrals(self, member: LoyaltyMember) -> list[ReferralInvite]:
@@ -761,7 +816,10 @@ class LoyaltyService:
         campaigns = await self._get_campaigns()
         stmt = (
             select(LoyaltyNudge)
-            .options(selectinload(LoyaltyNudge.member))
+            .options(
+                selectinload(LoyaltyNudge.member),
+                selectinload(LoyaltyNudge.dispatch_events),
+            )
             .where(
                 LoyaltyNudge.status == LoyaltyNudgeStatus.ACTIVE,
                 or_(LoyaltyNudge.expires_at.is_(None), LoyaltyNudge.expires_at > now),
@@ -778,8 +836,10 @@ class LoyaltyService:
             cutoff = now - campaign.frequency_cap
             if nudge.last_triggered_at and nudge.last_triggered_at > cutoff:
                 continue
-            channels = self._normalize_channels(nudge.channel_preferences)
-            candidates.append(LoyaltyNudgeDispatchCandidate(nudge=nudge, channels=channels))
+            channels = self._plan_dispatch_channels(nudge, campaign, now=now)
+            candidates.append(
+                LoyaltyNudgeDispatchCandidate(nudge=nudge, channels=channels)
+            )
             if len(candidates) >= limit:
                 break
 
@@ -1087,6 +1147,7 @@ class LoyaltyService:
         referral.metadata_json = metadata
         await self._db.flush()
         logger.info("Cancelled referral invite", referral_id=str(referral.id))
+        self._observability.record_referral_event("cancelled")
         return referral
 
     async def complete_referral(
@@ -1131,6 +1192,7 @@ class LoyaltyService:
 
         await self._db.flush()
         logger.info("Referral converted", code=code, member_id=str(member.id))
+        self._observability.record_referral_event("converted")
         return referral
 
     async def fetch_guardrail_snapshot(self) -> LoyaltyGuardrailSnapshot:
@@ -1278,6 +1340,7 @@ class LoyaltyService:
             override_id=str(override.id),
             scope=scope.value,
         )
+        self._observability.record_guardrail_override(scope.value)
         return override
 
     def _serialize_guardrail_override(
