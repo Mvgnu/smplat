@@ -11,6 +11,7 @@ import type {
   LoyaltyTimelineEntry,
   LoyaltyTimelineFilters,
   LoyaltyTimelinePage,
+  LoyaltyTimelineResult,
   ReferralConversion
 } from "@smplat/types";
 
@@ -99,21 +100,7 @@ type TimelineSourceState<T> = {
   lastConsumedCursor: string | null;
 };
 
-type NormalizedTimelineFilters = {
-  ledgerTypes: string[] | null;
-  redemptionStatuses: string[] | null;
-  referralStatuses: string[] | null;
-  includeLedger: boolean;
-  includeRedemptions: boolean;
-  includeReferrals: boolean;
-  includeNudges: boolean;
-  includeGuardrails: boolean;
-  nudgeStatuses: string[] | null;
-  guardrailScopes: string[] | null;
-  referralCode: string | null;
-  campaignSlug: string | null;
-  checkoutOrderId: string | null;
-};
+type NormalizedTimelineFilters = LoyaltyTimelinePage["appliedFilters"];
 
 function normalizeFilters(filters?: LoyaltyTimelineFilters): NormalizedTimelineFilters {
   const ledgerTypes = filters?.ledgerTypes;
@@ -133,7 +120,7 @@ function normalizeFilters(filters?: LoyaltyTimelineFilters): NormalizedTimelineF
     referralCode: filters?.referralCode?.toLowerCase() ?? null,
     campaignSlug: filters?.campaignSlug?.toLowerCase() ?? null,
     checkoutOrderId: filters?.checkoutOrderId?.toLowerCase() ?? null
-  };
+  } satisfies NormalizedTimelineFilters;
 }
 
 function pickTimestamp(entry: LoyaltyTimelineEntry): string {
@@ -386,10 +373,6 @@ export type FetchLoyaltyTimelineOptions = {
   limit?: number;
   filters?: LoyaltyTimelineFilters;
   cursor?: string | LoyaltyTimelineCursor | null;
-};
-
-export type LoyaltyTimelineResult = LoyaltyTimelinePage & {
-  cursorToken: string | null;
 };
 
 export async function fetchLoyaltyTimeline(

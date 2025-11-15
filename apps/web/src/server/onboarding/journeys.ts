@@ -117,9 +117,10 @@ export type OperatorJourneySummaryResponse = {
   aggregates: OperatorJourneyAggregates;
 };
 
-const defaultHeaders = checkoutApiKey
-  ? { "X-API-Key": checkoutApiKey, "Content-Type": "application/json" }
-  : { "Content-Type": "application/json" };
+const defaultHeaders: HeadersInit = {
+  "Content-Type": "application/json",
+  ...(checkoutApiKey ? { "X-API-Key": checkoutApiKey } : {})
+};
 
 function assertOrder(orderId: string): asserts orderId {
   if (!orderId) {

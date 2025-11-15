@@ -10,6 +10,7 @@ import type {
   BillingSummary,
   CampaignInsight,
   HostedSessionReport,
+  HostedSessionRecoveryAttempt,
   HostedSessionRecoveryTimeline,
 } from "./types";
 
@@ -17,6 +18,41 @@ const apiBaseUrl =
   process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 const checkoutApiKey = process.env.CHECKOUT_API_KEY ?? "";
+
+type UnknownRecord = Record<string, unknown>;
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null;
+
+const toRecordArray = (value: unknown): UnknownRecord[] =>
+  Array.isArray(value) ? value.filter(isRecord) : [];
+
+const toOptionalString = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return value;
+  }
+  return undefined;
+};
+
+const toNullableString = (value: unknown): string | null => toOptionalString(value) ?? null;
+
+const toOptionalNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+};
+
+const toNumberOr = (value: unknown, fallback: number): number => {
+  const parsed = toOptionalNumber(value);
+  return parsed ?? fallback;
+};
 
 type ClientOrderSummary = {
   id: string;
@@ -35,11 +71,15 @@ type RawInvoiceResponse = {
     total: number;
     balance_due: number;
     paymentIntentId?: string | null;
+    payment_intent_id?: string | null;
     externalProcessorId?: string | null;
+    external_processor_id?: string | null;
     settlementAt?: string | null;
+    settlement_at?: string | null;
     adjustmentsTotal?: number;
-    adjustments?: Array<Record<string, unknown>> | null;
-    paymentTimeline?: Array<Record<string, unknown>> | null;
+    adjustments_total?: number;
+    adjustments?: Array<UnknownRecord> | null;
+    paymentTimeline?: Array<UnknownRecord> | null;
     issued_at: string;
     due_at: string;
     paid_at: string | null;
@@ -115,25 +155,36 @@ type RawHostedSessionReport = {
   invoiceStatuses: Array<{ status: string; count: number }>;
 };
 
+type RawRecoveryAttempt = {
+  attempt?: number | string | null;
+  status?: string | null;
+  scheduledAt?: string | null;
+  scheduled_at?: string | null;
+  nextRetryAt?: string | null;
+  next_retry_at?: string | null;
+  notifiedAt?: string | null;
+  notified_at?: string | null;
+};
+
+type RawRecoveryState = {
+  attempts?: RawRecoveryAttempt[];
+  nextRetryAt?: string | null;
+  next_retry_at?: string | null;
+  lastNotifiedAt?: string | null;
+  last_notified_at?: string | null;
+  lastChannel?: string | null;
+};
+
+type RawHostedSession = {
+  id: string;
+  sessionId: string;
+  status: string;
+  metadata: UnknownRecord | null;
+  recoveryState?: RawRecoveryState | null;
+};
+
 type RawHostedSessionListResponse = {
-  sessions: Array<{
-    id: string;
-    sessionId: string;
-    status: string;
-    metadata: Record<string, unknown> | null;
-    recoveryState?: {
-      attempts?: Array<{
-        attempt: number;
-        status: string;
-        scheduledAt?: string;
-        nextRetryAt?: string | null;
-        notifiedAt?: string | null;
-      }>;
-      nextRetryAt?: string | null;
-      lastNotifiedAt?: string | null;
-      lastChannel?: string | null;
-    } | null;
-  }>;
+  sessions: RawHostedSession[];
 };
 
 export async function fetchBillingCenterPayload({
@@ -216,18 +267,25 @@ function normalizeInvoice(invoice: RawInvoiceResponse["invoices"][number], works
     campaignReference: item.campaign_reference,
   }));
 
-  const paymentTimeline = (invoice.paymentTimeline ?? []).map((entry) => ({
-    event: String(entry.event ?? entry["event"] ?? "unknown"),
-    at: String(entry.at ?? entry["at"] ?? ""),
-    amount: typeof entry.amount === "number" ? entry.amount : Number(entry.amount ?? 0) || undefined,
-    processorId: entry.processor_id ? String(entry.processor_id) : entry.processorId ? String(entry.processorId) : undefined,
-  }));
+  const paymentTimeline = toRecordArray(invoice.paymentTimeline).map((entry) => {
+    const event = toOptionalString(entry.event) ?? toOptionalString(entry["event"]) ?? "unknown";
+    const at = toOptionalString(entry.at) ?? toOptionalString(entry["at"]) ?? "";
+    const amount = toOptionalNumber(entry.amount);
+    const processorId =
+      toOptionalString(entry.processorId) ?? toOptionalString(entry["processor_id"]);
+    return {
+      event,
+      at,
+      amount,
+      processorId
+    };
+  });
 
-  const adjustments = (invoice.adjustments ?? []).map((entry) => ({
-    type: String(entry.type ?? entry["type"] ?? "adjustment"),
-    amount: typeof entry.amount === "number" ? entry.amount : Number(entry.amount ?? 0),
-    memo: entry.memo ? String(entry.memo) : undefined,
-    appliedAt: entry.applied_at ? String(entry.applied_at) : entry.appliedAt ? String(entry.appliedAt) : undefined,
+  const adjustments = toRecordArray(invoice.adjustments).map((entry) => ({
+    type: toOptionalString(entry.type) ?? toOptionalString(entry["type"]) ?? "adjustment",
+    amount: toNumberOr(entry.amount, 0),
+    memo: toOptionalString(entry.memo),
+    appliedAt: toOptionalString(entry.appliedAt) ?? toOptionalString(entry["applied_at"])
   }));
 
   const exportUrl = `/api/billing/${invoice.id}/export?workspaceId=${encodeURIComponent(
@@ -440,49 +498,36 @@ async function normalizeRecoveryTimeline(
     const raw = (await response.json()) as RawHostedSessionListResponse;
     const sessions = raw.sessions
       .map((session) => {
-        const metadata = (session.metadata ?? {}) as Record<string, unknown>;
-        const communicationLog = Array.isArray(metadata.communication_log)
-          ? (metadata.communication_log as Array<Record<string, unknown>>)
-          : [];
-        const attempts = (session.recoveryState?.attempts ?? []).map((attempt) => ({
-          attempt: Number(attempt.attempt ?? 0),
-          status: String(attempt.status ?? session.status ?? "unknown"),
-          scheduledAt: String(
-            (attempt as Record<string, unknown>).scheduledAt ??
-              (attempt as Record<string, unknown>).scheduled_at ??
-              "",
-          ),
-          nextRetryAt:
-            typeof (attempt as Record<string, unknown>).nextRetryAt === "string"
-              ? String((attempt as Record<string, unknown>).nextRetryAt)
-              : typeof (attempt as Record<string, unknown>).next_retry_at === "string"
-              ? String((attempt as Record<string, unknown>).next_retry_at)
-              : null,
-          notifiedAt:
-            typeof (attempt as Record<string, unknown>).notifiedAt === "string"
-              ? String((attempt as Record<string, unknown>).notifiedAt)
-              : typeof (attempt as Record<string, unknown>).notified_at === "string"
-              ? String((attempt as Record<string, unknown>).notified_at)
-              : null,
+        const metadata = session.metadata ?? {};
+        const communicationLog = toRecordArray(metadata.communication_log);
+        const attempts = (session.recoveryState?.attempts ?? []).map<HostedSessionRecoveryAttempt>((attempt) => ({
+          attempt: toNumberOr(attempt.attempt, 0),
+          status: attempt.status ?? session.status ?? "unknown",
+          scheduledAt: toOptionalString(attempt.scheduledAt) ?? toOptionalString(attempt.scheduled_at) ?? "",
+          nextRetryAt: toNullableString(attempt.nextRetryAt ?? attempt.next_retry_at),
+          notifiedAt: toNullableString(attempt.notifiedAt ?? attempt.notified_at)
         }));
         const lastNotified =
           session.recoveryState?.lastNotifiedAt ??
-          (typeof metadata.last_notified_at === "string" ? metadata.last_notified_at : null);
+          session.recoveryState?.last_notified_at ??
+          toNullableString(metadata.last_notified_at);
         const nextRetry =
           session.recoveryState?.nextRetryAt ??
-          (typeof metadata.next_retry_at === "string" ? metadata.next_retry_at : null);
+          session.recoveryState?.next_retry_at ??
+          toNullableString(metadata.next_retry_at);
         const lastChannel =
           session.recoveryState?.lastChannel ??
           (communicationLog.length > 0
-            ? String(communicationLog[communicationLog.length - 1]?.channel ?? "")
-            : null);
+            ? toOptionalString(communicationLog[communicationLog.length - 1]?.channel)
+            : undefined) ??
+          null;
         return {
           sessionId: session.sessionId,
           status: session.status,
           attempts,
           lastNotifiedAt: lastNotified,
           nextRetryAt: nextRetry,
-          lastChannel,
+          lastChannel
         };
       })
       .filter(
@@ -504,4 +549,3 @@ async function normalizeRecoveryTimeline(
     return null;
   }
 }
-

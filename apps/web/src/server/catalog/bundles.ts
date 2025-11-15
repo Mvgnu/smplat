@@ -65,7 +65,19 @@ export type UpsertBundleInput = {
 
 export async function upsertCatalogBundle(input: UpsertBundleInput): Promise<CatalogBundle> {
   if (!apiKeyHeader) {
-    return { ...fallbackBundle, ...input, createdAt: new Date(), updatedAt: new Date() };
+    return {
+      ...fallbackBundle,
+      ...input,
+      description: input.description ?? null,
+      savingsCopy: input.savingsCopy ?? null,
+      components: input.components.map((component) => ({
+        slug: component.slug,
+        quantity: component.quantity ?? null
+      })),
+      metadata: input.metadata ?? {},
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
   }
 
   const targetUrl = input.id

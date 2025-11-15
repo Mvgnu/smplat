@@ -66,3 +66,47 @@ max_attempts = 3
 base_backoff_seconds = 45
 max_backoff_seconds = 300
 jitter_seconds = 10
+
+[jobs.fulfillment_provider_health]
+id = "fulfillment-provider-health"
+task = "smplat_api.jobs.fulfillment.provider_health.run_provider_health_snapshot"
+cron = "*/15 * * * *"
+max_attempts = 3
+base_backoff_seconds = 60
+max_backoff_seconds = 600
+jitter_seconds = 15
+
+[jobs.fulfillment_provider_health.kwargs]
+timeout_seconds = 8
+concurrency = 5
+
+[jobs.fulfillment_provider_balance]
+id = "fulfillment-provider-balance"
+task = "smplat_api.jobs.fulfillment.provider_balance.run_provider_balance_snapshot"
+cron = "*/30 * * * *"
+max_attempts = 3
+base_backoff_seconds = 45
+max_backoff_seconds = 300
+jitter_seconds = 10
+
+[jobs.fulfillment_provider_balance.kwargs]
+timeout_seconds = 8
+concurrency = 5
+
+[jobs.preset_event_alerts]
+id = "preset-event-alerts"
+task = "smplat_api.jobs.preset_event_alerts.run_preset_alerts"
+cron = "30 2 * * *"
+max_attempts = 3
+base_backoff_seconds = 60
+max_backoff_seconds = 600
+jitter_seconds = 20
+
+[jobs.preset_event_metrics]
+id = "preset-event-metrics"
+task = "smplat_api.jobs.preset_event_metrics.run_metric_backfill"
+cron = "0 2 * * *"
+max_attempts = 3
+base_backoff_seconds = 60
+max_backoff_seconds = 600
+jitter_seconds = 20

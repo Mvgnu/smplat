@@ -25,6 +25,7 @@ Full-stack platform for social media service storefronts.
    ```bash
    docker compose up postgres -d
    pnpm payload:seed:dev   # seeds Payload collections for local development
+      pnpm --filter @smplat/web seed:dev-users  # seeds immediate login customer/admin accounts
    ```
 
 5. Run apps:
@@ -81,7 +82,7 @@ Full-stack platform for social media service storefronts.
 
 ### RBAC & Session Enforcement
 - Server-side middleware (`apps/web/middleware.ts`) protects `/admin`, `/dashboard`, `/account`, and sensitive REST routes. Requests without an authenticated session are redirected to `/login` with the original URL preserved in the `next` query string.
-- Role tiers map to Prisma `UserRole` values through `requireRole` (`apps/web/src/server/auth/policies.ts`). Layouts and server actions call this helper before hydrating client boundaries to ensure admin and operator tooling never renders for unauthorized users.
+- Role tiers map to FastAPI `UserRole` values through `requireRole` (`apps/web/src/server/auth/policies.ts`). Layouts and server actions call this helper before hydrating client boundaries to ensure admin and operator tooling never renders for unauthorized users.
 - CSRF protection uses a double-submit token issued by `getOrCreateCsrfToken` and verified by `ensureCsrfToken` inside server actions. Storefront forms must post the hidden `smplatCsrfToken` field or send the `x-smplat-csrf` header.
 
 ### HTTP & Session Hardening

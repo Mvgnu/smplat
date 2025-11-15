@@ -7,13 +7,20 @@ from loguru import logger
 
 from smplat_api.core.settings import settings
 from smplat_api.db.session import async_session
+from smplat_api.domain.fulfillment import provider_registry
 from .api.routes import api_router
 from .core.logging import configure_logging
 from .observability.tracing import configure_tracing
 from .services.fulfillment import TaskProcessor
 from .services.notifications import WeeklyDigestScheduler
 from .scheduling import CatalogJobScheduler
-from .workers import BundleExperimentGuardrailWorker, HostedSessionRecoveryWorker
+from .workers import (
+    BundleExperimentGuardrailWorker,
+    HostedSessionRecoveryWorker,
+    JourneyRuntimeWorker,
+    ProviderAutomationAlertWorker,
+    ProviderOrderReplayWorker,
+)
 
 
 APP_VERSION = "0.1.0"
@@ -43,6 +50,22 @@ async def lifespan(app: FastAPI):
         interval_seconds=settings.bundle_experiment_guardrail_interval_seconds,
     )
 
+    provider_replay_worker = ProviderOrderReplayWorker(
+        session_factory=_session_factory,
+        interval_seconds=settings.provider_replay_worker_interval_seconds,
+        limit=settings.provider_replay_worker_limit,
+    )
+    provider_alert_worker = ProviderAutomationAlertWorker(
+        session_factory=_session_factory,
+        interval_seconds=settings.provider_automation_alert_interval_seconds,
+        snapshot_limit=settings.provider_automation_alert_snapshot_limit,
+    )
+    journey_runtime_worker = JourneyRuntimeWorker(
+        session_factory=_session_factory,
+        interval_seconds=settings.journey_runtime_poll_interval_seconds,
+        batch_size=settings.journey_runtime_batch_size,
+    )
+
     schedule_path = Path(settings.catalog_job_schedule_path)
     if not schedule_path.is_absolute():
         schedule_path = Path(__file__).resolve().parent.parent.parent / schedule_path
@@ -57,11 +80,17 @@ async def lifespan(app: FastAPI):
         dry_run=settings.weekly_digest_dry_run,
     )
 
+    async with async_session() as session:
+        await provider_registry.refresh_catalog(session, force=True)
+
     app.state.fulfillment_processor = processor
     worker_task: asyncio.Task | None = None
     app.state.weekly_digest_scheduler = digest_scheduler
     app.state.hosted_recovery_worker = recovery_worker
     app.state.bundle_experiment_guardrail_worker = guardrail_worker
+    app.state.provider_replay_worker = provider_replay_worker
+    app.state.provider_automation_alert_worker = provider_alert_worker
+    app.state.journey_runtime_worker = journey_runtime_worker
     app.state.catalog_job_scheduler = job_scheduler
 
     if settings.fulfillment_worker_enabled:
@@ -139,6 +168,54 @@ async def lifespan(app: FastAPI):
             reason="bundle_experiment_guardrail_worker_enabled is false",
         )
 
+    provider_replay_enabled = settings.provider_replay_worker_enabled
+    if provider_replay_enabled:
+        provider_replay_worker.start()
+        logger.info(
+            "Provider order replay worker enabled",
+            interval_seconds=provider_replay_worker.interval_seconds,
+            limit=settings.provider_replay_worker_limit,
+        )
+    else:
+        logger.info(
+            "Provider order replay worker disabled",
+            reason="provider_replay_worker_enabled is false",
+        )
+
+    provider_alerts_enabled = settings.provider_automation_alert_worker_enabled
+    if provider_alerts_enabled:
+        provider_alert_worker.start()
+        logger.info(
+            "Provider automation alert worker enabled",
+            interval_seconds=provider_alert_worker.interval_seconds,
+            snapshot_limit=settings.provider_automation_alert_snapshot_limit,
+        )
+    else:
+        logger.info(
+            "Provider automation alert worker disabled",
+            reason="provider_automation_alert_worker_enabled is false",
+        )
+
+    runtime_worker_started = False
+    if settings.journey_runtime_worker_enabled and not settings.celery_broker_url:
+        journey_runtime_worker.start()
+        runtime_worker_started = True
+        logger.info(
+            "Journey runtime worker enabled (in-process)",
+            interval_seconds=journey_runtime_worker.interval_seconds,
+            batch_size=settings.journey_runtime_batch_size,
+        )
+    elif settings.journey_runtime_worker_enabled and settings.celery_broker_url:
+        logger.info(
+            "Journey runtime Celery worker enabled",
+            queue=settings.journey_runtime_task_queue,
+        )
+    else:
+        logger.info(
+            "Journey runtime worker disabled",
+            reason="journey_runtime_worker_enabled is false",
+        )
+
     try:
         yield
     finally:
@@ -154,6 +231,12 @@ async def lifespan(app: FastAPI):
             await job_scheduler.stop()
         if guardrail_enabled and not scheduler_enabled and guardrail_worker.is_running:
             await guardrail_worker.stop()
+        if provider_replay_enabled and provider_replay_worker.is_running:
+            await provider_replay_worker.stop()
+        if provider_alerts_enabled and provider_alert_worker.is_running:
+            await provider_alert_worker.stop()
+        if runtime_worker_started and journey_runtime_worker.is_running:
+            await journey_runtime_worker.stop()
 
 
 def create_app() -> FastAPI:

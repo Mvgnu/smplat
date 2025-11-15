@@ -5,7 +5,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
+import type {
+  CheckoutMetricVerification,
+  CheckoutTrustExperience
+} from "@/server/cms/trust";
+import type { DeliveryTimelineMetric } from "@/server/cms/delivery-timeline";
 import { getCheckoutTrustExperience, getCheckoutTrustExperienceDraft } from "@/server/cms/trust";
 
 export const metadata: Metadata = {
@@ -21,7 +25,15 @@ type PageProps = {
   searchParams?: { token?: string };
 };
 
-function formatMetricState(metric?: CheckoutMetricVerification): string {
+type TrustMetric = CheckoutMetricVerification | DeliveryTimelineMetric | undefined;
+
+const isCheckoutMetric = (
+  metric: CheckoutMetricVerification | DeliveryTimelineMetric
+): metric is CheckoutMetricVerification => {
+  return "formattedValue" in metric || "metricId" in metric || "source" in metric;
+};
+
+function formatMetricState(metric?: CheckoutMetricVerification | DeliveryTimelineMetric): string {
   if (!metric) {
     return "unbound";
   }
@@ -31,8 +43,8 @@ function formatMetricState(metric?: CheckoutMetricVerification): string {
   return metric.verificationState;
 }
 
-function formatComputedAt(metric?: CheckoutMetricVerification): string | null {
-  if (!metric?.computedAt) {
+function formatComputedAt(metric?: CheckoutMetricVerification | DeliveryTimelineMetric): string | null {
+  if (!metric || !isCheckoutMetric(metric) || !metric.computedAt) {
     return null;
   }
   const parsed = new Date(metric.computedAt);
@@ -42,7 +54,7 @@ function formatComputedAt(metric?: CheckoutMetricVerification): string | null {
   return parsed.toLocaleString("en-US", { timeZone: "UTC" });
 }
 
-function MetricDetails({ metric }: { metric?: CheckoutMetricVerification }) {
+function MetricDetails({ metric }: { metric?: CheckoutMetricVerification | DeliveryTimelineMetric }) {
   if (!metric) {
     return <p className="text-xs text-white/50">No metric binding configured.</p>;
   }
@@ -50,12 +62,13 @@ function MetricDetails({ metric }: { metric?: CheckoutMetricVerification }) {
   return (
     <div className="space-y-1 text-xs text-white/60">
       <p>
-        <span className="font-medium text-white/70">Metric:</span> {metric.metricId}
+        <span className="font-medium text-white/70">Metric:</span>{" "}
+        {isCheckoutMetric(metric) ? metric.metricId ?? "unbound" : "delivery_timeline"}
       </p>
       <p>
         <span className="font-medium text-white/70">State:</span> {formatMetricState(metric)}
       </p>
-      {metric.formattedValue ? (
+      {isCheckoutMetric(metric) && metric.formattedValue ? (
         <p>
           <span className="font-medium text-white/70">Value:</span> {metric.formattedValue}
         </p>
@@ -65,12 +78,12 @@ function MetricDetails({ metric }: { metric?: CheckoutMetricVerification }) {
           <span className="font-medium text-white/70">Raw:</span> {metric.rawValue}
         </p>
       ) : null}
-      {metric.sampleSize ? (
+      {isCheckoutMetric(metric) && metric.sampleSize ? (
         <p>
           <span className="font-medium text-white/70">Sample size:</span> {metric.sampleSize}
         </p>
       ) : null}
-      {metric.source ? (
+      {isCheckoutMetric(metric) && metric.source ? (
         <p>
           <span className="font-medium text-white/70">Source:</span> {metric.source}
         </p>
@@ -80,7 +93,7 @@ function MetricDetails({ metric }: { metric?: CheckoutMetricVerification }) {
           <span className="font-medium text-white/70">Computed:</span> {formatComputedAt(metric)}
         </p>
       ) : null}
-      {metric.provenanceNote ? (
+      {isCheckoutMetric(metric) && metric.provenanceNote ? (
         <p>
           <span className="font-medium text-white/70">Provenance:</span> {metric.provenanceNote}
         </p>

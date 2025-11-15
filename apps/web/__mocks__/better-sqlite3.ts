@@ -64,6 +64,22 @@ type NoteRevisionRecord = {
   recordedAt: string;
 };
 
+type RehearsalActionRecord = {
+  id: string;
+  manifestGeneratedAt: string | null;
+  scenarioFingerprint: string;
+  expectedDeltas: number;
+  operatorHash: string | null;
+  payloadHash: string;
+  recordedAt: string;
+  verdict: string;
+  actualDeltas: number | null;
+  diff: number | null;
+  failureReasons: string | null;
+  comparisonPayload: string | null;
+  evaluatedAt: string | null;
+};
+
 class Statement {
   private readonly sql: string;
   private readonly database: MockDatabase;
@@ -271,10 +287,64 @@ class Statement {
       return { changes: 1 };
     }
 
+    if (this.sql.startsWith("INSERT INTO rehearsal_actions")) {
+      const payload = parameters as {
+        id: string;
+        manifest_generated_at: string | null;
+        scenario_fingerprint: string;
+        expected_deltas: number;
+        operator_hash: string | null;
+        payload_hash: string;
+        recorded_at: string;
+        verdict: string | null;
+        actual_deltas: number | null;
+        diff: number | null;
+        failure_reasons: string | null;
+        comparison_payload: string | null;
+        evaluated_at: string | null;
+      };
+      this.database.upsertRehearsalAction(payload);
+      return { changes: 1 };
+    }
+
+    if (this.sql.startsWith("DELETE FROM rehearsal_actions")) {
+      const manifestGeneratedAt = Array.isArray(parameters) ? parameters[0] : parameters;
+      this.database.deleteRehearsalActionsByManifest(manifestGeneratedAt ?? null);
+      return { changes: 1 };
+    }
+
     throw new Error(`Unsupported run statement: ${this.sql}`);
   }
 
   all(parameters?: any) {
+    if (this.sql.startsWith("PRAGMA table_info")) {
+      const match = this.sql.match(/PRAGMA\s+table_info\(([^)]+)\)/i);
+      const table = match?.[1]?.trim();
+      if (!table) {
+        return [];
+      }
+      return this.database.getTableColumns(table).map((name) => ({ name }));
+    }
+
+    if (this.sql.startsWith("SELECT id, manifest_generated_at, scenario_fingerprint")) {
+      const manifestGeneratedAt = Array.isArray(parameters) ? parameters[0] : parameters;
+      return this.database.getRehearsalActions(manifestGeneratedAt ?? null).map((action) => ({
+        id: action.id,
+        manifest_generated_at: action.manifestGeneratedAt,
+        scenario_fingerprint: action.scenarioFingerprint,
+        expected_deltas: action.expectedDeltas,
+        operator_hash: action.operatorHash,
+        payload_hash: action.payloadHash,
+        recorded_at: action.recordedAt,
+        verdict: action.verdict,
+        actual_deltas: action.actualDeltas,
+        diff: action.diff,
+        failure_reasons: action.failureReasons,
+        comparison_payload: action.comparisonPayload,
+        evaluated_at: action.evaluatedAt,
+      }));
+    }
+
     if (
       this.sql.startsWith("SELECT id FROM snapshot_manifests") ||
       this.sql.startsWith("SELECT id, generated_at FROM snapshot_manifests")
@@ -500,6 +570,29 @@ class Statement {
       return result ?? { count: 0 };
     }
 
+    if (this.sql.startsWith("SELECT id, manifest_generated_at, scenario_fingerprint")) {
+      const actionId = Array.isArray(parameters) ? parameters[0] : parameters;
+      const record = this.database.getRehearsalActionById(actionId);
+      if (!record) {
+        return undefined;
+      }
+      return {
+        id: record.id,
+        manifest_generated_at: record.manifestGeneratedAt,
+        scenario_fingerprint: record.scenarioFingerprint,
+        expected_deltas: record.expectedDeltas,
+        operator_hash: record.operatorHash,
+        payload_hash: record.payloadHash,
+        recorded_at: record.recordedAt,
+        verdict: record.verdict,
+        actual_deltas: record.actualDeltas,
+        diff: record.diff,
+        failure_reasons: record.failureReasons,
+        comparison_payload: record.comparisonPayload,
+        evaluated_at: record.evaluatedAt,
+      };
+    }
+
     throw new Error(`Unsupported get statement: ${this.sql}`);
   }
 }
@@ -511,6 +604,9 @@ class MockDatabase {
   liveDeltas = new Map<string, Map<string, LiveDeltaRecord>>();
   remediationActions = new Map<string, Map<string, RemediationActionRecord>>();
   noteRevisions = new Map<string, Map<string, NoteRevisionRecord>>();
+  rehearsalActionsById = new Map<string, RehearsalActionRecord>();
+  rehearsalActionsByHash = new Map<string, RehearsalActionRecord>();
+  private tableColumns = new Map<string, Set<string>>();
 
   constructor(_file: string) {}
 
@@ -518,7 +614,27 @@ class MockDatabase {
     return undefined;
   }
 
-  exec(_statement: string) {
+  exec(statement: string) {
+    const trimmed = statement.trim();
+
+    const rehearsalMatch = trimmed.match(/CREATE TABLE IF NOT EXISTS\s+rehearsal_actions\s*\(([\s\S]*?)\);/i);
+    if (rehearsalMatch) {
+      const columns = rehearsalMatch[1]
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry && !entry.toUpperCase().startsWith("PRIMARY KEY"))
+        .map((entry) => entry.split(/\s+/)[0]);
+      if (columns.length) {
+        this.recordTableColumns("rehearsal_actions", columns);
+      }
+    }
+
+    const alterMatch = trimmed.match(/ALTER TABLE\s+([A-Za-z0-9_]+)\s+ADD COLUMN\s+([A-Za-z0-9_]+)/i);
+    if (alterMatch) {
+      const [, table, column] = alterMatch;
+      this.ensureTableColumns(table).add(column);
+    }
+
     return undefined;
   }
 
@@ -537,6 +653,8 @@ class MockDatabase {
     this.liveDeltas.clear();
     this.remediationActions.clear();
     this.noteRevisions.clear();
+    this.rehearsalActionsById.clear();
+    this.rehearsalActionsByHash.clear();
   }
 
   toKey(value: string | null | undefined) {
@@ -625,6 +743,7 @@ class MockDatabase {
     this.liveDeltas.delete(key);
     this.remediationActions.delete(key);
     this.noteRevisions.delete(key);
+    this.deleteRehearsalActionsByManifest(manifestGeneratedAt);
   }
 
   sortedManifests() {
@@ -654,6 +773,100 @@ class MockDatabase {
       draftRoutes,
       publishedRoutes
     };
+  }
+
+  getTableColumns(table?: string) {
+    if (!table) {
+      return [];
+    }
+    return Array.from(this.ensureTableColumns(table));
+  }
+
+  recordTableColumns(table: string, columns: string[]) {
+    const set = this.ensureTableColumns(table);
+    columns.forEach((column) => {
+      if (column) {
+        set.add(column);
+      }
+    });
+  }
+
+  ensureTableColumns(table: string) {
+    if (!this.tableColumns.has(table)) {
+      this.tableColumns.set(table, new Set());
+    }
+    return this.tableColumns.get(table)!;
+  }
+
+  upsertRehearsalAction(payload: {
+    id: string;
+    manifest_generated_at: string | null;
+    scenario_fingerprint: string;
+    expected_deltas: number;
+    operator_hash: string | null;
+    payload_hash: string;
+    recorded_at: string;
+    verdict: string | null;
+    actual_deltas: number | null;
+    diff: number | null;
+    failure_reasons: string | null;
+    comparison_payload: string | null;
+    evaluated_at: string | null;
+  }) {
+    const existing = this.rehearsalActionsByHash.get(payload.payload_hash);
+    const record: RehearsalActionRecord = existing
+      ? {
+          ...existing,
+          manifestGeneratedAt: payload.manifest_generated_at ?? existing.manifestGeneratedAt,
+          scenarioFingerprint: payload.scenario_fingerprint ?? existing.scenarioFingerprint,
+          expectedDeltas: payload.expected_deltas ?? existing.expectedDeltas,
+          operatorHash: payload.operator_hash ?? existing.operatorHash,
+          recordedAt: payload.recorded_at ?? existing.recordedAt,
+          verdict: payload.verdict ?? existing.verdict,
+          actualDeltas: payload.actual_deltas ?? existing.actualDeltas,
+          diff: payload.diff ?? existing.diff,
+          failureReasons: payload.failure_reasons ?? existing.failureReasons,
+          comparisonPayload: payload.comparison_payload ?? existing.comparisonPayload,
+          evaluatedAt: payload.evaluated_at ?? existing.evaluatedAt,
+        }
+      : {
+          id: payload.id,
+          manifestGeneratedAt: payload.manifest_generated_at,
+          scenarioFingerprint: payload.scenario_fingerprint,
+          expectedDeltas: payload.expected_deltas,
+          operatorHash: payload.operator_hash,
+          payloadHash: payload.payload_hash,
+          recordedAt: payload.recorded_at,
+          verdict: payload.verdict ?? "pending",
+          actualDeltas: payload.actual_deltas ?? null,
+          diff: payload.diff ?? null,
+          failureReasons: payload.failure_reasons ?? null,
+          comparisonPayload: payload.comparison_payload ?? null,
+          evaluatedAt: payload.evaluated_at ?? null,
+        };
+
+    this.rehearsalActionsByHash.set(record.payloadHash, record);
+    this.rehearsalActionsById.set(record.id, record);
+  }
+
+  deleteRehearsalActionsByManifest(manifestGeneratedAt: string | null) {
+    const key = manifestGeneratedAt ?? null;
+    for (const record of Array.from(this.rehearsalActionsByHash.values())) {
+      if (record.manifestGeneratedAt === key) {
+        this.rehearsalActionsByHash.delete(record.payloadHash);
+        this.rehearsalActionsById.delete(record.id);
+      }
+    }
+  }
+
+  getRehearsalActions(manifestGeneratedAt: string | null) {
+    return Array.from(this.rehearsalActionsByHash.values())
+      .filter((record) => record.manifestGeneratedAt === manifestGeneratedAt)
+      .sort((a, b) => (a.recordedAt < b.recordedAt ? 1 : a.recordedAt > b.recordedAt ? -1 : 0));
+  }
+
+  getRehearsalActionById(id: string) {
+    return this.rehearsalActionsById.get(id);
   }
 }
 

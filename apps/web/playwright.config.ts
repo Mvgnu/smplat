@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 
 import { defineConfig, devices } from '@playwright/test';
 
-const currentDir = path.dirname(fileURLToPath(new URL('.', import.meta.url)));
+const currentDir = fileURLToPath(new URL('.', import.meta.url));
 const baseUrl = process.env.BASE_URL || 'http://localhost:3004';
 const serverUrl = new URL(baseUrl);
 const webServerPort = serverUrl.port || '3000';
@@ -17,6 +17,12 @@ process.env.MOCK_RECONCILIATION_DASHBOARD_PATH =
 process.env.MOCK_PROCESSOR_REPLAYS_PATH =
   process.env.MOCK_PROCESSOR_REPLAYS_PATH ||
   path.resolve(currentDir, './tests/fixtures/replay-events.json');
+process.env.MOCK_CLIENT_ORDER_HISTORY_PATH =
+  process.env.MOCK_CLIENT_ORDER_HISTORY_PATH ||
+  path.resolve(currentDir, './tests/fixtures/account-orders.json');
+process.env.MOCK_ADMIN_ORDER_HISTORY_PATH =
+  process.env.MOCK_ADMIN_ORDER_HISTORY_PATH ||
+  path.resolve(currentDir, './tests/fixtures/admin-orders.json');
 
 /**
  * @see https://playwright.dev/docs/test-configuration
@@ -88,6 +94,8 @@ export default defineConfig({
     timeout: 120 * 1000, // 2 minutes timeout for dev server startup
     env: {
       PORT: webServerPort,
+      MOCK_CLIENT_ORDER_HISTORY_PATH: process.env.MOCK_CLIENT_ORDER_HISTORY_PATH,
+      MOCK_ADMIN_ORDER_HISTORY_PATH: process.env.MOCK_ADMIN_ORDER_HISTORY_PATH,
     },
   },
 });

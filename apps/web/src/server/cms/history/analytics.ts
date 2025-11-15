@@ -78,11 +78,12 @@ const createRegressionVelocity = (
   };
 };
 
+type SeverityKey = "info" | "warning" | "blocker";
+
 const createSeverityMomentum = (
   entries: MarketingPreviewHistoryEntry[]
 ): MarketingPreviewSeverityMomentum => {
-  type SeverityKey = keyof MarketingPreviewSeverityMomentum;
-  const severityKeys: Array<SeverityKey> = ["info", "warning", "blocker"] as const;
+  const severityKeys: SeverityKey[] = ["info", "warning", "blocker"];
   const sorted = [...entries]
     .map((entry) => ({
       timestamp: toTimestamp(entry.generatedAt),
@@ -114,11 +115,11 @@ const createSeverityMomentum = (
     if (!Number.isFinite(elapsedHours) || elapsedHours <= 0) {
       continue;
     }
-    for (const key of severityKeys) {
+    severityKeys.forEach((key) => {
       const delta =
         (current.severityCounts[key] - previous.severityCounts[key]) / elapsedHours;
       totals[key].push(delta);
-    }
+    });
   }
 
   const result: MarketingPreviewSeverityMomentum = {

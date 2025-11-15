@@ -43,7 +43,7 @@ type MetricBindingInput = {
 };
 
 export type CheckoutMetricVerification = {
-  metricId: string;
+  metricId?: string;
   source?: string | null;
   verificationState: "fresh" | "stale" | "missing" | "unsupported" | "preview";
   formattedValue?: string | null;
@@ -252,7 +252,8 @@ const fallbackExperience: CheckoutTrustExperience = {
         "Operators log deliverables in the client portal with timestamped evidence so finance and marketing stay aligned.",
       metric: {
         metricId: "fulfillment_backlog_minutes",
-        metricSource: "fulfillment",
+        source: "fulfillment",
+        verificationState: "preview",
         freshnessWindowMinutes: 120,
         provenanceNote: "Live backlog minutes pulled from operator queues.",
       },
@@ -270,7 +271,8 @@ const fallbackExperience: CheckoutTrustExperience = {
         "Coverage planning blends live order intake with operator rosters so no campaign waits for assignments.",
       metric: {
         metricId: "fulfillment_staffing_coverage_pct",
-        metricSource: "fulfillment",
+        source: "fulfillment",
+        verificationState: "preview",
         freshnessWindowMinutes: 180,
         provenanceNote: "24h staffing coverage trend across pods.",
       },
@@ -328,7 +330,8 @@ const fallbackExperience: CheckoutTrustExperience = {
       caption: "Rolling average queue depth across pods",
       metric: {
         metricId: "fulfillment_backlog_minutes",
-        metricSource: "fulfillment",
+        source: "fulfillment",
+        verificationState: "preview",
         freshnessWindowMinutes: 120,
         provenanceNote: "Operators keep backlog under two hours.",
       },
@@ -341,7 +344,8 @@ const fallbackExperience: CheckoutTrustExperience = {
       caption: "Completed vs. scheduled work (24h)",
       metric: {
         metricId: "fulfillment_staffing_coverage_pct",
-        metricSource: "fulfillment",
+        source: "fulfillment",
+        verificationState: "preview",
         freshnessWindowMinutes: 180,
         provenanceNote: "Coverage stays above 90% on live queues.",
       },
@@ -390,9 +394,11 @@ const fallbackExperience: CheckoutTrustExperience = {
     fallbackConfidence: "Verified timeline",
     metric: {
       metricId: "fulfillment_delivery_sla_forecast",
-      metricSource: "fulfillment",
+      source: "fulfillment",
+      verificationState: "preview",
       freshnessWindowMinutes: 120,
       provenanceNote: "Projected clearance horizon across all fulfillment pods.",
+      fallbackCopy: "Projected clearance horizon across all fulfillment pods."
     },
   },
 };
@@ -610,7 +616,23 @@ const cloneExperience = (experience: CheckoutTrustExperience): CheckoutTrustExpe
   bundleOffers: experience.bundleOffers.map((bundle) => ({ ...bundle })),
   deliveryTimeline: {
     ...experience.deliveryTimeline,
-    metric: cloneMetric(experience.deliveryTimeline.metric),
+    metric: experience.deliveryTimeline.metric
+      ? {
+          ...experience.deliveryTimeline.metric,
+          metadata: experience.deliveryTimeline.metric.metadata
+            ? { ...experience.deliveryTimeline.metric.metadata }
+            : experience.deliveryTimeline.metric.metadata ?? null,
+          percentileBands: experience.deliveryTimeline.metric.percentileBands
+            ? { ...experience.deliveryTimeline.metric.percentileBands }
+            : experience.deliveryTimeline.metric.percentileBands ?? null,
+          forecast: experience.deliveryTimeline.metric.forecast
+            ? {
+                ...experience.deliveryTimeline.metric.forecast,
+                skus: [...(experience.deliveryTimeline.metric.forecast.skus ?? [])]
+              }
+            : experience.deliveryTimeline.metric.forecast ?? null
+        }
+      : undefined,
     resolved: experience.deliveryTimeline.resolved
       ? {
           ...experience.deliveryTimeline.resolved,
@@ -985,6 +1007,9 @@ const resolveExperienceMetrics = async (experience: CheckoutTrustExperience): Pr
       return snapshot;
     }
 
+    if (!snapshot.metric.metricId) {
+      return snapshot;
+    }
     const resolution = resolutionMap.get(snapshot.metric.metricId);
     applyMetricResolution(snapshot.metric, resolution);
 

@@ -48,6 +48,7 @@ const normalizeSelection = (selection: SavedConfigurationSelection): string => {
     addOns: normalizedAddOns,
     subscriptionPlanId: selection.subscriptionPlanId ?? null,
     customFields: normalizedFields,
+    presetId: selection.presetId ?? null,
   });
 };
 

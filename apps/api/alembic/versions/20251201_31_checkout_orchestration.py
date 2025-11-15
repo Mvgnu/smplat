@@ -13,29 +13,35 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-checkout_stage_enum = sa.Enum(
-    "payment",
-    "verification",
-    "loyalty_hold",
-    "fulfillment",
-    "completed",
-    name="checkout_orchestration_stage_enum",
-)
-
-checkout_status_enum = sa.Enum(
-    "not_started",
-    "in_progress",
-    "waiting",
-    "completed",
-    "failed",
-    name="checkout_orchestration_status_enum",
-)
-
-
 def upgrade() -> None:
-    bind = op.get_bind()
-    checkout_stage_enum.create(bind, checkfirst=True)
-    checkout_status_enum.create(bind, checkfirst=True)
+    # Create enum types idempotently
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'checkout_orchestration_stage_enum') THEN
+                CREATE TYPE checkout_orchestration_stage_enum AS ENUM (
+                    'payment',
+                    'verification',
+                    'loyalty_hold',
+                    'fulfillment',
+                    'completed'
+                );
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'checkout_orchestration_status_enum') THEN
+                CREATE TYPE checkout_orchestration_status_enum AS ENUM (
+                    'not_started',
+                    'in_progress',
+                    'waiting',
+                    'completed',
+                    'failed'
+                );
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "checkout_orchestrations",
@@ -52,8 +58,34 @@ def upgrade() -> None:
             sa.ForeignKey("users.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column("current_stage", checkout_stage_enum, nullable=False, server_default="payment"),
-        sa.Column("stage_status", checkout_status_enum, nullable=False, server_default="not_started"),
+        sa.Column(
+            "current_stage",
+            postgresql.ENUM(
+                "payment",
+                "verification",
+                "loyalty_hold",
+                "fulfillment",
+                "completed",
+                name="checkout_orchestration_stage_enum",
+                create_type=False,
+            ),
+            nullable=False,
+            server_default="payment",
+        ),
+        sa.Column(
+            "stage_status",
+            postgresql.ENUM(
+                "not_started",
+                "in_progress",
+                "waiting",
+                "completed",
+                "failed",
+                name="checkout_orchestration_status_enum",
+                create_type=False,
+            ),
+            nullable=False,
+            server_default="not_started",
+        ),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
@@ -84,8 +116,32 @@ def upgrade() -> None:
             sa.ForeignKey("checkout_orchestrations.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("stage", checkout_stage_enum, nullable=False),
-        sa.Column("status", checkout_status_enum, nullable=False),
+        sa.Column(
+            "stage",
+            postgresql.ENUM(
+                "payment",
+                "verification",
+                "loyalty_hold",
+                "fulfillment",
+                "completed",
+                name="checkout_orchestration_stage_enum",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "status",
+            postgresql.ENUM(
+                "not_started",
+                "in_progress",
+                "waiting",
+                "completed",
+                "failed",
+                name="checkout_orchestration_status_enum",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
         sa.Column("transition_note", sa.Text(), nullable=True),
         sa.Column("payload", sa.JSON(), nullable=True),
         sa.Column(
@@ -110,6 +166,6 @@ def downgrade() -> None:
     )
     op.drop_table("checkout_orchestration_events")
     op.drop_table("checkout_orchestrations")
-    bind = op.get_bind()
-    checkout_status_enum.drop(bind, checkfirst=True)
-    checkout_stage_enum.drop(bind, checkfirst=True)
+
+    op.execute("DROP TYPE IF EXISTS checkout_orchestration_status_enum")
+    op.execute("DROP TYPE IF EXISTS checkout_orchestration_stage_enum")

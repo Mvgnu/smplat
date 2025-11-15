@@ -1,23 +1,6 @@
-export type TimelineMetricState = "fresh" | "stale" | "missing" | "unsupported" | "preview";
+import type { CheckoutMetricVerification } from "./trust";
 
-type TimelineMetricForecastWindow = {
-  estimatedClearMinutes: number | null | undefined;
-};
-
-type TimelineMetricForecast = {
-  skus: TimelineMetricForecastWindow[];
-};
-
-export type DeliveryTimelineMetric = {
-  verificationState: TimelineMetricState;
-  rawValue?: number | null;
-  percentileBands?: Record<string, number | null> | null;
-  metadata?: Record<string, unknown> | null;
-  forecast?: TimelineMetricForecast | null;
-  alerts?: string[] | null;
-  fallbackCopy?: string | null;
-  cacheLayer?: string | null;
-};
+export type DeliveryTimelineMetric = CheckoutMetricVerification;
 
 export type CheckoutDeliveryTimelineResolved = {
   minMinutes?: number | null;

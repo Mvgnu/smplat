@@ -18,17 +18,36 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE TYPE product_option_group_type_enum AS ENUM ('single', 'multiple')")
-    op.execute("CREATE TYPE product_custom_field_type_enum AS ENUM ('text', 'url', 'number')")
-    op.execute(
-        "CREATE TYPE product_subscription_billing_cycle_enum AS ENUM ('one_time', 'monthly', 'quarterly', 'annual')"
-    )
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'product_option_group_type_enum') THEN
+                CREATE TYPE product_option_group_type_enum AS ENUM ('single', 'multiple');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'product_custom_field_type_enum') THEN
+                CREATE TYPE product_custom_field_type_enum AS ENUM ('text', 'url', 'number');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'product_subscription_billing_cycle_enum') THEN
+                CREATE TYPE product_subscription_billing_cycle_enum AS ENUM ('one_time', 'monthly', 'quarterly', 'annual');
+            END IF;
+        END $$;
+    """)
 
     op.add_column(
         "product_option_groups",
         sa.Column(
             "group_type",
-            sa.Enum(name="product_option_group_type_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("single", "multiple", name="product_option_group_type_enum", create_type=False),
             nullable=False,
             server_default="single",
         ),
@@ -64,7 +83,7 @@ def upgrade() -> None:
         sa.Column("label", sa.String(), nullable=False),
         sa.Column(
             "field_type",
-            sa.Enum(name="product_custom_field_type_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("text", "url", "number", name="product_custom_field_type_enum", create_type=False),
             nullable=False,
             server_default="text",
         ),
@@ -86,7 +105,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column(
             "billing_cycle",
-            sa.Enum(name="product_subscription_billing_cycle_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("one_time", "monthly", "quarterly", "annual", name="product_subscription_billing_cycle_enum", create_type=False),
             nullable=False,
             server_default="one_time",
         ),

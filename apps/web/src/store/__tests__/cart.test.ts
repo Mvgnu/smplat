@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from '@jest/globals';
+import { describe, it, expect, beforeEach } from '@jest/globals';
 import { renderHook, act } from '@testing-library/react';
 import { useCartStore } from '../cart';
 
@@ -16,6 +16,7 @@ describe('Cart Store', () => {
     act(() => {
       result.current.clear();
     });
+    localStorage.clear();
   });
 
   it('should initialize with empty cart', () => {
@@ -75,7 +76,13 @@ describe('Cart Store', () => {
 
     act(() => {
       result.current.addItem(testProduct);
-      result.current.updateQuantity('1', 3);
+    });
+
+    const itemId = result.current.items[0]?.id;
+    expect(itemId).toBeTruthy();
+
+    act(() => {
+      result.current.updateQuantity(itemId as string, 3);
     });
 
     expect(result.current.items[0].quantity).toBe(3);
@@ -106,10 +113,13 @@ describe('Cart Store', () => {
       result.current.addItem(testProduct);
     });
 
+    const itemId = result.current.items[0]?.id;
+    expect(itemId).toBeTruthy();
+
     expect(result.current.items).toHaveLength(1);
 
     act(() => {
-      result.current.removeItem('1');
+      result.current.removeItem(itemId as string);
     });
 
     expect(result.current.items).toHaveLength(0);
@@ -176,6 +186,6 @@ describe('Cart Store', () => {
     });
 
     // Check if localStorage was updated (mocked in test environment)
-    expect(localStorage.getItem('cart')).toBeTruthy();
+    expect(localStorage.getItem('smplat-cart')).toBeTruthy();
   });
 });

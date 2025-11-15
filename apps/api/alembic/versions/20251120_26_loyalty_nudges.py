@@ -4,6 +4,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "20251120_26"
@@ -12,26 +13,32 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-nudge_type_enum = sa.Enum(
-    "expiring_points",
-    "checkout_reminder",
-    "redemption_follow_up",
-    name="loyalty_nudge_type",
-)
-
-nudge_status_enum = sa.Enum(
-    "active",
-    "acknowledged",
-    "dismissed",
-    "expired",
-    name="loyalty_nudge_status",
-)
-
-
 def upgrade() -> None:
-    bind = op.get_bind()
-    nudge_type_enum.create(bind, checkfirst=True)
-    nudge_status_enum.create(bind, checkfirst=True)
+    # Create enum types idempotently
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_nudge_type') THEN
+                CREATE TYPE loyalty_nudge_type AS ENUM (
+                    'expiring_points',
+                    'checkout_reminder',
+                    'redemption_follow_up'
+                );
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_nudge_status') THEN
+                CREATE TYPE loyalty_nudge_status AS ENUM (
+                    'active',
+                    'acknowledged',
+                    'dismissed',
+                    'expired'
+                );
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "loyalty_nudges",
@@ -42,11 +49,28 @@ def upgrade() -> None:
             sa.ForeignKey("loyalty_members.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("nudge_type", nudge_type_enum, nullable=False),
+        sa.Column(
+            "nudge_type",
+            postgresql.ENUM(
+                "expiring_points",
+                "checkout_reminder",
+                "redemption_follow_up",
+                name="loyalty_nudge_type",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
         sa.Column("source_id", sa.String(), nullable=False),
         sa.Column(
             "status",
-            nudge_status_enum,
+            postgresql.ENUM(
+                "active",
+                "acknowledged",
+                "dismissed",
+                "expired",
+                name="loyalty_nudge_status",
+                create_type=False,
+            ),
             nullable=False,
             server_default="active",
         ),
@@ -103,6 +127,5 @@ def downgrade() -> None:
     )
     op.drop_table("loyalty_nudges")
 
-    bind = op.get_bind()
-    nudge_status_enum.drop(bind, checkfirst=True)
-    nudge_type_enum.drop(bind, checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS loyalty_nudge_status")
+    op.execute("DROP TYPE IF EXISTS loyalty_nudge_type")

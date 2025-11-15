@@ -443,7 +443,13 @@ describe("useMarketingPreviewHistory", () => {
               expectedDeltas: 2,
               operatorHash: "hash",
               payloadHash: "payload::hash",
-              recordedAt: "2024-05-03T00:01:00.000Z"
+              recordedAt: "2024-05-03T00:01:00.000Z",
+              verdict: "pending",
+              evaluatedAt: null,
+              actualDeltas: null,
+              diff: null,
+              failureReasons: null,
+              comparison: null
             }
           ],
           noteRevisions: []

@@ -13,6 +13,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_redemption_status') THEN
+                CREATE TYPE loyalty_redemption_status AS ENUM ('requested', 'fulfilled', 'failed', 'cancelled');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_point_expiration_status') THEN
+                CREATE TYPE loyalty_point_expiration_status AS ENUM ('scheduled', 'expired', 'consumed', 'cancelled');
+            END IF;
+        END $$;
+    """)
+
     op.add_column(
         "loyalty_members",
         sa.Column(
@@ -36,24 +53,6 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
 
-    redemption_status_enum = sa.Enum(
-        "requested",
-        "fulfilled",
-        "failed",
-        "cancelled",
-        name="loyalty_redemption_status",
-    )
-    redemption_status_enum.create(op.get_bind())
-
-    expiration_status_enum = sa.Enum(
-        "scheduled",
-        "expired",
-        "consumed",
-        "cancelled",
-        name="loyalty_point_expiration_status",
-    )
-    expiration_status_enum.create(op.get_bind())
-
     op.create_table(
         "loyalty_redemptions",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
@@ -69,7 +68,7 @@ def upgrade() -> None:
             sa.ForeignKey("loyalty_rewards.id"),
             nullable=True,
         ),
-        sa.Column("status", redemption_status_enum, nullable=False, server_default="requested"),
+        sa.Column("status", sa.dialects.postgresql.ENUM("requested", "fulfilled", "failed", "cancelled", name="loyalty_redemption_status", create_type=False), nullable=False, server_default="requested"),
         sa.Column("points_cost", sa.Numeric(12, 2), nullable=False),
         sa.Column("quantity", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("requested_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
@@ -93,7 +92,7 @@ def upgrade() -> None:
         sa.Column("points", sa.Numeric(12, 2), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("consumed_points", sa.Numeric(12, 2), nullable=False, server_default="0"),
-        sa.Column("status", expiration_status_enum, nullable=False, server_default="scheduled"),
+        sa.Column("status", sa.dialects.postgresql.ENUM("scheduled", "expired", "consumed", "cancelled", name="loyalty_point_expiration_status", create_type=False), nullable=False, server_default="scheduled"),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),

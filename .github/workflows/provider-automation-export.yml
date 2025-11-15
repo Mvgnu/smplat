@@ -1,0 +1,70 @@
+name: provider-automation-export
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  export-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: test
+            environment: staging
+          - name: prod
+            environment: production
+    environment: ${{ matrix.target.environment }}
+    env:
+      SMPLAT_API_BASE_URL: ${{ vars.SMPLAT_API_BASE_URL }}
+      SMPLAT_AUTOMATION_EXPORT_DIR: ${{ vars.SMPLAT_AUTOMATION_EXPORT_DIR || format('{0}/exports/{1}', github.workspace, matrix.target.name) }}
+      SMPLAT_AUTOMATION_AUTH_TOKEN: ${{ secrets.SMPLAT_AUTOMATION_API_TOKEN }}
+      EXPORT_LIMIT: ${{ vars.SMPLAT_AUTOMATION_EXPORT_LIMIT || '200' }}
+      EXPORT_FORMAT: ${{ vars.SMPLAT_AUTOMATION_EXPORT_FORMAT || 'json' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate configuration
+        run: |
+          if [ -z "${SMPLAT_API_BASE_URL}" ]; then
+            echo "::error::SMPLAT_API_BASE_URL must be set via repository or environment variables."
+            exit 1
+          fi
+
+          if [ -z "${SMPLAT_AUTOMATION_AUTH_TOKEN}" ]; then
+            echo "::error::SMPLAT_AUTOMATION_API_TOKEN secret is missing for environment '${{ matrix.target.environment }}'."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: python -m pip install --upgrade pip poetry
+
+      - name: Install dependencies
+        working-directory: apps/api
+        run: poetry install --without dev
+
+      - name: Export automation history
+        working-directory: apps/api
+        env:
+          SMPLAT_API_BASE_URL: ${{ env.SMPLAT_API_BASE_URL }}
+          SMPLAT_AUTOMATION_EXPORT_DIR: ${{ env.SMPLAT_AUTOMATION_EXPORT_DIR }}
+          SMPLAT_AUTOMATION_AUTH_TOKEN: ${{ env.SMPLAT_AUTOMATION_AUTH_TOKEN }}
+        run: |
+          poetry run python ../../tooling/scripts/export_provider_automation_runs.py \
+            --limit "${EXPORT_LIMIT}" \
+            --format "${EXPORT_FORMAT}"
+
+      - name: Upload export artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-automation-runs-${{ matrix.target.name }}
+          path: ${{ env.SMPLAT_AUTOMATION_EXPORT_DIR }}
+          if-no-files-found: error

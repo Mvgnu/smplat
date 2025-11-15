@@ -5,10 +5,18 @@
     "paths": {
       "@/*": [
         "src/*"
+      ],
+      "@smplat/types": [
+        "../../packages/types/src/index.ts"
+      ],
+      "@smplat/shared": [
+        "../../packages/shared/src/index.ts"
       ]
     },
     "types": [
-      "node"
+      "node",
+      "jest",
+      "@testing-library/jest-dom"
     ],
     "incremental": true,
     "jsx": "preserve",
@@ -21,6 +29,7 @@
   "include": [
     "next-env.d.ts",
     "src/**/*.ts",
+    "src/**/*.d.ts",
     "src/**/*.tsx",
     ".next/types/**/*.ts"
   ],

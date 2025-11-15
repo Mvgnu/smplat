@@ -4,6 +4,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "20251122_27"
@@ -12,29 +13,45 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-guardrail_scope_enum = sa.Enum(
-    "invite_quota",
-    "invite_cooldown",
-    "global_throttle",
-    name="loyalty_guardrail_override_scope",
-)
-
-audit_action_enum = sa.Enum(
-    "created",
-    "revoked",
-    name="loyalty_guardrail_audit_action",
-)
-
-
 def upgrade() -> None:
-    bind = op.get_bind()
-    guardrail_scope_enum.create(bind, checkfirst=True)
-    audit_action_enum.create(bind, checkfirst=True)
+    # Create enum types idempotently
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_guardrail_override_scope') THEN
+                CREATE TYPE loyalty_guardrail_override_scope AS ENUM (
+                    'invite_quota',
+                    'invite_cooldown',
+                    'global_throttle'
+                );
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_guardrail_audit_action') THEN
+                CREATE TYPE loyalty_guardrail_audit_action AS ENUM (
+                    'created',
+                    'revoked'
+                );
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "loyalty_guardrail_overrides",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("scope", guardrail_scope_enum, nullable=False),
+        sa.Column(
+            "scope",
+            postgresql.ENUM(
+                "invite_quota",
+                "invite_cooldown",
+                "global_throttle",
+                name="loyalty_guardrail_override_scope",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
         sa.Column("justification", sa.Text(), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True, server_default=sa.text("'{}'::jsonb")),
         sa.Column("target_member_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
@@ -77,7 +94,16 @@ def upgrade() -> None:
             sa.ForeignKey("loyalty_guardrail_overrides.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("action", audit_action_enum, nullable=False),
+        sa.Column(
+            "action",
+            postgresql.ENUM(
+                "created",
+                "revoked",
+                name="loyalty_guardrail_audit_action",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
         sa.Column("message", sa.Text(), nullable=True),
         sa.Column("actor_user_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column(
@@ -108,6 +134,5 @@ def downgrade() -> None:
     )
     op.drop_table("loyalty_guardrail_overrides")
 
-    bind = op.get_bind()
-    audit_action_enum.drop(bind, checkfirst=True)
-    guardrail_scope_enum.drop(bind, checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS loyalty_guardrail_audit_action")
+    op.execute("DROP TYPE IF EXISTS loyalty_guardrail_override_scope")

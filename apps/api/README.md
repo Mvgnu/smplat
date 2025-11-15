@@ -10,6 +10,13 @@ poetry install  # ensures pytest-asyncio and other plugins are present
 poetry run pytest
 ```
 
+## Development Seed Data
+Run the shortcut seed to provision the demo customer/admin accounts expected by the web app:
+```bash
+poetry run python tooling/seed_dev_users.py
+```
+Set `DEV_SHORTCUT_*` environment variables before running if you need custom emails.
+
 See `/docs` for full architecture decisions.
 
 ## Product Configuration APIs
@@ -42,5 +49,19 @@ See `/docs` for full architecture decisions.
 - `BUNDLE_ACCEPTANCE_AGGREGATION_ENABLED`: allow the scheduler to execute `run_aggregation` for bundle acceptance metrics.
 - `BUNDLE_EXPERIMENT_GUARDRAIL_WORKER_ENABLED`: enable guardrail pauses + notifier dispatch (used by both the scheduler and the legacy interval worker).
 - Scheduler retries + observability: each job definition supports `max_attempts`, `base_backoff_seconds`, `backoff_multiplier`, `max_backoff_seconds`, and `jitter_seconds`. Runtime metrics surface through `CatalogJobScheduler.health()` and `/api/v1/observability/prometheus` (counters for runs, retries, failures, timestamps).
+
+## Provider Automation Replay Worker
+- `PROVIDER_REPLAY_WORKER_ENABLED`: start the replay daemon that consumes `payload.scheduledReplays` on `fulfillment_provider_orders`.
+- `PROVIDER_REPLAY_WORKER_INTERVAL_SECONDS`, `PROVIDER_REPLAY_WORKER_LIMIT`: control cadence and per-tick throughput (defaults to 5 minutes / 25 replays).
+- Queue-friendly entrypoint: `poetry run provider-replay scheduled --limit 50` processes due replays once, while `poetry run provider-replay replay --provider-id=<id> --provider-order-id=<uuid>` triggers a single order immediately. Both commands reuse the same automation service, making it safe to wire Celery/BullMQ jobs or cron invocations without touching FastAPI internals.
+- See `docs/provider-automation-queue-integration.md` for end-to-end queue wiring examples (Celery, BullMQ, cron).
+
+## Provider Automation Alerts
+- `PROVIDER_AUTOMATION_ALERT_WORKER_ENABLED`: enables the telemetry monitor that inspects replay/guardrail data on a cadence (15 minutes by default).
+- `PROVIDER_AUTOMATION_ALERT_INTERVAL_SECONDS`, `PROVIDER_AUTOMATION_ALERT_SNAPSHOT_LIMIT`: tune the polling window and per-provider order sample size.
+- Thresholds: `PROVIDER_AUTOMATION_ALERT_GUARDRAIL_FAIL_THRESHOLD`, `PROVIDER_AUTOMATION_ALERT_GUARDRAIL_WARN_THRESHOLD`, and `PROVIDER_AUTOMATION_ALERT_REPLAY_FAILURE_THRESHOLD` drive alert creation.
+- Notifications: populate `PROVIDER_AUTOMATION_ALERT_EMAIL_RECIPIENTS` for SMTP dispatch and/or `PROVIDER_AUTOMATION_ALERT_SLACK_WEBHOOK_URL` (with optional `PROVIDER_AUTOMATION_ALERT_SLACK_CHANNEL`) for Slack escalations.
+- Cohort load alerts: use `PROVIDER_LOAD_ALERT_ENABLED`, `PROVIDER_LOAD_ALERT_SHORT_WINDOW_DAYS`, `PROVIDER_LOAD_ALERT_LONG_WINDOW_DAYS`, `PROVIDER_LOAD_ALERT_SHARE_THRESHOLD`, `PROVIDER_LOAD_ALERT_DELTA_THRESHOLD`, `PROVIDER_LOAD_ALERT_MIN_ENGAGEMENTS`, and `PROVIDER_LOAD_ALERT_MAX_RESULTS` to tune when preset/provider overload notifications should be emitted (defaults 7d vs 90d with ≥60% share and 10+ engagements).
+- Queue-friendly entrypoint: `poetry run provider-alerts` executes a single telemetry evaluation/notification cycle, making it easy to wire cron, Celery beat, or BullMQ jobs without booting the FastAPI app.
 
 > meta: docs: hosted-recovery

@@ -4,56 +4,22 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
 import type {
-  ProductAssurancePoint,
-  ProductDeliveryEstimate,
-  ProductSupportChannel,
-} from "@/types/product";
+  CartAddOnSelection,
+  CartCustomFieldValue,
+  CartItem,
+  CartOptionSelection,
+  CartProductExperience,
+  CartSubscriptionSelection,
+} from "@/types/cart";
 
-export type CartOptionSelection = {
-  groupId: string;
-  groupName: string;
-  optionId: string;
-  label: string;
-  priceDelta: number;
-};
-
-export type CartAddOnSelection = {
-  id: string;
-  label: string;
-  priceDelta: number;
-};
-
-export type CartCustomFieldValue = {
-  id: string;
-  label: string;
-  value: string;
-};
-
-export type CartSubscriptionSelection = {
-  id: string;
-  label: string;
-  billingCycle: string;
-  priceMultiplier?: number | null;
-  priceDelta?: number | null;
-};
-
-export type CartItem = {
-  id: string;
-  productId: string;
-  slug: string;
-  title: string;
-  currency: string;
-  basePrice: number;
-  quantity: number;
-  unitPrice: number;
-  selectedOptions: CartOptionSelection[];
-  addOns: CartAddOnSelection[];
-  subscriptionPlan?: CartSubscriptionSelection;
-  customFields: CartCustomFieldValue[];
-  deliveryEstimate?: ProductDeliveryEstimate | null;
-  assuranceHighlights?: ProductAssurancePoint[];
-  supportChannels?: ProductSupportChannel[];
-};
+export type {
+  CartAddOnSelection,
+  CartCustomFieldValue,
+  CartItem,
+  CartOptionSelection,
+  CartProductExperience,
+  CartSubscriptionSelection,
+} from "@/types/cart";
 
 type CartState = {
   items: CartItem[];
@@ -103,7 +69,10 @@ export const useCartStore = create<CartState>()(
             const existingItem = updatedItems[existingIndex];
             updatedItems[existingIndex] = {
               ...existingItem,
-              quantity: existingItem.quantity + 1
+              quantity: existingItem.quantity + 1,
+              presetId: existingItem.presetId ?? item.presetId ?? null,
+              presetLabel: existingItem.presetLabel ?? item.presetLabel ?? null,
+              experience: existingItem.experience ?? item.experience ?? undefined,
             };
             return { items: updatedItems };
           }
@@ -111,7 +80,10 @@ export const useCartStore = create<CartState>()(
           const newItem: CartItem = {
             ...item,
             id: crypto.randomUUID(),
-            quantity: 1
+            quantity: 1,
+            presetId: item.presetId ?? null,
+            presetLabel: item.presetLabel ?? null,
+            experience: item.experience ?? undefined,
           };
 
           return { items: [...state.items, newItem] };
@@ -134,7 +106,7 @@ export const useCartStore = create<CartState>()(
         }),
       removeItem: (itemId) =>
         set((state) => ({
-          items: state.items.filter((item) => item.id != itemId)
+          items: state.items.filter((item) => item.id !== itemId)
         })),
       clear: () => set({ items: [] })
     }),

@@ -16,6 +16,18 @@
   - Configurable option collections (e.g., target audience, speed, add-ons) with ordering rules.
 - **ProductOption**
   - Individual option values with price deltas, constraints, and compatibility flags.
+  - `metadata_json` structured payload:
+    - `structuredPricing`: captures per-variation economics with
+      `amount`, `amountUnit`, `basePrice`, `unitPrice`, optional `dripMinPerDay`, and `discountTiers[]`
+      (`minAmount`, `unitPrice`, optional `label`/`notes`).
+    - `media`: array tying uploader asset ids to an option (`assetId`, optional `usage`, `label`).
+    - `recommended`: boolean flag to pre-select defaults in admin/storefront flows.
+- **ProductAddOn**
+  - Optional upsells linked to the product.
+  - `metadata_json.pricing` normalizes advanced billing models:
+    - `{ "mode": "flat", "amount": 120 }` — legacy fixed fee.
+    - `{ "mode": "percentage", "amount": 0.15 }` — multiplier applied to configured subtotal before subscription plans.
+    - `{ "mode": "serviceOverride", "serviceId": "321", "amount": 499 }` — direct override referencing downstream fulfillment service.
 - **SubscriptionPlan**
   - Stripe price linkage, billing interval, trial days, linked `product_id`.
 

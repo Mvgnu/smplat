@@ -18,24 +18,49 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("invoices", sa.Column("payment_intent_id", sa.String(), nullable=True))
-    op.add_column("invoices", sa.Column("external_processor_id", sa.String(), nullable=True))
-    op.add_column(
-        "invoices",
-        sa.Column("settlement_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.add_column(
-        "invoices",
-        sa.Column("adjustments_total", sa.Numeric(12, 2), server_default="0", nullable=False),
-    )
-    op.add_column("invoices", sa.Column("adjustments", sa.JSON(), nullable=True))
-    op.add_column("invoices", sa.Column("payment_timeline", sa.JSON(), nullable=True))
+    # Create invoice_status_enum if it doesn't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'invoice_status_enum') THEN
+                CREATE TYPE invoice_status_enum AS ENUM ('draft', 'issued', 'paid', 'void', 'overdue');
+            END IF;
+        END $$;
+    """)
+
+    # Create invoices table if it doesn't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'invoices') THEN
+                CREATE TABLE invoices (
+                    id UUID PRIMARY KEY,
+                    workspace_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    invoice_number VARCHAR NOT NULL UNIQUE,
+                    status invoice_status_enum NOT NULL DEFAULT 'issued',
+                    currency preferred_currency_enum NOT NULL DEFAULT 'EUR',
+                    subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0,
+                    tax NUMERIC(12, 2) NOT NULL DEFAULT 0,
+                    total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+                    balance_due NUMERIC(12, 2) NOT NULL DEFAULT 0,
+                    payment_intent_id VARCHAR,
+                    external_processor_id VARCHAR,
+                    settlement_at TIMESTAMP WITH TIME ZONE,
+                    adjustments_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+                    adjustments JSON,
+                    payment_timeline JSON,
+                    issued_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                    due_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    paid_at TIMESTAMP WITH TIME ZONE,
+                    voided_at TIMESTAMP WITH TIME ZONE,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+                );
+                CREATE INDEX ix_invoices_workspace_id ON invoices(workspace_id);
+                CREATE INDEX ix_invoices_status ON invoices(status);
+            END IF;
+        END $$;
+    """)
 
 
 def downgrade() -> None:
-    op.drop_column("invoices", "payment_timeline")
-    op.drop_column("invoices", "adjustments")
-    op.drop_column("invoices", "adjustments_total")
-    op.drop_column("invoices", "settlement_at")
-    op.drop_column("invoices", "external_processor_id")
-    op.drop_column("invoices", "payment_intent_id")
+    op.drop_table("invoices")
+    op.execute("DROP TYPE IF EXISTS invoice_status_enum")

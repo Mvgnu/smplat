@@ -44,6 +44,8 @@ type MarketingPreviewRoute =
   | { route: string; kind: "page"; slug: string }
   | { route: string; kind: "blog"; slug: string };
 
+type PageSections = NonNullable<PageDocument["content"]>;
+
 const PREVIEW_ROUTES: MarketingPreviewRoute[] = [
   { route: "/", kind: "homepage" },
   { route: "/pricing", kind: "page", slug: "pricing" },
@@ -87,7 +89,7 @@ const ensureLexicalState = (state?: LexicalEditorState): LexicalEditorState => {
   return fallback as LexicalEditorState;
 };
 
-const createFixtureSection = (state: LexicalEditorState, label: string): NonNullable<PageDocument["content"]>[number] => {
+const createFixtureSection = (state: LexicalEditorState, label: string): PageSections[number] => {
   const normalized = normalizeMarketingLexicalContent(state, {
     sectionLabel: label,
     logger: () => {}
@@ -114,9 +116,9 @@ const createFixtureSection = (state: LexicalEditorState, label: string): NonNull
   };
 };
 
-const ensureSections = (page: PageDocument | null | undefined, state: LexicalEditorState) => {
+const ensureSections = (page: PageDocument | null | undefined, state: LexicalEditorState): PageSections => {
   if (page?.content && page.content.length > 0) {
-    return page.content;
+    return page.content as PageSections;
   }
 
   return [createFixtureSection(state, page?.title ?? "marketing-preview")];
@@ -129,11 +131,7 @@ const ensureHero = (page: PageDocument | null | undefined) => {
   return { ...FALLBACK_HERO, headline: page?.title ?? FALLBACK_HERO.headline };
 };
 
-const collectBlockKinds = (sections: PageDocument["content"]): string[] => {
-  if (!sections?.length) {
-    return [];
-  }
-
+const collectBlockKinds = (sections: PageSections): string[] => {
   const kinds = new Set<string>();
   for (const section of sections) {
     if (section._type !== "section") continue;
@@ -148,11 +146,7 @@ const collectBlockKinds = (sections: PageDocument["content"]): string[] => {
   return Array.from(kinds).sort();
 };
 
-const resolveMetricsSummary = (sections: PageDocument["content"]): SnapshotMetrics | undefined => {
-  if (!sections?.length) {
-    return undefined;
-  }
-
+const resolveMetricsSummary = (sections: PageSections): SnapshotMetrics | undefined => {
   for (const section of sections) {
     if (section._type !== "section") continue;
     if (!Array.isArray(section.marketingContent)) {
@@ -174,13 +168,12 @@ const resolveMetricsSummary = (sections: PageDocument["content"]): SnapshotMetri
 };
 
 const mergeBlogPostsIntoSections = (
-  sections: PageDocument["content"],
+  sections: PageSections,
   posts: BlogPostSummary[]
-): PageDocument["content"] => {
-  if (!sections?.length || !posts.length) {
+): PageSections => {
+  if (!sections.length || !posts.length) {
     return sections;
   }
-
   return sections.map((section) => {
     if (section._type !== "section") {
       return section;
@@ -201,15 +194,11 @@ const mergeBlogPostsIntoSections = (
 };
 
 const renderMarkup = (
-  sections: PageDocument["content"],
+  sections: PageSections,
   metricFallback: MetricItem[],
   sectionContentClassName: string,
   id?: string
 ) => {
-  if (!sections?.length) {
-    return "";
-  }
-
   const markup = renderToStaticMarkup(
     <MarketingSections
       id={id}

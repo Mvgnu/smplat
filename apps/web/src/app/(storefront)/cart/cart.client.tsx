@@ -2,7 +2,10 @@
 
 import Link from "next/link";
 
+import { formatAppliedAddOnLabel } from "@/lib/product-pricing";
 import { cartTotalSelector, useCartStore } from "@/store/cart";
+import { ProductExperienceCard } from "@/components/storefront/product-experience-card";
+import { getStorefrontProductExperience } from "@/data/storefront-experience";
 
 function formatCurrency(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
@@ -52,13 +55,16 @@ export function CartPageClient() {
       </header>
 
       <div className="space-y-6">
-        {items.map((item) => (
-          <article
-            key={item.id}
-            className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur transition hover:border-white/20"
-            data-testid="cart-item"
-          >
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        {items.map((item) => {
+          const experience = item.experience ?? getStorefrontProductExperience(item.slug);
+
+          return (
+            <article
+              key={item.id}
+              className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur transition hover:border-white/20"
+              data-testid="cart-item"
+            >
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-white">{item.title}</h2>
                 <p className="text-sm text-white/60">Base price {formatCurrency(item.basePrice, item.currency)}</p>
@@ -98,18 +104,57 @@ export function CartPageClient() {
             {item.selectedOptions.length > 0 ? (
               <div className="mt-4 space-y-2 text-sm text-white/70">
                 <p className="text-xs uppercase tracking-wide text-white/40">Selected options</p>
-                <ul className="space-y-1">
-                  {item.selectedOptions.map((selection) => (
-                    <li key={`${selection.groupId}-${selection.optionId}`}>
-                      <span className="text-white/60">{selection.groupName}:</span> {selection.label}{" "}
-                      {selection.priceDelta !== 0
-                        ? `(${selection.priceDelta > 0 ? "+" : "-"}${formatCurrency(
+                <ul className="space-y-2">
+                  {item.selectedOptions.map((selection) => {
+                    const deltaLabel =
+                      selection.priceDelta !== 0
+                        ? `${selection.priceDelta > 0 ? "+" : "-"}${formatCurrency(
                             Math.abs(selection.priceDelta),
                             item.currency
-                          )})`
-                        : "(included)"}
-                    </li>
-                  ))}
+                          )}`
+                        : "included";
+
+                    return (
+                      <li
+                        key={`${selection.groupId}-${selection.optionId}`}
+                        className="space-y-1 rounded-2xl border border-white/10 bg-black/30 p-3"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium text-white">
+                              {selection.groupName}: <span className="text-white/70">{selection.label}</span>
+                            </p>
+                            <p className="text-xs uppercase tracking-wide text-white/40">{deltaLabel}</p>
+                          </div>
+                          {selection.heroImageUrl ? (
+                            <span className="truncate text-[0.65rem] uppercase tracking-[0.3em] text-white/40">
+                              Hero: {selection.heroImageUrl}
+                            </span>
+                          ) : null}
+                        </div>
+                        {selection.marketingTagline ? (
+                          <p className="text-sm text-white/70">{selection.marketingTagline}</p>
+                        ) : null}
+                        {selection.fulfillmentSla ? (
+                          <p className="text-xs text-white/50">SLA: {selection.fulfillmentSla}</p>
+                        ) : null}
+                        {selection.calculator ? (
+                          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/60">
+                            <p className="font-semibold uppercase tracking-wide text-white/40">Calculator</p>
+                            <code className="block text-white/70">{selection.calculator.expression}</code>
+                            {selection.calculator.sampleResult != null ? (
+                              <p className="mt-1">
+                                Sample output: {selection.calculator.sampleResult.toFixed(2)}{" "}
+                                {`(amount ${selection.calculator.sampleAmount ?? "–"}, days ${selection.calculator.sampleDays ?? "–"})`}
+                              </p>
+                            ) : (
+                              <p className="mt-1 text-white/40">Insufficient sample data to preview.</p>
+                            )}
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
@@ -118,11 +163,42 @@ export function CartPageClient() {
               <div className="mt-4 space-y-2 text-sm text-white/70">
                 <p className="text-xs uppercase tracking-wide text-white/40">Add-ons</p>
                 <ul className="space-y-1">
-                  {item.addOns.map((addOn) => (
-                    <li key={addOn.id}>
-                      {addOn.label} (+{formatCurrency(addOn.priceDelta, item.currency)})
-                    </li>
-                  ))}
+                  {item.addOns.map((addOn) => {
+                    const pricingInfo = {
+                      mode: addOn.pricingMode,
+                      amount: addOn.pricingAmount ?? null,
+                      serviceId: addOn.serviceId ?? null,
+                      serviceProviderName: addOn.serviceProviderName ?? null,
+                      serviceAction: addOn.serviceAction ?? null,
+                      serviceDescriptor: addOn.serviceDescriptor ?? null,
+                      previewQuantity: addOn.previewQuantity ?? null,
+                    };
+                    const labels = formatAppliedAddOnLabel(pricingInfo, addOn.priceDelta, item.currency);
+
+                    return (
+                      <li key={addOn.id} className="space-y-1">
+                        <span className="font-medium">{addOn.label}</span> {labels.primary}
+                        {labels.secondary ? (
+                          <span className="text-white/50"> ({labels.secondary})</span>
+                        ) : null}
+                        {addOn.previewQuantity != null || addOn.payloadTemplate ? (
+                          <div className="ml-4 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/60">
+                            {addOn.previewQuantity != null ? (
+                              <p>Preview quantity: {addOn.previewQuantity}</p>
+                            ) : null}
+                            {addOn.payloadTemplate ? (
+                              <details>
+                                <summary className="cursor-pointer text-white/50">Payload template</summary>
+                                <pre className="mt-1 max-h-32 overflow-auto text-[0.65rem] text-white/50">
+                                  {JSON.stringify(addOn.payloadTemplate, null, 2)}
+                                </pre>
+                              </details>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
@@ -155,8 +231,11 @@ export function CartPageClient() {
                 {formatCurrency(item.unitPrice * item.quantity, item.currency)}
               </span>
             </div>
+            <ProductExperienceCard product={experience} variant="compact" className="mt-4" />
+            <ProductExperienceCard product={experience} variant="compact" className="mt-4" />
           </article>
-        ))}
+        );
+        })}
       </div>
 
       <aside className="space-y-4 rounded-3xl border border-white/10 bg-white/5 p-6 text-white backdrop-blur">

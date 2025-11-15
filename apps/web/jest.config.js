@@ -11,6 +11,8 @@ const customJestConfig = {
   moduleNameMapper: {
     // Handle module aliases (this will be automatically configured for you based on your tsconfig.json paths)
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^@payloadcms/richtext-lexical$': '<rootDir>/test/mocks/payload-richtext-lexical.ts',
+    '^@payloadcms/richtext-lexical/react$': '<rootDir>/test/mocks/payload-richtext-lexical-react.tsx',
   },
   testEnvironment: 'jest-environment-jsdom',
   collectCoverageFrom: [

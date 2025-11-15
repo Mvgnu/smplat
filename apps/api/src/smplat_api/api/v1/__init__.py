@@ -8,10 +8,13 @@ from .endpoints import (
     billing_sessions,
     billing_replay,
     billing_webhooks,
+    analytics,
     catalog_merchandising,
     catalog_recommendations,
     catalog_experiments,
+    catalog_pricing,
     fulfillment,
+    fulfillment_providers,
     health,
     instagram,
     observability,
@@ -23,6 +26,10 @@ from .endpoints import (
     trust,
     checkout,
     loyalty,
+    notifications,
+    reporting,
+    security,
+    journey_components,
 )
 
 router = APIRouter()
@@ -42,9 +49,16 @@ router.include_router(billing_replay.router)
 router.include_router(billing_webhooks.router)
 router.include_router(catalog_recommendations.router)
 router.include_router(catalog_experiments.router)
+router.include_router(catalog_pricing.router)
 router.include_router(catalog_merchandising.router)
 router.include_router(observability.router)
 router.include_router(fulfillment.router, tags=["Fulfillment"])
+router.include_router(fulfillment_providers.router)
 router.include_router(instagram.router)
 router.include_router(trust.router)
 router.include_router(loyalty.router)
+router.include_router(notifications.router)
+router.include_router(security.router)
+router.include_router(analytics.router)
+router.include_router(reporting.router)
+router.include_router(journey_components.router)

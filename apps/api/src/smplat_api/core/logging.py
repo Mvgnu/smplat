@@ -8,7 +8,16 @@ from logging import LogRecord
 from typing import Any, Dict
 
 from loguru import logger
-from opentelemetry import trace
+
+try:  # best-effort OpenTelemetry integration; optional in local dev
+    from opentelemetry import trace
+except ModuleNotFoundError:  # pragma: no cover - exercised only when OTEL missing
+    class _TraceShim:
+        @staticmethod
+        def get_current_span() -> Any:
+            return None
+
+    trace = _TraceShim()  # type: ignore[assignment]
 
 _RESERVED_LOG_RECORD_ATTRS = {
     "name",

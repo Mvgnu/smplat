@@ -24,7 +24,7 @@ from smplat_api.models.order import Order, OrderItem, OrderStatusEnum
 from smplat_api.models.payment import Payment
 from smplat_api.models.user import User
 from smplat_api.models.notification import NotificationPreference
-from smplat_api.models.invoice import Invoice, InvoiceStatusEnum
+from smplat_api.models.invoice import Invoice, InvoiceLineItem, InvoiceStatusEnum
 
 from .backend import (
     EmailBackend,
@@ -288,7 +288,11 @@ class NotificationService:
         if not preferences.payment_updates:
             return
 
-        template = render_payment_success(order, payment, contact.display_name)
+        stmt = select(Order).options(selectinload(Order.items)).where(Order.id == order.id)
+        result = await self._db.execute(stmt)
+        order_with_items = result.scalar_one_or_none() or order
+
+        template = render_payment_success(order_with_items, payment, contact.display_name)
         metadata = {
             "order_id": str(order.id),
             "order_number": order.order_number,
@@ -390,7 +394,8 @@ class NotificationService:
         if status_value == InvoiceStatusEnum.PAID.value:
             return
 
-        template = render_invoice_overdue(invoice, contact.display_name)
+        invoice, related_orders = await self._hydrate_invoice_orders(invoice)
+        template = render_invoice_overdue(invoice, contact.display_name, related_orders)
         metadata = {
             "invoice_id": str(invoice.id),
             "invoice_number": invoice.invoice_number,
@@ -545,6 +550,30 @@ class NotificationService:
             phone_number=getattr(user, "phone_number", None),
             push_token=getattr(user, "push_token", None),
         )
+
+    async def _hydrate_invoice_orders(self, invoice: Invoice) -> tuple[Invoice, list[Order]]:
+        """Reload invoice with its related orders/items to support blueprint exports."""
+
+        stmt = (
+            select(Invoice)
+            .options(
+                selectinload(Invoice.line_items)
+                .selectinload(InvoiceLineItem.order)
+                .selectinload(Order.items)
+            )
+            .where(Invoice.id == invoice.id)
+        )
+        result = await self._db.execute(stmt)
+        hydrated = result.scalar_one_or_none() or invoice
+
+        line_items = list(getattr(hydrated, "line_items", []) or [])
+        orders: dict[UUID, Order] = {}
+        for line_item in line_items:
+            order = getattr(line_item, "order", None)
+            if order is not None and getattr(order, "id", None):
+                orders[order.id] = order
+
+        return hydrated, list(orders.values())
 
     async def _get_preferences(self, user_id: Optional[UUID]) -> _PreferenceSnapshot:
         """Return notification preferences for the provided user."""

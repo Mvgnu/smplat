@@ -71,5 +71,5 @@ GDPRRequest (id PK, user_id FK)
 1. Draft SQLAlchemy models mirroring `docs/04-data-model.md` (in progress; `User`, `CustomerProfile`, `Notification`, `Product`, `Order`, `Payment` models scaffolded).
 2. Configure Alembic env with async engine, multiple metadata targets (core + auth) (✅ env.py in place).
 3. Generate baseline migration and review for indexes/constraints (✅ migrations `20251015_01_initial_user_table`, `20251015_02_customer_profile_notifications`, `20251015_03_commerce_core`).
-4. Align Prisma schema (for Auth.js) with shared Postgres DB; document table ownership. ✅ (`apps/web/prisma/schema.prisma`).
+4. Retire the legacy Prisma schema in favour of the FastAPI-managed Postgres schema. ✅
 5. Establish migration policy (manual review, code owners) and CI gate requiring Alembic upgrade/downgrade success.

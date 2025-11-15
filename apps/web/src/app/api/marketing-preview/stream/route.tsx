@@ -7,6 +7,7 @@ import {
   MarketingSections,
   defaultMarketingMetricsFallback
 } from "@/components/marketing/sections";
+import type { SnapshotMetrics } from "@/server/cms/preview/types";
 import { normalizeMarketingLexicalContent } from "@/server/cms/lexical";
 import { recordLivePreviewDelta } from "@/server/cms/history";
 import {
@@ -34,6 +35,10 @@ type LivePreviewSectionInput = {
   subheading?: string | null;
   content?: unknown;
 };
+
+type PageSections = NonNullable<PageDocument["content"]>;
+type PageSection = PageSections[number];
+type MarketingSection = Extract<PageSection, { _type: "section" }>;
 
 type SectionDiagnostics = {
   label: string;
@@ -86,7 +91,7 @@ type LivePreviewBroadcast = {
   sectionCount: number;
   variant: LivePreviewVariant;
   hero?: PageDocument["hero"];
-  metrics?: PageDocument["content"][number]["metrics"];
+  metrics?: SnapshotMetrics;
   validation: {
     ok: boolean;
     warnings: string[];
@@ -148,9 +153,10 @@ const toVariantDescriptor = (payload: LivePreviewPayload): LivePreviewVariant =>
   const id = toNonEmptyString(payload.variant?.id);
   const label =
     payload.variant?.label ??
-    [persona ?? "Baseline", campaign ?? null, featureFlag ?? null]
+    (([persona ?? "Baseline", campaign ?? null, featureFlag ?? null]
       .filter((segment) => segment && segment !== "Baseline")
-      .join(" · ") || "Baseline";
+      .join(" · ")) ||
+      "Baseline");
   const keySeed = [persona ?? "base", campaign ?? "default", featureFlag ?? "flag", id ?? ""].join(":");
   let hash = 5381;
   for (let index = 0; index < keySeed.length; index += 1) {
@@ -190,7 +196,7 @@ const toSectionFromLexical = (
   validations: MarketingBlockValidationResult[],
   warnings: string[],
   sectionDiagnostics: SectionDiagnostics[]
-): PageDocument["content"][number] | null => {
+): PageSection | null => {
   const state = input.content;
   const label = toNonEmptyString(input.heading) ?? `section-${index + 1}`;
 
@@ -240,10 +246,10 @@ const toSectionFromLexical = (
     caseStudy: undefined,
     pricingTiers: undefined,
     blogPosts: undefined
-  } as PageDocument["content"][number];
+  } as PageSection;
 };
 
-const renderMarkup = (sections: PageDocument["content"]): string => {
+const renderMarkup = (sections: PageSections): string => {
   if (!sections.length) {
     return "";
   }
@@ -257,14 +263,13 @@ const renderMarkup = (sections: PageDocument["content"]): string => {
   );
 };
 
-const resolveMetricsSummary = (sections: PageDocument["content"]):
-  | PageDocument["content"][number]["metrics"]
-  | undefined => {
+const resolveMetricsSummary = (sections: PageSections): SnapshotMetrics | undefined => {
   for (const section of sections) {
     if (section._type !== "section") continue;
-    if (!Array.isArray(section.marketingContent)) continue;
+    const marketingSection = section as MarketingSection;
+    if (!Array.isArray(marketingSection.marketingContent)) continue;
 
-    for (const block of section.marketingContent) {
+    for (const block of marketingSection.marketingContent) {
       if ((block as MarketingContentDocument).kind === "metrics") {
         const metricsBlock = block as MarketingContentDocument & { metrics?: unknown };
         const values = Array.isArray(metricsBlock.metrics)
@@ -276,7 +281,8 @@ const resolveMetricsSummary = (sections: PageDocument["content"]):
         return {
           label:
             (metricsBlock as { heading?: string }).heading ??
-            (metricsBlock as { subheading?: string }).subheading,
+            (metricsBlock as { subheading?: string }).subheading ??
+            undefined,
           values
         };
       }
@@ -439,7 +445,7 @@ export async function POST(request: Request) {
   const validations: MarketingBlockValidationResult[] = [];
   const normalizationWarnings: string[] = [];
   const sectionDiagnostics: SectionDiagnostics[] = [];
-  const sections: PageDocument["content"] = [];
+  const sections: PageSections = [];
   const variant = toVariantDescriptor(body);
 
   lexicalSections.forEach((section, index) => {
@@ -523,7 +529,7 @@ export async function POST(request: Request) {
         collection: broadcastPayload.collection ?? null,
         docId: broadcastPayload.docId ?? null,
         metrics: broadcastPayload.metrics ?? null,
-        hero: broadcastPayload.hero ?? null,
+        hero: broadcastPayload.hero ?? undefined,
         validation: {
           ok: broadcastPayload.validation.ok,
           warnings: [...broadcastPayload.validation.warnings],

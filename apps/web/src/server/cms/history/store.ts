@@ -173,11 +173,19 @@ const clamp = (value: number, minimum: number, maximum: number): number =>
 const DEFAULT_QUERY_LIMIT = 10;
 const MAX_QUERY_LIMIT = 50;
 
+type ErrorWithCause = Error & { cause?: unknown };
+
+const createErrorWithCause = (message: string, cause: unknown): Error => {
+  const error: ErrorWithCause = new Error(message);
+  error.cause = cause;
+  return error;
+};
+
 const encodeJson = (value: unknown, context: string): string => {
   try {
     return JSON.stringify(value);
   } catch (error) {
-    throw new Error(`Failed to serialize ${context}`, { cause: error });
+    throw createErrorWithCause(`Failed to serialize ${context}`, error);
   }
 };
 
@@ -185,7 +193,7 @@ const decodeJson = <T>(payload: string, context: string): T => {
   try {
     return JSON.parse(payload) as T;
   } catch (error) {
-    throw new Error(`Failed to parse ${context}`, { cause: error });
+    throw createErrorWithCause(`Failed to parse ${context}`, error);
   }
 };
 
@@ -352,7 +360,7 @@ export const fetchSnapshotHistory = (
     .prepare(
       `SELECT payload FROM snapshot_manifests ORDER BY datetime(generated_at) DESC LIMIT ?`
     )
-    .all(limit);
+    .all(limit) as Array<{ payload: string }>;
 
   return rows
     .map((row) => decodeJson<MarketingPreviewSnapshotManifest>(row.payload, "snapshot manifest payload"))
@@ -680,8 +688,8 @@ const fetchRoutesForManifest = (manifestId: string, database: Database): Marketi
         const parsed = JSON.parse(row.block_kinds) as unknown;
         return Array.isArray(parsed) ? (parsed as string[]) : [];
       } catch (error) {
-        throw new Error("Failed to parse stored block kinds", { cause: error });
-      }
+    throw createErrorWithCause("Failed to parse stored block kinds", error);
+  }
     })()
   }));
 };

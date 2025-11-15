@@ -3,7 +3,6 @@
 
 export {
   createHistoryHash,
-  buildHistoryAnalytics,
   fetchSnapshotHistory,
   persistSnapshotManifest,
   querySnapshotHistory,
@@ -16,6 +15,7 @@ export {
   resetHistoryStore,
   __internal
 } from "./store";
+export { buildHistoryAnalytics } from "./analytics";
 export type {
   MarketingPreviewGovernanceStats,
   MarketingPreviewHistoryAggregates,

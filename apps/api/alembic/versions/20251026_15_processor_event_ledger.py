@@ -20,7 +20,7 @@ def upgrade() -> None:
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column(
             "provider",
-            sa.Enum(name="webhook_provider_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("stripe", name="webhook_provider_enum", create_type=False),
             nullable=False,
         ),
         sa.Column("external_id", sa.String(length=128), nullable=False),

@@ -7,13 +7,19 @@ import { getPageBySlug } from "@/server/cms/loaders";
 import { fetchCatalogBundleRecommendations } from "@/server/catalog/recommendations";
 import { fetchCatalogExperiments } from "@/server/catalog/experiments";
 import { fetchProductDetail as loadCatalogProduct } from "@/server/catalog/products";
+import { fetchPricingExperiments } from "@/server/catalog/pricing-experiments";
 import type { ProductDetail as CatalogProductDetail } from "@/server/catalog/products";
 import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import type { PageDocument } from "@/server/cms/types";
 import { ProductDetail } from "@/types/product";
+import { getStorefrontProductExperience } from "@/data/storefront-experience";
+import {
+  filterEnabledPricingExperiments,
+  selectExperimentsForProduct,
+} from "@/lib/pricing-experiments";
 
 import { ProductDetailClient } from "./product-detail-client";
-import { filterExperimentsForRecommendations } from "./experiment-overlay";
+import { filterExperimentsForRecommendations } from "../experiment-overlay";
 import {
   defaultMarketing,
   marketingFallbacks,
@@ -363,15 +369,30 @@ export default async function ProductDetailPage({ params }: PageProps) {
   }
 
   const cmsSlug = `product-${product.slug}`;
-  const page = await getPageBySlug(cmsSlug);
+  const [
+    page,
+    trustExperience,
+    recommendationSnapshot,
+    experiments,
+    pricingExperimentSnapshots,
+  ] = await Promise.all([
+    getPageBySlug(cmsSlug),
+    getCheckoutTrustExperience(),
+    fetchCatalogBundleRecommendations(product.slug),
+    fetchCatalogExperiments(),
+    fetchPricingExperiments(),
+  ]);
   const fallback = marketingFallbacks[product.slug] ?? defaultMarketing;
-  const trustExperience = await getCheckoutTrustExperience();
   const marketing = integrateTrustSignals(mergeMarketingContent(fallback, page), trustExperience);
-  const recommendationSnapshot = await fetchCatalogBundleRecommendations(product.slug);
-  const experiments = await fetchCatalogExperiments();
   const relevantExperiments = filterExperimentsForRecommendations(
     recommendationSnapshot.recommendations,
     experiments,
+  );
+  const storefrontProduct = getStorefrontProductExperience(product.slug);
+  const enabledPricingExperiments = filterEnabledPricingExperiments(pricingExperimentSnapshots);
+  const productPricingExperiments = selectExperimentsForProduct(
+    enabledPricingExperiments,
+    product.slug,
   );
 
   return (
@@ -381,6 +402,8 @@ export default async function ProductDetailPage({ params }: PageProps) {
       recommendations={recommendationSnapshot.recommendations}
       recommendationFallback={recommendationSnapshot.fallbackCopy}
       experiments={relevantExperiments}
+      pricingExperiments={productPricingExperiments}
+      storefrontProduct={storefrontProduct}
     />
   );
 }

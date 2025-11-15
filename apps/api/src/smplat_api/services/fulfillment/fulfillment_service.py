@@ -1,8 +1,10 @@
 """Core fulfillment service for order processing and task management."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Mapping
 from uuid import UUID
 from datetime import datetime, timedelta
+
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -10,12 +12,20 @@ from loguru import logger
 
 from smplat_api.models.order import Order, OrderItem, OrderStatusEnum
 from smplat_api.models.fulfillment import (
+    FulfillmentProviderOrder,
     FulfillmentTask,
     FulfillmentTaskStatusEnum,
     FulfillmentTaskTypeEnum,
 )
 from smplat_api.models.product import Product
+from smplat_api.services.fulfillment.provider_endpoints import (
+    ProviderEndpointError,
+    extract_endpoint,
+    extract_path,
+    invoke_provider_endpoint,
+)
 from smplat_api.services.notifications import NotificationService
+from smplat_api.domain.fulfillment import get_provider, get_service, provider_registry
 from .instagram_service import InstagramService
 
 
@@ -27,6 +37,7 @@ class FulfillmentService:
         db_session: AsyncSession,
         *,
         notification_service: NotificationService | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ):
         """Initialize fulfillment service.
         
@@ -36,7 +47,8 @@ class FulfillmentService:
         self.db = db_session
         self.instagram_service = InstagramService(db_session)
         self.notification_service = notification_service or NotificationService(db_session)
-        
+        self._http_client = http_client
+       
     async def process_order_fulfillment(self, order_id: UUID) -> bool:
         """Process fulfillment for a paid order.
         
@@ -114,6 +126,8 @@ class FulfillmentService:
         if not product:
             logger.warning("Product not found for order item", item_id=str(order_item.id))
             return
+
+        await self._record_provider_overrides(order_item, product)
             
         # Configurable fulfillment overrides category defaults
         if product.fulfillment_config:
@@ -304,7 +318,241 @@ class FulfillmentService:
             product_id=str(product.id),
             tasks_count=created,
         )
-        
+
+    async def _record_provider_overrides(self, order_item: OrderItem, product: Product) -> None:
+        """Persist provider override selections for downstream reconciliation."""
+
+        overrides = self._extract_service_overrides(order_item)
+        if not overrides:
+            return
+
+        order = order_item.order
+        if order is None and getattr(order_item, "order_id", None):
+            order = await self.db.get(Order, order_item.order_id)
+
+        currency_value: str | None = None
+        if order is not None:
+            currency = order.currency
+            currency_value = currency.value if hasattr(currency, "value") else str(currency)
+
+        await provider_registry.refresh_catalog(self.db)
+        for override in overrides:
+            service_id = override.get("service_id")
+            if not service_id:
+                continue
+            descriptor = get_service(service_id)
+            if descriptor is None:
+                logger.warning(
+                    "Skipping provider override because service is not registered",
+                    order_item_id=str(order_item.id),
+                    service_id=service_id,
+                )
+                continue
+
+            # Ensure idempotency by checking for existing rows
+            existing_stmt = select(FulfillmentProviderOrder).where(
+                FulfillmentProviderOrder.order_item_id == order_item.id,
+                FulfillmentProviderOrder.service_id == descriptor.id,
+            )
+            existing_result = await self.db.execute(existing_stmt)
+            if existing_result.scalar_one_or_none():
+                continue
+
+            provider = get_provider(descriptor.provider_id)
+            payload: Dict[str, Any] = {
+                "orderId": str(order_item.order_id),
+                "orderItemId": str(order_item.id),
+                "productId": str(product.id),
+                "productSlug": product.slug,
+                "addOnId": override.get("id"),
+                "pricingMode": override.get("mode"),
+                "requestedAmount": override.get("amount"),
+                "fallbackDelta": override.get("price_delta"),
+                "service": descriptor.as_payload(),
+            }
+            provider_id_override = override.get("provider_id")
+            if provider_id_override:
+                payload["serviceProviderIdOverride"] = provider_id_override
+            if override.get("provider_cost_amount") is not None:
+                payload["providerCostAmount"] = override.get("provider_cost_amount")
+            if override.get("provider_cost_currency"):
+                payload["providerCostCurrency"] = override.get("provider_cost_currency")
+            if override.get("margin_target") is not None:
+                payload["marginTarget"] = override.get("margin_target")
+            if override.get("fulfillment_mode"):
+                payload["fulfillmentMode"] = override.get("fulfillment_mode")
+            if override.get("payload_template"):
+                payload["payloadTemplate"] = override.get("payload_template")
+            if override.get("drip_per_day") is not None:
+                payload["dripPerDay"] = override.get("drip_per_day")
+            if override.get("preview_quantity") is not None:
+                payload["previewQuantity"] = override.get("preview_quantity")
+            if override.get("service_rules") is not None:
+                payload["serviceRules"] = override.get("service_rules")
+
+            provider_response = await self._invoke_provider_order(
+                provider,
+                payload,
+                override,
+            )
+            if provider_response:
+                payload.update(provider_response)
+            payload = {key: value for key, value in payload.items() if value is not None}
+
+            record = FulfillmentProviderOrder(
+                order_id=order_item.order_id,
+                order_item_id=order_item.id,
+                provider_id=descriptor.provider_id,
+                provider_name=provider.name if provider else None,
+                service_id=descriptor.id,
+                service_action=descriptor.action,
+                amount=override.get("amount"),
+                currency=currency_value,
+                payload=payload,
+            )
+            self.db.add(record)
+
+    def _extract_service_overrides(self, order_item: OrderItem) -> List[Dict[str, Any]]:
+        """Return normalized service override metadata from order item selections."""
+
+        selected = order_item.selected_options or {}
+        add_ons = []
+        if isinstance(selected, dict):
+            add_ons = selected.get("addOns") or []
+
+        normalized: List[Dict[str, Any]] = []
+        if not isinstance(add_ons, list):
+            return normalized
+
+        for entry in add_ons:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("pricingMode") != "serviceOverride":
+                continue
+            service_id = entry.get("serviceId")
+            if not isinstance(service_id, str) or not service_id.strip():
+                continue
+            normalized.append(
+                {
+                    "id": entry.get("id"),
+                    "mode": entry.get("pricingMode"),
+                    "service_id": service_id.strip(),
+                    "amount": self._safe_float(entry.get("pricingAmount")),
+                    "price_delta": self._safe_float(entry.get("priceDelta")),
+                    "provider_id": entry.get("serviceProviderId") or entry.get("providerId"),
+                    "provider_cost_amount": self._safe_float(entry.get("providerCostAmount")),
+                    "provider_cost_currency": entry.get("providerCostCurrency"),
+                    "margin_target": self._safe_float(entry.get("marginTarget")),
+                    "fulfillment_mode": entry.get("fulfillmentMode"),
+                    "payload_template": entry.get("payloadTemplate")
+                    if isinstance(entry.get("payloadTemplate"), dict)
+                    else None,
+                    "drip_per_day": self._safe_float(entry.get("dripPerDay")),
+                    "preview_quantity": self._safe_float(entry.get("previewQuantity")),
+                    "service_rules": entry.get("serviceRules")
+                    if isinstance(entry.get("serviceRules"), list)
+                    else None,
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _safe_float(value: Any) -> float | None:
+        """Convert arbitrary numeric input to float when possible."""
+
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    async def _invoke_provider_order(
+        self,
+        provider_descriptor,
+        payload: Dict[str, Any],
+        override: Dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        """Call provider order endpoint if configured and return response metadata."""
+
+        if provider_descriptor is None:
+            return None
+        endpoint = extract_endpoint(provider_descriptor.metadata, "order")
+        if not endpoint:
+            return None
+
+        context = self._build_endpoint_context(payload, override)
+        timeout_seconds = endpoint.get("timeoutSeconds") or 10
+
+        try:
+            invocation = await invoke_provider_endpoint(
+                endpoint,
+                context=context,
+                http_client=self._http_client,
+                default_timeout=timeout_seconds,
+            )
+        except ProviderEndpointError as exc:
+            logger.warning(
+                "Provider order endpoint failed",
+                provider_id=provider_descriptor.id,
+                url=exc.url,
+                error=str(exc),
+            )
+            return {
+                "providerResponse": {
+                    "error": str(exc),
+                    "url": exc.url,
+                }
+            }
+
+        response_payload = invocation.payload
+        provider_order_id = self._extract_provider_order_id(response_payload, endpoint)
+
+        result: Dict[str, Any] = {}
+        if provider_order_id:
+            result["providerOrderId"] = provider_order_id
+        if response_payload is not None:
+            result["providerResponse"] = response_payload
+        return result or None
+
+    def _build_endpoint_context(self, payload: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        context = {
+            "requestedAmount": payload.get("requestedAmount"),
+            "fallbackDelta": payload.get("fallbackDelta"),
+            "orderId": payload.get("orderId"),
+            "orderItemId": payload.get("orderItemId"),
+            "productId": payload.get("productId"),
+            "serviceId": override.get("service_id"),
+            "providerId": override.get("provider_id"),
+            "pricingMode": override.get("mode"),
+            "dripPerDay": override.get("drip_per_day"),
+            "previewQuantity": override.get("preview_quantity"),
+            "serviceRules": override.get("service_rules"),
+        }
+        template_payload = override.get("payload_template")
+        if isinstance(template_payload, Mapping):
+            context["payloadTemplate"] = dict(template_payload)
+        # Flatten top-level payload for direct references
+        for key, value in payload.items():
+            if isinstance(value, (str, int, float)):
+                context.setdefault(key, value)
+        return context
+
+    def _extract_provider_order_id(self, response: Mapping[str, Any], endpoint_config: Mapping[str, Any]) -> str | None:
+        response_cfg = endpoint_config.get("response")
+        if isinstance(response_cfg, Mapping):
+            path = response_cfg.get("providerOrderIdPath")
+            if isinstance(path, str) and path:
+                value = extract_path(response, path)
+                if isinstance(value, (str, int)):
+                    return str(value)
+        # fallback keys
+        for key in ("providerOrderId", "orderId", "order_id", "id"):
+            value = response.get(key)
+            if isinstance(value, (str, int)):
+                return str(value)
+        return None
+
     def _calculate_growth_targets(self, order_item: OrderItem) -> Dict[str, Any]:
         """Calculate growth targets based on order item price and options.
         

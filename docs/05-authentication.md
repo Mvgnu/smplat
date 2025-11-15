@@ -2,7 +2,7 @@
 
 ## Identity Stack
 - **Framework**: Auth.js (NextAuth) self-hosted within Next.js App Router.
-- **Session Storage**: Postgres adapter via Prisma; secure cookies with `SameSite=Lax`, `HttpOnly`, `Secure`.
+- **Session Storage**: REST adapter backed by FastAPI identity endpoints; secure cookies with `SameSite=Lax`, `HttpOnly`, `Secure`.
 - **Token Format**: JWT for stateless APIs; short-lived access tokens (15 min) + refresh tokens (rolling 30 days) stored encrypted in Postgres.
 - **Password Hashing**: Argon2id with adaptive parameters; enforce minimum complexity and breach checking (HaveIBeenPwned API optional).
 
@@ -47,7 +47,7 @@
 - Logging minimized on PII; sensitive fields encrypted at rest (e.g., using pgcrypto or application-layer encryption).
 
 ## Implementation Tasks
-1. Configure Auth.js with Prisma adapter, Argon2, and session encryption keys.
+1. Configure Auth.js with the REST adapter, Argon2, and session encryption keys.
 2. Implement sign-up and verification flows with transactional emails.
 3. Build MFA enrollment and enforcement screens within client portal.
 4. Create admin UI for role management and audit trail of changes.

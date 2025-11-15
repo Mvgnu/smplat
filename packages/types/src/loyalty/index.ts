@@ -334,15 +334,26 @@ export type LoyaltyTimelineCursor = {
   guardrails: string | null;
 };
 
+type NullableTimelineFilters =
+  | 'ledgerTypes'
+  | 'redemptionStatuses'
+  | 'referralStatuses'
+  | 'nudgeStatuses'
+  | 'guardrailScopes';
+
 export type LoyaltyTimelinePage = {
   entries: LoyaltyTimelineEntry[];
   cursor: LoyaltyTimelineCursor;
   hasMore: boolean;
-  appliedFilters: Required<LoyaltyTimelineFilters> & {
+  appliedFilters: Required<Omit<LoyaltyTimelineFilters, NullableTimelineFilters>> & {
     ledgerTypes: string[] | null;
     redemptionStatuses: string[] | null;
     referralStatuses: string[] | null;
     nudgeStatuses: string[] | null;
     guardrailScopes: LoyaltyGuardrailOverrideScope[] | null;
   };
+};
+
+export type LoyaltyTimelineResult = LoyaltyTimelinePage & {
+  cursorToken: string | null;
 };

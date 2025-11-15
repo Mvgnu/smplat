@@ -44,9 +44,12 @@ describe("GET /api/billing/replays/stream", () => {
     jest.resetModules();
     process.env = { ...originalEnv };
     (globalThis as typeof globalThis & { fetch: typeof fetch }).fetch = mockFetch as unknown as typeof fetch;
-    (globalThis as typeof globalThis & { TextEncoder: typeof TextEncoder }).TextEncoder = TextEncoder;
-    (globalThis as typeof globalThis & { TextDecoder: typeof TextDecoder }).TextDecoder = TextDecoder;
-    (globalThis as typeof globalThis & { ReadableStream: typeof ReadableStream }).ReadableStream = ReadableStream;
+    (globalThis as typeof globalThis & { TextEncoder: typeof globalThis.TextEncoder }).TextEncoder =
+      TextEncoder as unknown as typeof globalThis.TextEncoder;
+    (globalThis as typeof globalThis & { TextDecoder: typeof globalThis.TextDecoder }).TextDecoder =
+      TextDecoder as unknown as typeof globalThis.TextDecoder;
+    (globalThis as typeof globalThis & { ReadableStream: typeof globalThis.ReadableStream }).ReadableStream =
+      ReadableStream as unknown as typeof globalThis.ReadableStream;
     mockFetch.mockReset();
   });
 

@@ -2,6 +2,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "20251124_28"
@@ -10,18 +11,20 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-product_audit_action_enum = sa.Enum(
-    "created",
-    "updated",
-    "deleted",
-    "restored",
-    name="product_audit_action",
-)
-
-
 def upgrade() -> None:
-    bind = op.get_bind()
-    product_audit_action_enum.create(bind, checkfirst=True)
+    # Create enum type idempotently
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'product_audit_action') THEN
+                CREATE TYPE product_audit_action AS ENUM (
+                    'created',
+                    'updated',
+                    'deleted',
+                    'restored'
+                );
+            END IF;
+        END $$;
+    """)
 
     op.add_column(
         "products",
@@ -75,7 +78,18 @@ def upgrade() -> None:
             sa.ForeignKey("products.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("action", product_audit_action_enum, nullable=False),
+        sa.Column(
+            "action",
+            postgresql.ENUM(
+                "created",
+                "updated",
+                "deleted",
+                "restored",
+                name="product_audit_action",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
         sa.Column("actor_user_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("actor_email", sa.String(length=255), nullable=True),
         sa.Column("before_snapshot", sa.JSON(), nullable=True),
@@ -112,5 +126,4 @@ def downgrade() -> None:
 
     op.drop_column("products", "channel_eligibility")
 
-    bind = op.get_bind()
-    product_audit_action_enum.drop(bind, checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS product_audit_action")

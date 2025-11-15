@@ -57,8 +57,7 @@ class TestResponse {
 }
 
 if (typeof globalThis.Response === "undefined") {
-  (globalThis as typeof globalThis & { Response: typeof TestResponse }).Response =
-    TestResponse as unknown as typeof Response;
+  globalThis.Response = TestResponse as unknown as typeof Response;
 }
 
 const createSnapshot = (route: string, preview: boolean): MarketingPreviewSnapshot => ({

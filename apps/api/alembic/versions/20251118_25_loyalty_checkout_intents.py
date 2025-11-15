@@ -12,25 +12,23 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-intent_kind_enum = sa.Enum(
-    "redemption",
-    "referral_share",
-    name="loyalty_checkout_intent_kind",
-)
-
-intent_status_enum = sa.Enum(
-    "pending",
-    "resolved",
-    "cancelled",
-    "expired",
-    name="loyalty_checkout_intent_status",
-)
-
-
 def upgrade() -> None:
-    bind = op.get_bind()
-    intent_kind_enum.create(bind, checkfirst=True)
-    intent_status_enum.create(bind, checkfirst=True)
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_checkout_intent_kind') THEN
+                CREATE TYPE loyalty_checkout_intent_kind AS ENUM ('redemption', 'referral_share');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_checkout_intent_status') THEN
+                CREATE TYPE loyalty_checkout_intent_status AS ENUM ('pending', 'resolved', 'cancelled', 'expired');
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "loyalty_checkout_intents",
@@ -42,10 +40,10 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("external_id", sa.String(), nullable=False),
-        sa.Column("kind", intent_kind_enum, nullable=False),
+        sa.Column("kind", sa.dialects.postgresql.ENUM("redemption", "referral_share", name="loyalty_checkout_intent_kind", create_type=False), nullable=False),
         sa.Column(
             "status",
-            intent_status_enum,
+            sa.dialects.postgresql.ENUM("pending", "resolved", "cancelled", "expired", name="loyalty_checkout_intent_status", create_type=False),
             nullable=False,
             server_default="pending",
         ),
@@ -101,6 +99,5 @@ def downgrade() -> None:
         table_name="loyalty_checkout_intents",
     )
     op.drop_table("loyalty_checkout_intents")
-    bind = op.get_bind()
-    intent_status_enum.drop(bind, checkfirst=True)
-    intent_kind_enum.drop(bind, checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS loyalty_checkout_intent_status")
+    op.execute("DROP TYPE IF EXISTS loyalty_checkout_intent_kind")

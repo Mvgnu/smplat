@@ -6,6 +6,7 @@ from .catalog import (  # noqa: F401
     CatalogBundleAcceptanceMetric,
     CatalogRecommendationCache,
 )
+from .auth_identity import AuthAccount, AuthSession, AuthVerificationToken  # noqa: F401
 from .catalog_experiments import (  # noqa: F401
     CatalogBundleExperiment,
     CatalogBundleExperimentMetric,
@@ -18,6 +19,7 @@ from .checkout import (  # noqa: F401
     CheckoutOrchestrationStage,
     CheckoutOrchestrationStatus,
 )
+from .access_event import AccessEvent  # noqa: F401
 from .billing_reconciliation import (  # noqa: F401
     BillingDiscrepancy,
     BillingDiscrepancyStatus,
@@ -31,6 +33,12 @@ from .billing_reconciliation import (  # noqa: F401
 from .customer_profile import CurrencyEnum, CustomerProfile  # noqa: F401
 from .fulfillment import (  # noqa: F401
     CampaignActivity,
+    FulfillmentProvider,
+    FulfillmentProviderHealthStatusEnum,
+    FulfillmentProviderOrder,
+    FulfillmentProviderStatusEnum,
+    FulfillmentService,
+    FulfillmentServiceStatusEnum,
     FulfillmentTask,
     FulfillmentTaskStatusEnum,
     FulfillmentTaskTypeEnum,
@@ -69,6 +77,10 @@ from .processor_event import (  # noqa: F401
     record_processor_event,
     register_replay_attempt,
 )
+from .provider_automation_run import (  # noqa: F401
+    ProviderAutomationRun,
+    ProviderAutomationRunTypeEnum,
+)
 from .loyalty import (  # noqa: F401
     LoyaltyAnalyticsSnapshot,
     LoyaltyGuardrailAuditAction,
@@ -89,11 +101,13 @@ from .loyalty import (  # noqa: F401
     ReferralStatus,
 )
 from .product import (  # noqa: F401
+    JourneyComponent,
     Product,
     ProductAddOn,
     ProductAuditLog,
     ProductCustomField,
     ProductCustomFieldTypeEnum,
+    ProductJourneyComponent,
     ProductMediaAsset,
     ProductOption,
     ProductOptionGroup,
@@ -102,5 +116,15 @@ from .product import (  # noqa: F401
     ProductSubscriptionBillingCycleEnum,
     ProductSubscriptionPlan,
 )
+from .journey_runtime import JourneyComponentRun, JourneyComponentRunStatusEnum  # noqa: F401
 from .user import User, UserRoleEnum, UserStatusEnum  # noqa: F401
 from .webhook_event import WebhookEvent, WebhookProviderEnum  # noqa: F401
+from .analytics import CheckoutOfferEvent  # noqa: F401
+from .preset_event_alert_run import PresetEventAlertRun  # noqa: F401
+from .pricing_experiments import (  # noqa: F401
+    PricingAdjustmentKind,
+    PricingExperiment,
+    PricingExperimentMetric,
+    PricingExperimentStatus,
+    PricingExperimentVariant,
+)

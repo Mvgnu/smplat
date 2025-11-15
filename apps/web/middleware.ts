@@ -1,4 +1,5 @@
 // meta: module: auth-middleware
+import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import type { NextRequestWithAuth } from "next-auth/middleware";
@@ -8,8 +9,10 @@ import { hasRole, type RoleTier } from "./src/server/auth/policies";
 import { logAccessDecision } from "./src/server/security/access-audit";
 import { verifyMaintenanceToken } from "./src/server/security/service-account-tokens";
 import { consumeRateLimit } from "./src/server/security/rate-limit";
+import { csrfCookieConfig } from "./src/server/security/csrf";
 
 const LOGIN_PATH = "/login";
+const CSRF_COOKIE_NAME = "smplat.csrf";
 
 type RateLimitPolicy = {
   name: string;
@@ -43,7 +46,27 @@ const pagePolicies: Array<{ matcher: (path: string) => boolean; tier: RoleTier }
 function redirectToLogin(request: NextRequest | NextRequestWithAuth) {
   const loginUrl = new URL(LOGIN_PATH, request.url);
   loginUrl.searchParams.set("next", request.nextUrl.pathname + request.nextUrl.search);
-  return NextResponse.redirect(loginUrl);
+  return ensureCsrfCookie(request, NextResponse.redirect(loginUrl));
+}
+
+function ensureCsrfCookie(request: NextRequest, response: NextResponse) {
+  const existing = request.cookies.get(CSRF_COOKIE_NAME)?.value;
+  if (existing) {
+    return response;
+  }
+
+  const token = crypto.randomBytes(32).toString("hex");
+  request.cookies.set({
+    name: CSRF_COOKIE_NAME,
+    value: token,
+    ...csrfCookieConfig
+  });
+  response.cookies.set({
+    name: CSRF_COOKIE_NAME,
+    value: token,
+    ...csrfCookieConfig
+  });
+  return response;
 }
 
 const middleware = auth(async (request: NextRequestWithAuth) => {
@@ -81,7 +104,7 @@ const middleware = auth(async (request: NextRequestWithAuth) => {
   }
 
   if (pathname.startsWith("/api/auth") || pathname.startsWith("/api/preview")) {
-    return NextResponse.next();
+    return ensureCsrfCookie(request, NextResponse.next());
   }
 
   const isApiRoute = pathname.startsWith("/api/");
@@ -89,7 +112,7 @@ const middleware = auth(async (request: NextRequestWithAuth) => {
 
   const match = policies.find((policy) => policy.matcher(pathname));
   if (!match) {
-    return NextResponse.next();
+    return ensureCsrfCookie(request, NextResponse.next());
   }
 
   const session = request.auth as (typeof request.auth) & {
@@ -111,7 +134,7 @@ const middleware = auth(async (request: NextRequestWithAuth) => {
       userAgent,
       serviceAccountId: serviceAccount.id
     });
-    return NextResponse.next();
+    return ensureCsrfCookie(request, NextResponse.next());
   }
 
   if (!session?.user) {
@@ -180,7 +203,7 @@ const middleware = auth(async (request: NextRequestWithAuth) => {
       userId,
       role
     });
-    return NextResponse.next();
+    return ensureCsrfCookie(request, NextResponse.next());
   }
 
   if (isApiRoute) {

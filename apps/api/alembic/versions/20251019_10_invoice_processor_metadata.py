@@ -1,13 +1,17 @@
-"""Add processor metadata columns to invoices"""
+"""Add processor metadata columns to invoices.
+
+Revision ID: 20251019_10
+Revises: 20251018_09
+Create Date: 2025-10-19
+"""
 
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
 
-# revision identifiers, used by Alembic.
-revision: str = "20251019_10_invoice_processor_metadata"
-down_revision: Union[str, None] = "20251018_09_invoice_payment_lifecycle"
+revision: str = "20251019_10"
+down_revision: Union[str, None] = "20251018_09"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

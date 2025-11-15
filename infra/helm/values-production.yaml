@@ -1,0 +1,13 @@
+# Production defaults for the FastAPI deployment. Apply alongside the base
+# chart values file so provider automation alerts behave consistently across
+# environments.
+api:
+  env:
+    PROVIDER_AUTOMATION_ALERT_WORKER_ENABLED: "true"
+    PROVIDER_LOAD_ALERT_ENABLED: "true"
+    PROVIDER_LOAD_ALERT_SHORT_WINDOW_DAYS: "7"
+    PROVIDER_LOAD_ALERT_LONG_WINDOW_DAYS: "90"
+    PROVIDER_LOAD_ALERT_MIN_ENGAGEMENTS: "10"
+    PROVIDER_LOAD_ALERT_SHARE_THRESHOLD: "0.60"
+    PROVIDER_LOAD_ALERT_DELTA_THRESHOLD: "0.20"
+    PROVIDER_LOAD_ALERT_MAX_RESULTS: "25"

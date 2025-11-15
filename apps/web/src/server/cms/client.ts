@@ -10,6 +10,8 @@ import {
   sanityPreviewToken
 } from "./config";
 
+export { payloadConfig };
+
 export const sanityClient = createClient({
   ...sanityConfig,
   token: sanityPreviewToken
@@ -189,9 +191,7 @@ export const payloadFetch = async <TResponse, TBody = unknown>(
     throw lastError;
   }
 
-  throw new Error(`Payload request failed after ${retries} attempts: ${url}`, {
-    cause: lastError
-  });
+  throw new Error(`Payload request failed after ${retries} attempts: ${url}`);
 };
 
 export const payloadGet = async <TResponse>(

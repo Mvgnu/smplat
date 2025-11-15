@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from smplat_api.models.customer_profile import CurrencyEnum
-from smplat_api.models.order import Order, OrderSourceEnum, OrderStatusEnum
+from smplat_api.models.order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum
 from smplat_api.models.payment import Payment, PaymentProviderEnum, PaymentStatusEnum
 from smplat_api.models.user import User, UserRoleEnum, UserStatusEnum
 from smplat_api.services.payments.payment_service import PaymentService
@@ -453,6 +453,47 @@ async def test_payment_success_sends_receipt(session_factory, monkeypatch: pytes
             currency=CurrencyEnum.EUR,
             user_id=user.id,
         )
+        order_item = OrderItem(
+            order=order,
+            product_title="Blueprint Launch",
+            quantity=1,
+            unit_price=Decimal("99.00"),
+            total_price=Decimal("99.00"),
+            selected_options={
+                "options": [
+                    {
+                        "groupId": "hero",
+                        "groupName": "Hero",
+                        "optionId": "hero-pro",
+                        "label": "Always-on hero coverage",
+                        "marketingTagline": "Always-on hero coverage",
+                        "fulfillmentSla": "72h turnaround",
+                        "heroImageUrl": "https://cdn.smplat.test/hero/pro.jpg",
+                        "calculator": {
+                            "expression": "spend * 3",
+                            "sampleAmount": 1200,
+                            "sampleResult": 3600,
+                        },
+                    }
+                ],
+                "addOns": [
+                    {
+                        "id": "ops-qa",
+                        "label": "Concierge QA",
+                        "priceDelta": 500,
+                        "pricingMode": "flat",
+                        "pricingAmount": 500,
+                        "serviceProviderName": "Ops pod alpha",
+                    }
+                ],
+                "subscriptionPlan": {
+                    "label": "Monthly retainer",
+                    "billingCycle": "monthly",
+                    "priceMultiplier": 1,
+                    "priceDelta": 0,
+                },
+            },
+        )
         payment = Payment(
             order=order,
             provider=PaymentProviderEnum.STRIPE,
@@ -461,7 +502,7 @@ async def test_payment_success_sends_receipt(session_factory, monkeypatch: pytes
             amount=Decimal("99.00"),
             currency=CurrencyEnum.EUR,
         )
-        session.add_all([order, payment])
+        session.add_all([order, order_item, payment])
         await session.commit()
 
         service = PaymentService(session)
@@ -482,7 +523,16 @@ async def test_payment_success_sends_receipt(session_factory, monkeypatch: pytes
         message = backend.sent_messages[-1]
         html_body = message.get_body(preferencelist=("html",))
         assert html_body is not None
+        html_content = html_body.get_content()
         assert "Payment received" in message["Subject"]
+        assert "Blueprint snapshot" in html_content
+        assert "Always-on hero coverage" in html_content
+        assert "Hero asset" in html_content
+        text_body = message.get_body(preferencelist=("plain",))
+        assert text_body is not None
+        text_content = text_body.get_content()
+        assert "Blueprint snapshot" in text_content
+        assert "Concierge QA" in text_content
 
 
 @pytest.mark.asyncio

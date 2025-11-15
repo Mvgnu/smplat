@@ -1,7 +1,7 @@
 // meta: module: auth-policies
 import { redirect } from "next/navigation";
 import type { Session } from "next-auth";
-import type { UserRole } from "@prisma/client";
+import type { UserRole } from "./types";
 
 import { auth } from "./index";
 import { recordAccessEvent } from "../security/access-events";

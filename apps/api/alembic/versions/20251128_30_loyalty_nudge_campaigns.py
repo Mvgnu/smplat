@@ -14,17 +14,19 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-nudge_channel_enum = sa.Enum(
-    "email",
-    "sms",
-    "push",
-    name="loyalty_nudge_channel",
-)
-
-
 def upgrade() -> None:
-    bind = op.get_bind()
-    nudge_channel_enum.create(bind, checkfirst=True)
+    # Create enum type idempotently
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_nudge_channel') THEN
+                CREATE TYPE loyalty_nudge_channel AS ENUM (
+                    'email',
+                    'sms',
+                    'push'
+                );
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "loyalty_nudge_campaigns",
@@ -36,7 +38,16 @@ def upgrade() -> None:
         sa.Column("default_priority", sa.Integer(), nullable=False, server_default="0"),
         sa.Column(
             "channel_preferences",
-            postgresql.ARRAY(nudge_channel_enum, dimensions=1),
+            postgresql.ARRAY(
+                postgresql.ENUM(
+                    "email",
+                    "sms",
+                    "push",
+                    name="loyalty_nudge_channel",
+                    create_type=False,
+                ),
+                dimensions=1,
+            ),
             nullable=False,
             server_default="{email}",
         ),
@@ -62,7 +73,18 @@ def upgrade() -> None:
         column("ttl_seconds", sa.Integer()),
         column("frequency_cap_hours", sa.Integer()),
         column("default_priority", sa.Integer()),
-        column("channel_preferences", postgresql.ARRAY(nudge_channel_enum)),
+        column(
+            "channel_preferences",
+            postgresql.ARRAY(
+                postgresql.ENUM(
+                    "email",
+                    "sms",
+                    "push",
+                    name="loyalty_nudge_channel",
+                    create_type=False,
+                )
+            ),
+        ),
     )
     op.bulk_insert(
         campaign_table,
@@ -110,7 +132,16 @@ def upgrade() -> None:
         "loyalty_nudges",
         sa.Column(
             "channel_preferences",
-            postgresql.ARRAY(nudge_channel_enum, dimensions=1),
+            postgresql.ARRAY(
+                postgresql.ENUM(
+                    "email",
+                    "sms",
+                    "push",
+                    name="loyalty_nudge_channel",
+                    create_type=False,
+                ),
+                dimensions=1,
+            ),
             nullable=False,
             server_default="{email}",
         ),
@@ -125,7 +156,17 @@ def upgrade() -> None:
             sa.ForeignKey("loyalty_nudges.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("channel", nudge_channel_enum, nullable=False),
+        sa.Column(
+            "channel",
+            postgresql.ENUM(
+                "email",
+                "sms",
+                "push",
+                name="loyalty_nudge_channel",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
         sa.Column(
             "sent_at",
             sa.DateTime(timezone=True),
@@ -165,5 +206,4 @@ def downgrade() -> None:
     op.drop_column("users", "push_token")
     op.drop_column("users", "phone_number")
 
-    bind = op.get_bind()
-    nudge_channel_enum.drop(bind, checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS loyalty_nudge_channel")

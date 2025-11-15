@@ -18,14 +18,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE TYPE webhook_provider_enum AS ENUM ('stripe')")
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'webhook_provider_enum') THEN
+                CREATE TYPE webhook_provider_enum AS ENUM ('stripe');
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "webhook_events",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column(
             "provider",
-            sa.Enum(name="webhook_provider_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("stripe", name="webhook_provider_enum", create_type=False),
             nullable=False,
         ),
         sa.Column("external_id", sa.String(), nullable=False),

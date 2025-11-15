@@ -185,11 +185,12 @@ export function BlockDiagnosticsPanel({
     const base = panelDiffOrder.reduce<Record<LiveBlockDiffStatus, number>>((accumulator, status) => {
       accumulator[status] = 0;
       return accumulator;
-    }, {});
-    if (!variantState?.diffSummary) {
+    }, {} as Record<LiveBlockDiffStatus, number>);
+    const summary = variantState?.diffSummary;
+    if (!summary) {
       return base;
     }
-    return { ...base, ...variantState.diffSummary };
+    return { ...base, ...summary };
   }, [variantState?.diffSummary]);
 
   const fingerprintEntries = useMemo(() => {

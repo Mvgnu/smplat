@@ -18,9 +18,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE TYPE preferred_currency_enum AS ENUM ('EUR', 'USD')")
-    op.execute("CREATE TYPE notification_channel_enum AS ENUM ('email', 'sms', 'push')")
-    op.execute("CREATE TYPE notification_status_enum AS ENUM ('pending', 'sent', 'failed')")
+    currency_check = sa.CheckConstraint(
+        "preferred_currency IN ('EUR','USD')",
+        name="ck_customer_profiles_currency",
+    )
+
+    channel_check = sa.CheckConstraint(
+        "channel IN ('email','sms','push')",
+        name="ck_notifications_channel",
+    )
+
+    status_check = sa.CheckConstraint(
+        "status IN ('pending','sent','failed')",
+        name="ck_notifications_status",
+    )
 
     op.create_table(
         "customer_profiles",
@@ -33,34 +44,20 @@ def upgrade() -> None:
         sa.Column("postal_code", sa.String(), nullable=True),
         sa.Column("country", sa.String(length=2), nullable=True),
         sa.Column("instagram_handle", sa.String(), nullable=True),
-        sa.Column(
-            "preferred_currency",
-            sa.Enum(name="preferred_currency_enum", create_type=False),
-            nullable=False,
-            server_default="EUR",
-        ),
+        sa.Column("preferred_currency", sa.String(length=8), nullable=False, server_default="EUR"),
         sa.Column("marketing_consent", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        currency_check,
     )
 
     op.create_table(
         "notifications",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("user_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column(
-            "channel",
-            sa.Enum(name="notification_channel_enum", create_type=False),
-            nullable=False,
-            server_default="email",
-        ),
-        sa.Column(
-            "status",
-            sa.Enum(name="notification_status_enum", create_type=False),
-            nullable=False,
-            server_default="pending",
-        ),
+        sa.Column("channel", sa.String(length=16), nullable=False, server_default="email"),
+        sa.Column("status", sa.String(length=16), nullable=False, server_default="pending"),
         sa.Column("category", sa.String(), nullable=False),
         sa.Column("subject", sa.String(), nullable=True),
         sa.Column("body", sa.Text(), nullable=True),
@@ -70,6 +67,8 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
+        channel_check,
+        status_check,
     )
 
     op.create_index("ix_notifications_user_id", "notifications", ["user_id"])
@@ -81,7 +80,3 @@ def downgrade() -> None:
     op.drop_index("ix_notifications_user_id", table_name="notifications")
     op.drop_table("notifications")
     op.drop_table("customer_profiles")
-
-    op.execute("DROP TYPE notification_status_enum")
-    op.execute("DROP TYPE notification_channel_enum")
-    op.execute("DROP TYPE preferred_currency_enum")

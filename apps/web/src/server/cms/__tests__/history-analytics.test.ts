@@ -5,42 +5,50 @@ import { buildHistoryAnalytics } from "../history/analytics";
 import type { MarketingPreviewHistoryEntry } from "../history";
 
 describe("buildHistoryAnalytics", () => {
-  const baseEntry = (overrides: Partial<MarketingPreviewHistoryEntry>): MarketingPreviewHistoryEntry => ({
-    id: overrides.id ?? `entry-${overrides.generatedAt ?? "base"}`,
-    generatedAt: overrides.generatedAt ?? new Date().toISOString(),
-    label: null,
-    manifest: {
-      generatedAt: overrides.generatedAt ?? new Date().toISOString(),
-      label: null,
-      snapshots: []
-    },
-    routes:
-      overrides.routes ??
-      [
+  const baseEntry = (overrides: Partial<MarketingPreviewHistoryEntry>): MarketingPreviewHistoryEntry => {
+    const generatedAt = overrides.generatedAt ?? new Date().toISOString();
+    const manifestOverride = overrides.manifest;
+    const manifest =
+      manifestOverride ??
+      ({
+        generatedAt,
+        label: undefined,
+        snapshots: []
+      } as MarketingPreviewHistoryEntry["manifest"]);
+    return {
+      id: overrides.id ?? `entry-${generatedAt ?? "base"}`,
+      generatedAt,
+      label: overrides.label ?? undefined,
+      manifest,
+      routes:
+        overrides.routes ??
+        [
+          {
+            route: "/",
+            routeHash: "hash",
+            diffDetected: false,
+            hasDraft: true,
+            hasPublished: true,
+            sectionCount: 1,
+            blockKinds: ["hero"]
+          }
+        ],
+      aggregates:
+        overrides.aggregates ??
         {
-          route: "/",
-          routeHash: "hash",
-          diffDetected: false,
-          hasDraft: true,
-          hasPublished: true,
-          sectionCount: 1,
-          blockKinds: ["hero"]
-        }
-      ],
-    aggregates:
-      overrides.aggregates ??
-      {
-        totalRoutes: 1,
-        diffDetectedRoutes: 0,
-        draftRoutes: 1,
-        publishedRoutes: 1
-      },
-    governance: overrides.governance ?? { totalActions: 0, actionsByKind: {}, lastActionAt: null },
-    liveDeltas: overrides.liveDeltas ?? [],
-    remediations: overrides.remediations ?? [],
-    noteRevisions: overrides.noteRevisions ?? [],
-    notes: overrides.notes
-  });
+          totalRoutes: 1,
+          diffDetectedRoutes: 0,
+          draftRoutes: 1,
+          publishedRoutes: 1
+        },
+      governance: overrides.governance ?? { totalActions: 0, actionsByKind: {}, lastActionAt: null },
+      liveDeltas: overrides.liveDeltas ?? [],
+      remediations: overrides.remediations ?? [],
+      noteRevisions: overrides.noteRevisions ?? [],
+      rehearsals: overrides.rehearsals ?? [],
+      notes: overrides.notes
+    };
+  };
 
   it("returns zeroed analytics when insufficient data", () => {
     const analytics = buildHistoryAnalytics([baseEntry({})]);

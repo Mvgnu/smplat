@@ -13,6 +13,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_ledger_entry_type') THEN
+                CREATE TYPE loyalty_ledger_entry_type AS ENUM ('earn', 'redeem', 'adjustment', 'referral_bonus', 'tier_bonus');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'loyalty_referral_status') THEN
+                CREATE TYPE loyalty_referral_status AS ENUM ('draft', 'sent', 'converted', 'expired', 'cancelled');
+            END IF;
+        END $$;
+    """)
+
     op.create_table(
         "loyalty_tiers",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
@@ -25,26 +42,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
-
-    loyalty_entry_type_enum = sa.Enum(
-        "earn",
-        "redeem",
-        "adjustment",
-        "referral_bonus",
-        "tier_bonus",
-        name="loyalty_ledger_entry_type",
-    )
-    loyalty_entry_type_enum.create(op.get_bind())
-
-    referral_status_enum = sa.Enum(
-        "draft",
-        "sent",
-        "converted",
-        "expired",
-        "cancelled",
-        name="loyalty_referral_status",
-    )
-    referral_status_enum.create(op.get_bind())
 
     op.create_table(
         "loyalty_members",
@@ -64,7 +61,7 @@ def upgrade() -> None:
         "loyalty_ledger_entries",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("member_id", sa.dialects.postgresql.UUID(as_uuid=True), sa.ForeignKey("loyalty_members.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("entry_type", loyalty_entry_type_enum, nullable=False),
+        sa.Column("entry_type", sa.dialects.postgresql.ENUM("earn", "redeem", "adjustment", "referral_bonus", "tier_bonus", name="loyalty_ledger_entry_type", create_type=False), nullable=False),
         sa.Column("amount", sa.Numeric(12, 2), nullable=False),
         sa.Column("description", sa.String(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),
@@ -79,7 +76,7 @@ def upgrade() -> None:
         sa.Column("code", sa.String(), nullable=False, unique=True),
         sa.Column("invitee_email", sa.String(), nullable=True),
         sa.Column("invitee_user_id", sa.dialects.postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=True),
-        sa.Column("status", referral_status_enum, nullable=False, server_default="draft"),
+        sa.Column("status", sa.dialects.postgresql.ENUM("draft", "sent", "converted", "expired", "cancelled", name="loyalty_referral_status", create_type=False), nullable=False, server_default="draft"),
         sa.Column("reward_points", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("metadata", sa.JSON(), nullable=True),

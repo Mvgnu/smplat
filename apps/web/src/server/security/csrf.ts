@@ -2,10 +2,18 @@
 import crypto from "node:crypto";
 import { cookies, headers } from "next/headers";
 
-const CSRF_COOKIE_NAME = "smplat.csrf";
+export const CSRF_COOKIE_NAME = "smplat.csrf";
 const CSRF_HEADER_NAME = "x-smplat-csrf";
 
 const SIX_HOURS_IN_SECONDS = 6 * 60 * 60;
+
+export const csrfCookieConfig = {
+  httpOnly: true,
+  sameSite: "lax" as const,
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  maxAge: SIX_HOURS_IN_SECONDS
+};
 
 export function getOrCreateCsrfToken(): string {
   const cookieStore = cookies();
@@ -15,16 +23,7 @@ export function getOrCreateCsrfToken(): string {
     return existing;
   }
 
-  const token = crypto.randomBytes(32).toString("hex");
-  cookieStore.set(CSRF_COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SIX_HOURS_IN_SECONDS
-  });
-
-  return token;
+  return crypto.randomBytes(32).toString("hex");
 }
 
 type EnsureOptions = {

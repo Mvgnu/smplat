@@ -24,7 +24,7 @@
 
 ### Current Status (2025-10-15)
 - pnpm workspace bootstrapped with lockfile committed (`pnpm-lock.yaml`).
-- Prisma CLI installed and client generated for Auth.js adapter.
+- Auth.js REST adapter wired to FastAPI identity service (no Prisma client required).
 - Poetry virtual environment created with dependencies installed (`poetry.lock`).
 - Payload CMS app checked in under `apps-cms-payload` with admin import map and schema parity work underway.
 - Payload seeding script available at `tooling/scripts/seed-payload.mjs` (run via `pnpm payload:seed:dev`).

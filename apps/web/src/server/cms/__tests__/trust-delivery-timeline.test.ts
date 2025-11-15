@@ -13,11 +13,20 @@ const buildMetric = (overrides: Partial<DeliveryTimelineMetric> = {}): DeliveryT
   metadata: {
     overall_percentile_bands: { p50: 90, p90: 180 },
   },
-  forecast: {
+  forecast: overrides.forecast ?? {
+    generatedAt: "2024-01-01T00:00:00.000Z",
+    horizonHours: 24,
     skus: [
       {
+        sku: "default",
+        backlogTasks: 10,
+        completedSampleSize: 5,
+        averageMinutes: 90,
+        percentileBands: { p50: 90, p90: 180 },
+        windows: [],
         estimatedClearMinutes: 75,
-      },
+        unsupportedReason: null
+      }
     ],
   },
   alerts: ["sla_watch"],
@@ -59,16 +68,16 @@ describe("deriveDeliveryTimelineResolution", () => {
   });
 
   test("falls back to CMS defaults when metric is missing", () => {
-    const timeline = buildTimeline({
-      metric: buildMetric({
-        verificationState: "missing",
-        rawValue: null,
-        percentileBands: null,
-        metadata: {},
-        forecast: { skus: [] },
-        alerts: null,
-        cacheLayer: null,
-        fallbackCopy: null,
+  const timeline = buildTimeline({
+    metric: buildMetric({
+      verificationState: "missing",
+      rawValue: null,
+      percentileBands: null,
+      metadata: {},
+      forecast: { generatedAt: "2024-01-01T00:00:00.000Z", horizonHours: 24, skus: [] },
+      alerts: null,
+      cacheLayer: null,
+      fallbackCopy: null,
       }),
     });
 

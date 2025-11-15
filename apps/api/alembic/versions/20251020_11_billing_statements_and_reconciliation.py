@@ -17,36 +17,31 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-processor_statement_transaction_type = sa.Enum(
-    "charge",
-    "refund",
-    "fee",
-    "payout",
-    "adjustment",
-    name="processor_statement_transaction_type",
-)
-
-billing_discrepancy_type = sa.Enum(
-    "missing_invoice",
-    "amount_mismatch",
-    "unapplied_refund",
-    "untracked_fee",
-    "unknown",
-    name="billing_discrepancy_type_enum",
-)
-
-billing_discrepancy_status = sa.Enum(
-    "open",
-    "acknowledged",
-    "resolved",
-    name="billing_discrepancy_status_enum",
-)
-
-
 def upgrade() -> None:
-    processor_statement_transaction_type.create(op.get_bind(), checkfirst=True)
-    billing_discrepancy_type.create(op.get_bind(), checkfirst=True)
-    billing_discrepancy_status.create(op.get_bind(), checkfirst=True)
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'processor_statement_transaction_type') THEN
+                CREATE TYPE processor_statement_transaction_type AS ENUM ('charge', 'refund', 'fee', 'payout', 'adjustment');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'billing_discrepancy_type_enum') THEN
+                CREATE TYPE billing_discrepancy_type_enum AS ENUM ('missing_invoice', 'amount_mismatch', 'unapplied_refund', 'untracked_fee', 'unknown');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'billing_discrepancy_status_enum') THEN
+                CREATE TYPE billing_discrepancy_status_enum AS ENUM ('open', 'acknowledged', 'resolved');
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "processor_statements",
@@ -56,7 +51,7 @@ def upgrade() -> None:
         sa.Column("processor", sa.String(length=32), nullable=False),
         sa.Column("transaction_id", sa.String(length=128), nullable=False),
         sa.Column("charge_id", sa.String(length=128), nullable=True),
-        sa.Column("transaction_type", processor_statement_transaction_type, nullable=False),
+        sa.Column("transaction_type", sa.dialects.postgresql.ENUM("charge", "refund", "fee", "payout", "adjustment", name="processor_statement_transaction_type", create_type=False), nullable=False),
         sa.Column("currency", sa.String(length=8), nullable=False),
         sa.Column("gross_amount", sa.Numeric(12, 2), nullable=False),
         sa.Column("fee_amount", sa.Numeric(12, 2), nullable=True),
@@ -92,8 +87,8 @@ def upgrade() -> None:
         sa.Column("invoice_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("processor_statement_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("transaction_id", sa.String(length=128), nullable=True),
-        sa.Column("discrepancy_type", billing_discrepancy_type, nullable=False),
-        sa.Column("status", billing_discrepancy_status, nullable=False, server_default="open"),
+        sa.Column("discrepancy_type", sa.dialects.postgresql.ENUM("missing_invoice", "amount_mismatch", "unapplied_refund", "untracked_fee", "unknown", name="billing_discrepancy_type_enum", create_type=False), nullable=False),
+        sa.Column("status", sa.dialects.postgresql.ENUM("open", "acknowledged", "resolved", name="billing_discrepancy_status_enum", create_type=False), nullable=False, server_default="open"),
         sa.Column("amount_delta", sa.Numeric(12, 2), nullable=True),
         sa.Column("summary", sa.Text(), nullable=True),
         sa.Column("resolution_note", sa.Text(), nullable=True),

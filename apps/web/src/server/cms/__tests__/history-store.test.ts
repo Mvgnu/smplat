@@ -102,9 +102,12 @@ describe("marketing preview history store", () => {
       .prepare(
         `SELECT route, route_hash FROM snapshot_routes WHERE manifest_id = ? LIMIT 1`
       )
-      .get("hash-check");
+      .get("hash-check") as { route: string; route_hash: string } | undefined;
 
     expect(row).toBeDefined();
+    if (!row) {
+      throw new Error("Expected persisted route row");
+    }
     expect(row.route).toBe(route);
     expect(row.route_hash).toBe(
       crypto.createHash("sha256").update(route).digest("hex")
@@ -198,7 +201,7 @@ describe("marketing preview history store", () => {
       collection: "pages",
       docId: "campaigns",
       metrics: null,
-      hero: null,
+      hero: undefined,
       validation: {
         ok: false,
         warnings: ["Hero missing CTA"],

@@ -1,0 +1,15 @@
+# Environment overrides for the FastAPI deployment in staging.
+# These values are consumed by the Helm chart (not checked in yet) and mirror
+# the provider automation defaults defined in .env.example. Keep them in sync
+# whenever new knobs land in the monorepo.
+api:
+  env:
+    PROVIDER_AUTOMATION_ALERT_WORKER_ENABLED: "true"
+    PROVIDER_LOAD_ALERT_ENABLED: "true"
+    PROVIDER_LOAD_ALERT_SHORT_WINDOW_DAYS: "7"
+    PROVIDER_LOAD_ALERT_LONG_WINDOW_DAYS: "90"
+    # Staging keeps the engagement threshold lower so ops can dogfood alerts.
+    PROVIDER_LOAD_ALERT_MIN_ENGAGEMENTS: "5"
+    PROVIDER_LOAD_ALERT_SHARE_THRESHOLD: "0.50"
+    PROVIDER_LOAD_ALERT_DELTA_THRESHOLD: "0.15"
+    PROVIDER_LOAD_ALERT_MAX_RESULTS: "20"

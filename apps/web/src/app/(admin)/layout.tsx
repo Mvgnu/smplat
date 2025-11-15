@@ -3,31 +3,9 @@ import type { ReactNode } from "react";
 import { AdminShell, type AdminNavItem } from "@/components/admin";
 import { SessionProviderBoundary } from "@/components/auth/session-provider";
 import { requireRole } from "@/server/auth/policies";
+import { ADMIN_SECTIONS } from "./admin-tabs";
 
 // meta: layout: admin-root
-
-const BASE_NAV_ITEMS: AdminNavItem[] = [
-  {
-    href: "/admin/orders",
-    label: "Orders",
-    description: "Track fulfillment milestones"
-  },
-  {
-    href: "/admin/merchandising",
-    label: "Merchandising",
-    description: "Manage products and bundles"
-  },
-  {
-    href: "/admin/loyalty",
-    label: "Loyalty",
-    description: "Tune guardrails and rewards"
-  },
-  {
-    href: "/admin/onboarding",
-    label: "Operations",
-    description: "Guide manual outreach"
-  }
-];
 
 type AdminRootLayoutProps = {
   children: ReactNode;
@@ -45,16 +23,23 @@ export default async function AdminRootLayout({ children }: AdminRootLayoutProps
   const operatorName = session?.user?.name ?? "Operator";
   const roleLabel = session?.user?.role ? session.user.role.toString().replaceAll("_", " ") : "operator";
 
-  const navItems: AdminNavItem[] = session?.user?.role === "ADMIN"
-    ? [
-        ...BASE_NAV_ITEMS,
-        {
-          href: "/admin/security",
-          label: "Security",
-          description: "Review access attempts"
-        }
-      ]
-    : BASE_NAV_ITEMS;
+  const baseNavItems: AdminNavItem[] = ADMIN_SECTIONS.map(({ href, label, description }) => ({
+    href,
+    label,
+    description
+  }));
+
+  const navItems: AdminNavItem[] =
+    session?.user?.role === "ADMIN"
+      ? [
+          ...baseNavItems,
+          {
+            href: "/admin/security",
+            label: "Security",
+            description: "Review access attempts"
+          }
+        ]
+      : baseNavItems;
 
   return (
     <SessionProviderBoundary session={session}>

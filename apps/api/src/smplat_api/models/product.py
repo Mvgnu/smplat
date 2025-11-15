@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -66,6 +67,7 @@ class Product(Base):
     )
     channel_eligibility = Column(JSON, nullable=False, default=list)
     fulfillment_config = Column(JSON, nullable=True)
+    configuration_presets = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -104,6 +106,17 @@ class Product(Base):
         back_populates="product",
         order_by="ProductSubscriptionPlan.display_order",
         cascade="all, delete-orphan",
+    )
+    journey_components = relationship(
+        "ProductJourneyComponent",
+        back_populates="product",
+        order_by="ProductJourneyComponent.display_order",
+        cascade="all, delete-orphan",
+    )
+    journey_runs = relationship(
+        "JourneyComponentRun",
+        back_populates="product",
+        passive_deletes=True,
     )
 
     @property
@@ -261,6 +274,7 @@ class ProductAddOn(Base):
     price_delta = Column(Numeric(10, 2), nullable=False, server_default="0")
     is_recommended = Column(Boolean, nullable=False, server_default="false")
     display_order = Column(Integer, nullable=False, server_default="0")
+    metadata_json = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -282,6 +296,7 @@ class ProductCustomField(Base):
     help_text = Column(Text, nullable=True)
     is_required = Column(Boolean, nullable=False, server_default="false")
     display_order = Column(Integer, nullable=False, server_default="0")
+    metadata_json = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -318,9 +333,15 @@ class ProductMediaAsset(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    client_id = Column(String(64), nullable=True)
     label = Column(String(150), nullable=True)
     asset_url = Column(String(1024), nullable=False)
     storage_key = Column(String(512), nullable=True)
+    display_order = Column(Integer, nullable=False, server_default="0")
+    is_primary = Column(Boolean, nullable=False, server_default="false")
+    alt_text = Column(String(512), nullable=True)
+    usage_tags = Column(JSON, nullable=False, default=list)
+    checksum = Column(String(128), nullable=True)
     metadata_json = Column("metadata", JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -345,3 +366,72 @@ class ProductAuditLog(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     product = relationship("Product", back_populates="audit_logs")
+
+
+class JourneyComponent(Base):
+    """Reusable script-backed workflow primitives that augment merchandising journeys."""
+
+    __tablename__ = "journey_components"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    key = Column(String(150), nullable=False, unique=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    triggers = Column(JSON, nullable=False, default=list)
+    script_slug = Column(String(255), nullable=False)
+    script_version = Column(String(64), nullable=True)
+    script_runtime = Column(String(64), nullable=True)
+    script_entrypoint = Column(String(255), nullable=True)
+    input_schema = Column(JSON, nullable=False)
+    output_schema = Column(JSON, nullable=True)
+    provider_dependencies = Column(JSON, nullable=True)
+    timeout_seconds = Column(Integer, nullable=True)
+    retry_policy = Column(JSON, nullable=True)
+    telemetry_labels = Column(JSON, nullable=True)
+    tags = Column(JSON, nullable=False, default=list)
+    metadata_json = Column("metadata", JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    product_links = relationship(
+        "ProductJourneyComponent",
+        back_populates="component",
+        cascade="all, delete-orphan",
+    )
+    runs = relationship(
+        "JourneyComponentRun",
+        back_populates="component",
+        passive_deletes=True,
+    )
+
+
+class ProductJourneyComponent(Base):
+    """Join table mapping products to the journey components they expose."""
+
+    __tablename__ = "product_journey_components"
+    __table_args__ = (
+        UniqueConstraint(
+            "product_id",
+            "component_id",
+            name="uq_product_journey_component_product_component",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    product_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    component_id = Column(UUID(as_uuid=True), ForeignKey("journey_components.id", ondelete="CASCADE"), nullable=False)
+    display_order = Column(Integer, nullable=False, server_default="0")
+    channel_eligibility = Column(JSON, nullable=True)
+    is_required = Column(Boolean, nullable=False, server_default="false")
+    bindings = Column(JSON, nullable=False, default=list)
+    metadata_json = Column("metadata", JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    product = relationship("Product", back_populates="journey_components")
+    component = relationship("JourneyComponent", back_populates="product_links")
+    runs = relationship(
+        "JourneyComponentRun",
+        back_populates="product_component",
+        passive_deletes=True,
+    )

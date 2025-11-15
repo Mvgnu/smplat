@@ -2,9 +2,21 @@
 
 from enum import Enum
 from uuid import uuid4
-from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Enum as SqlEnum, ForeignKey, Integer, JSON, String, Text, Boolean, func
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Enum as SqlEnum,
+    ForeignKey,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    Boolean,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -199,3 +211,174 @@ class FulfillmentStaffingShift(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class FulfillmentProviderStatusEnum(str, Enum):
+    """Lifecycle state for fulfillment providers."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class FulfillmentProviderHealthStatusEnum(str, Enum):
+    """Operational health for providers and services."""
+
+    UNKNOWN = "unknown"
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    OFFLINE = "offline"
+
+
+class FulfillmentServiceStatusEnum(str, Enum):
+    """Availability markers for provider services."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class FulfillmentProvider(Base):
+    """External fulfillment providers and their metadata."""
+
+    __tablename__ = "fulfillment_providers"
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    base_url = Column(String(512), nullable=True)
+    allowed_regions = Column(JSON, nullable=True)
+    credentials = Column(JSON, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    rate_limit_per_minute = Column(Integer, nullable=True)
+    status = Column(
+        SqlEnum(
+            FulfillmentProviderStatusEnum,
+            name="fulfillment_provider_status_enum",
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+        server_default=FulfillmentProviderStatusEnum.INACTIVE.value,
+    )
+    health_status = Column(
+        SqlEnum(
+            FulfillmentProviderHealthStatusEnum,
+            name="fulfillment_provider_health_status_enum",
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+        server_default=FulfillmentProviderHealthStatusEnum.UNKNOWN.value,
+    )
+    last_health_check_at = Column(DateTime(timezone=True), nullable=True)
+    health_payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    services = relationship(
+        "FulfillmentService",
+        back_populates="provider",
+        cascade="all, delete-orphan",
+    )
+    balance_snapshot = relationship(
+        "FulfillmentProviderBalance",
+        back_populates="provider",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class FulfillmentService(Base):
+    """Provider-specific service/action definitions."""
+
+    __tablename__ = "fulfillment_services"
+
+    id = Column(String(64), primary_key=True)
+    provider_id = Column(
+        String(64),
+        ForeignKey("fulfillment_providers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name = Column(String(255), nullable=False)
+    action = Column(String(255), nullable=False)
+    category = Column(String(255), nullable=True)
+    default_currency = Column(String(3), nullable=True)
+    allowed_regions = Column(JSON, nullable=True)
+    rate_limit_per_minute = Column(Integer, nullable=True)
+    credentials = Column(JSON, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    status = Column(
+        SqlEnum(
+            FulfillmentServiceStatusEnum,
+            name="fulfillment_service_status_enum",
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+        server_default=FulfillmentServiceStatusEnum.ACTIVE.value,
+    )
+    health_status = Column(
+        SqlEnum(
+            FulfillmentProviderHealthStatusEnum,
+            name="fulfillment_service_health_status_enum",
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+        server_default=FulfillmentProviderHealthStatusEnum.UNKNOWN.value,
+    )
+    last_health_check_at = Column(DateTime(timezone=True), nullable=True)
+    health_payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    provider = relationship("FulfillmentProvider", back_populates="services")
+
+
+class FulfillmentProviderBalance(Base):
+    """Latest known wallet/balance snapshot for a provider."""
+
+    __tablename__ = "fulfillment_provider_balances"
+    __table_args__ = (
+        UniqueConstraint("provider_id", name="uq_fulfillment_provider_balances_provider_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    provider_id = Column(
+        String(64),
+        ForeignKey("fulfillment_providers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    balance_amount = Column(Numeric(14, 2), nullable=True)
+    currency = Column(String(8), nullable=True)
+    payload = Column(JSON, nullable=True)
+    retrieved_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    provider = relationship("FulfillmentProvider", back_populates="balance_snapshot")
+
+
+class FulfillmentProviderOrder(Base):
+    """Recorded automation events between SmpLat and external providers."""
+
+    __tablename__ = "fulfillment_provider_orders"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    order_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    order_item_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("order_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    provider_id = Column(String(64), nullable=False)
+    provider_name = Column(String(255), nullable=True)
+    service_id = Column(String(64), nullable=False)
+    service_action = Column(String(255), nullable=True)
+    amount = Column(Numeric(12, 2), nullable=True)
+    currency = Column(String(8), nullable=True)
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    order = relationship("Order")
+    order_item = relationship("OrderItem", back_populates="provider_orders")

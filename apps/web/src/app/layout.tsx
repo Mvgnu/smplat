@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { MainNav, SiteFooter } from "@/components/layout";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 
 import "./globals.css";
@@ -27,7 +28,13 @@ export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background text-foreground antialiased">
-        <QueryProvider>{children}</QueryProvider>
+        <QueryProvider>
+          <div className="flex min-h-screen flex-col">
+            <MainNav />
+            <div className="flex-1">{children}</div>
+            <SiteFooter />
+          </div>
+        </QueryProvider>
       </body>
     </html>
   );

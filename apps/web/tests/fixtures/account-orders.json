@@ -1,0 +1,90 @@
+[
+  {
+    "id": "mock-order-1",
+    "order_number": "MOCK-001",
+    "user_id": null,
+    "status": "processing",
+    "source": "checkout",
+    "subtotal": 220,
+    "tax": 0,
+    "total": 220,
+    "currency": "USD",
+    "notes": "Mock account order for Playwright",
+    "created_at": "2024-05-01T08:00:00.000Z",
+    "updated_at": "2024-05-01T09:00:00.000Z",
+    "items": [
+      {
+        "id": "mock-item-1",
+        "product_id": "mock-product-1",
+        "product_title": "Automated Growth Pilot",
+        "quantity": 1,
+        "unit_price": 220,
+        "total_price": 220,
+        "selected_options": {
+          "options": [
+            {
+              "groupId": "preset",
+              "groupName": "Preset",
+              "optionId": "pilot",
+              "label": "Pilot blueprint",
+              "priceDelta": 0
+            }
+          ]
+        },
+        "attributes": null
+      }
+    ],
+    "providerOrders": [
+      {
+        "id": "mock-provider-order-1",
+        "providerId": "automation-labs",
+        "providerName": "Automation Labs",
+        "serviceId": "svc-boost",
+        "serviceAction": "order",
+        "orderId": "mock-order-1",
+        "orderItemId": "mock-item-1",
+        "amount": 180,
+        "currency": "USD",
+        "providerOrderId": "remote-boost-1",
+        "payload": {
+          "providerCostAmount": 150
+        },
+        "createdAt": "2024-05-01T08:05:00.000Z",
+        "updatedAt": "2024-05-01T08:30:00.000Z",
+        "refills": [
+          {
+            "id": "mock-refill-1",
+            "amount": 20,
+            "currency": "USD",
+            "performedAt": "2024-05-01T08:40:00.000Z"
+          }
+        ],
+        "replays": [
+          {
+            "id": "mock-replay-1",
+            "status": "executed",
+            "requestedAmount": 180,
+            "currency": "USD",
+            "performedAt": "2024-05-01T08:45:00.000Z"
+          },
+          {
+            "id": "mock-replay-2",
+            "status": "failed",
+            "requestedAmount": 180,
+            "currency": "USD",
+            "performedAt": "2024-05-01T08:50:00.000Z"
+          }
+        ],
+        "scheduledReplays": [
+          {
+            "id": "mock-scheduled-1",
+            "status": "scheduled",
+            "requestedAmount": 180,
+            "currency": "USD",
+            "scheduledFor": "2024-05-02T08:00:00.000Z"
+          }
+        ]
+      }
+    ]
+  }
+]

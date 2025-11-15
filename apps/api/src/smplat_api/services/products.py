@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Iterable
+from typing import Any, Iterable
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -11,9 +11,11 @@ from sqlalchemy.orm import selectinload
 from smplat_api.models import Product
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.models.product import (
+    JourneyComponent,
     ProductAddOn,
     ProductAuditLog,
     ProductCustomField,
+    ProductJourneyComponent,
     ProductMediaAsset,
     ProductOption,
     ProductOptionGroup,
@@ -25,6 +27,7 @@ from smplat_api.models.product import (
 )
 from smplat_api.schemas.product import (
     ProductConfigurationMutation,
+    ProductConfigurationPreset,
     ProductCreate,
     ProductUpdate,
 )
@@ -49,6 +52,7 @@ class ProductService:
                 selectinload(Product.subscription_plans),
                 selectinload(Product.media_assets),
                 selectinload(Product.audit_logs),
+                selectinload(Product.journey_components).selectinload(ProductJourneyComponent.component),
             )
             .where(Product.id == product_id)
         )
@@ -65,6 +69,7 @@ class ProductService:
                 selectinload(Product.subscription_plans),
                 selectinload(Product.media_assets),
                 selectinload(Product.audit_logs),
+                selectinload(Product.journey_components).selectinload(ProductJourneyComponent.component),
             )
             .where(Product.slug == slug)
         )
@@ -211,6 +216,12 @@ class ProductService:
         label: str | None,
         asset_url: str,
         storage_key: str | None,
+        client_id: str | None = None,
+        display_order: int | None = None,
+        is_primary: bool | None = None,
+        usage_tags: list[str] | None = None,
+        alt_text: str | None = None,
+        checksum: str | None = None,
         metadata: dict | None = None,
     ) -> ProductMediaAsset:
         asset = ProductMediaAsset(
@@ -219,6 +230,12 @@ class ProductService:
             label=label,
             asset_url=asset_url,
             storage_key=storage_key,
+            client_id=client_id,
+            display_order=display_order if display_order is not None else 0,
+            is_primary=bool(is_primary) if is_primary is not None else False,
+            usage_tags=list(usage_tags or []),
+            alt_text=alt_text,
+            checksum=checksum,
             metadata_json=metadata or {},
         )
         self._session.add(asset)
@@ -317,6 +334,7 @@ class ProductService:
                     "add_ons",
                     "custom_fields",
                     "subscription_plans",
+                    "journey_components",
                 ],
             )
 
@@ -328,6 +346,12 @@ class ProductService:
                 await self._sync_custom_fields(product, list(config.custom_fields or []))
             if config.subscription_plans is not None or replace_missing:
                 await self._sync_subscription_plans(product, list(config.subscription_plans or []))
+            if config.configuration_presets is not None or replace_missing:
+                product.configuration_presets = self._serialize_configuration_presets(
+                    product, list(config.configuration_presets or [])
+                )
+            if config.journey_components is not None or replace_missing:
+                await self._sync_journey_components(product, list(config.journey_components or []))
 
             await self._record_audit(
                 product,
@@ -338,6 +362,7 @@ class ProductService:
                     "add_ons": len(product.add_ons),
                     "custom_fields": len(product.custom_fields),
                     "subscription_plans": len(product.subscription_plans),
+                    "journey_components": len(product.journey_components),
                 },
             )
 
@@ -355,6 +380,7 @@ class ProductService:
                 "add_ons",
                 "custom_fields",
                 "subscription_plans",
+                "journey_components",
             ],
         )
 
@@ -422,7 +448,11 @@ class ProductService:
             option.name = incoming.name
             option.description = incoming.description
             option.price_delta = Decimal(str(incoming.price_delta))
-            option.metadata_json = incoming.metadata or {}
+            option.metadata_json = (
+                incoming.metadata.model_dump(by_alias=True, exclude_none=True)
+                if incoming.metadata
+                else {}
+            )
             option.display_order = incoming.display_order if incoming.display_order is not None else index
 
             seen_ids.add(str(option.id))
@@ -452,6 +482,11 @@ class ProductService:
             add_on.price_delta = Decimal(str(incoming.price_delta))
             add_on.is_recommended = incoming.is_recommended
             add_on.display_order = incoming.display_order if incoming.display_order is not None else index
+            add_on.metadata_json = (
+                incoming.metadata.model_dump(by_alias=True, exclude_none=True)
+                if incoming.metadata
+                else {}
+            )
 
             seen_ids.add(str(add_on.id))
 
@@ -491,6 +526,11 @@ class ProductService:
             field.help_text = incoming.help_text
             field.is_required = incoming.is_required
             field.display_order = incoming.display_order if incoming.display_order is not None else index
+            field.metadata_json = (
+                incoming.metadata.model_dump(by_alias=True, exclude_none=True)
+                if incoming.metadata
+                else {}
+            )
 
             seen_ids.add(str(field.id))
 
@@ -542,3 +582,127 @@ class ProductService:
             if str(plan.id) not in seen_ids:
                 product.subscription_plans.remove(plan)
                 await self._session.delete(plan)
+
+    async def _sync_journey_components(
+        self,
+        product: Product,
+        payload: list["ProductJourneyComponentWrite"],
+    ) -> None:
+        from smplat_api.schemas.product import ProductJourneyComponentWrite
+
+        links_by_id: dict[str, ProductJourneyComponent] = {
+            str(link.id): link for link in list(product.journey_components)
+        }
+        links_by_component: dict[str, ProductJourneyComponent] = {
+            str(link.component_id): link for link in list(product.journey_components)
+        }
+        seen_ids: set[str] = set()
+
+        component_ids = {incoming.component_id for incoming in payload if incoming.component_id}
+        if component_ids:
+            result = await self._session.execute(
+                select(JourneyComponent.id).where(JourneyComponent.id.in_(component_ids))
+            )
+            existing_ids = set(result.scalars())
+            missing = {component_id for component_id in component_ids if component_id not in existing_ids}
+            if missing:
+                missing_str = ", ".join(str(component_id) for component_id in sorted(missing, key=str))
+                raise ValueError(f"Unknown journey components: {missing_str}")
+
+        for index, incoming in enumerate(payload):
+            assert isinstance(incoming, ProductJourneyComponentWrite)
+            link: ProductJourneyComponent | None = None
+            key = str(incoming.id) if incoming.id else None
+            if key:
+                link = links_by_id.get(key)
+            if link is None:
+                link = links_by_component.get(str(incoming.component_id))
+                if link and str(link.id) in seen_ids:
+                    link = None
+            if link is None:
+                link = ProductJourneyComponent(id=uuid4(), product_id=product.id)
+                self._session.add(link)
+                product.journey_components.append(link)
+
+            link.component_id = incoming.component_id
+            link.display_order = incoming.display_order if incoming.display_order is not None else index
+            link.channel_eligibility = list(incoming.channel_eligibility or []) or None
+            link.is_required = incoming.is_required if incoming.is_required is not None else False
+            link.bindings = [
+                binding.model_dump(by_alias=True, exclude_none=True)
+                if hasattr(binding, "model_dump")
+                else binding
+                for binding in (incoming.bindings or [])
+            ]
+            link.metadata_json = incoming.metadata or {}
+
+            seen_ids.add(str(link.id))
+
+        for link in list(product.journey_components):
+            if str(link.id) not in seen_ids:
+                product.journey_components.remove(link)
+                await self._session.delete(link)
+
+    def _serialize_configuration_presets(
+        self,
+        product: Product,
+        payload: list["ProductConfigurationPreset"],
+    ) -> list[dict[str, Any]]:
+        if not payload:
+            return []
+
+        option_ids_by_group: dict[str, set[str]] = {}
+        for group in product.option_groups:
+            group_id = str(group.id)
+            option_ids_by_group[group_id] = {str(option.id) for option in group.options}
+
+        add_on_ids = {str(add_on.id) for add_on in product.add_ons}
+        plan_ids = {str(plan.id) for plan in product.subscription_plans}
+        field_ids = {str(field.id) for field in product.custom_fields}
+
+        normalized: list[dict[str, Any]] = []
+        for index, preset in enumerate(payload):
+            if not isinstance(preset, ProductConfigurationPreset):
+                continue
+
+            selection = preset.selection
+            option_selections: dict[str, list[str]] = {}
+            for group_id, values in selection.option_selections.items():
+                if group_id not in option_ids_by_group:
+                    continue
+                allowed = option_ids_by_group[group_id]
+                sanitized = [value for value in values if value in allowed]
+                if sanitized:
+                    option_selections[group_id] = sanitized
+
+            add_on_selection = [add_on_id for add_on_id in selection.add_on_ids if add_on_id in add_on_ids]
+
+            subscription_plan_id = selection.subscription_plan_id
+            if subscription_plan_id is not None and subscription_plan_id not in plan_ids:
+                subscription_plan_id = None
+
+            custom_field_values = {
+                field_id: str(value)
+                for field_id, value in selection.custom_field_values.items()
+                if field_id in field_ids and isinstance(value, str)
+            }
+
+            normalized.append(
+                {
+                    "id": str(preset.id) if preset.id else str(uuid4()),
+                    "label": preset.label,
+                    "summary": preset.summary,
+                    "heroImageUrl": preset.hero_image_url,
+                    "badge": preset.badge,
+                    "priceHint": preset.price_hint,
+                    "displayOrder": preset.display_order if preset.display_order is not None else index,
+                    "selection": {
+                        "optionSelections": option_selections,
+                        "addOnIds": add_on_selection,
+                        "subscriptionPlanId": subscription_plan_id,
+                        "customFieldValues": custom_field_values,
+                    },
+                }
+            )
+
+        return normalized

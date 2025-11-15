@@ -508,39 +508,6 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
     [feedbackBody, feedbackIdentifier]
   );
 
-  const handleCopyRehearsalCommand = useCallback(async () => {
-    if (!activeRehearsalGuard.latest) {
-      return;
-    }
-
-    if (typeof navigator === "undefined" || !navigator.clipboard) {
-      setRehearsalCommandStatus("error");
-      return;
-    }
-
-    const payload = {
-      manifestGeneratedAt:
-        activeRehearsalGuard.latest.manifestGeneratedAt ?? activeEntry?.generatedAt ?? null,
-      scenarioFingerprint: activeRehearsalGuard.latest.scenarioFingerprint,
-      expectedDeltas: activeRehearsalGuard.latest.expectedDeltas,
-      operatorId: null
-    };
-    const origin = typeof window !== "undefined" ? window.location.origin : "https://preview.local";
-    const serialized = JSON.stringify(payload);
-    const command = `curl -X POST "${origin}/api/marketing-preview/fallbacks/simulate" \\
-  -H "Content-Type: application/json" \\
-  -H "x-preview-signature: $PAYLOAD_LIVE_PREVIEW_SECRET" \\
-  -d '${escapeSingleQuotes(serialized)}'`;
-
-    try {
-      await navigator.clipboard.writeText(command);
-      setRehearsalCommandStatus("copied");
-    } catch (copyError) {
-      console.error(copyError);
-      setRehearsalCommandStatus("error");
-    }
-  }, [activeEntry?.generatedAt, activeRehearsalGuard.latest]);
-
   useEffect(() => {
     setLocalNotes(notes);
   }, [notes]);
@@ -613,6 +580,39 @@ export function PreviewWorkbench({ current, history, notes = [] }: PreviewWorkbe
         ? "Copy failed"
         : "Copy rehearsal command";
   const canRemediate = activeRehearsalGuard.allowed;
+
+  const handleCopyRehearsalCommand = useCallback(async () => {
+    if (!activeRehearsalGuard.latest) {
+      return;
+    }
+
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      setRehearsalCommandStatus("error");
+      return;
+    }
+
+    const payload = {
+      manifestGeneratedAt:
+        activeRehearsalGuard.latest.manifestGeneratedAt ?? activeEntry?.generatedAt ?? null,
+      scenarioFingerprint: activeRehearsalGuard.latest.scenarioFingerprint,
+      expectedDeltas: activeRehearsalGuard.latest.expectedDeltas,
+      operatorId: null
+    };
+    const origin = typeof window !== "undefined" ? window.location.origin : "https://preview.local";
+    const serialized = JSON.stringify(payload);
+    const command = `curl -X POST "${origin}/api/marketing-preview/fallbacks/simulate" \\
+  -H "Content-Type: application/json" \\
+  -H "x-preview-signature: $PAYLOAD_LIVE_PREVIEW_SECRET" \\
+  -d '${escapeSingleQuotes(serialized)}'`;
+
+    try {
+      await navigator.clipboard.writeText(command);
+      setRehearsalCommandStatus("copied");
+    } catch (copyError) {
+      console.error(copyError);
+      setRehearsalCommandStatus("error");
+    }
+  }, [activeEntry?.generatedAt, activeRehearsalGuard.latest]);
 
   const routeGroups = useMemo(() => buildRouteGroups(activeEntry ?? undefined), [activeEntry]);
   const [selectedRoute, setSelectedRoute] = useState(

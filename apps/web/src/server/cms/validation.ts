@@ -11,10 +11,14 @@ import type { RemediationCategory } from "@/shared/marketing/remediation";
 
 // meta: cms-validation: marketing-blocks
 
-export type MarketingBlockValidationTrace = Pick<
+type BaseLexicalTrace = Pick<
   NormalizeLexicalBlockTrace,
   "blockType" | "sectionLabel" | "lexicalIndex" | "lexicalKey" | "provenance" | "operations" | "warnings" | "normalized" | "skipReason"
 >;
+
+export type MarketingBlockValidationTrace = Omit<BaseLexicalTrace, "blockType"> & {
+  blockType?: MarketingContentDocument["kind"] | string;
+};
 
 export type MarketingBlockFallbackInsight = {
   used: boolean;
@@ -41,6 +45,27 @@ export type MarketingBlockValidationResult = {
   recoveryHints: MarketingBlockRecoveryHint[];
   trace: MarketingBlockValidationTrace;
   fallback?: MarketingBlockFallbackInsight;
+};
+
+const KNOWN_MARKETING_BLOCK_KINDS: ReadonlyArray<MarketingContentDocument["kind"]> = [
+  "hero",
+  "metrics",
+  "testimonial",
+  "product",
+  "timeline",
+  "feature-grid",
+  "media-gallery",
+  "cta-cluster",
+  "comparison-table"
+];
+
+const normalizeBlockKind = (value: unknown): MarketingContentDocument["kind"] | undefined => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return (KNOWN_MARKETING_BLOCK_KINDS as ReadonlyArray<string>).includes(value)
+    ? (value as MarketingContentDocument["kind"])
+    : undefined;
 };
 
 const toFingerprint = (input: unknown): string | undefined => {
@@ -245,7 +270,7 @@ export const validateMarketingBlock = (
       errors,
       warnings,
       block: null,
-      kind: trace.blockType,
+      kind: normalizeBlockKind(trace.blockType),
       key: trace.lexicalKey,
       fingerprint: undefined,
       recoveryHints,

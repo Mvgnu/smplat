@@ -9,6 +9,8 @@ import {
   fetchLoyaltyMember,
   fetchLoyaltyRewards
 } from "../account/loyalty/data";
+import { fetchPricingExperiments } from "@/server/catalog/pricing-experiments";
+import { filterEnabledPricingExperiments } from "@/lib/pricing-experiments";
 
 import { CheckoutPageClient } from "./checkout.client";
 
@@ -18,7 +20,11 @@ export const metadata: Metadata = {
 };
 
 export default async function CheckoutPage() {
-  const trustExperience = await getCheckoutTrustExperience();
+  const [trustExperience, pricingExperimentSnapshots] = await Promise.all([
+    getCheckoutTrustExperience(),
+    fetchPricingExperiments()
+  ]);
+  const pricingExperiments = filterEnabledPricingExperiments(pricingExperimentSnapshots);
   const session = await auth();
 
   if (!session?.user?.id) {
@@ -28,11 +34,19 @@ export default async function CheckoutPage() {
           trustContent={trustExperience}
           loyaltyMember={buildBypassMember()}
           loyaltyRewards={buildBypassRewards()}
+          pricingExperiments={pricingExperiments}
         />
       );
     }
 
-    return <CheckoutPageClient trustContent={trustExperience} loyaltyMember={null} loyaltyRewards={[]} />;
+    return (
+      <CheckoutPageClient
+        trustContent={trustExperience}
+        loyaltyMember={null}
+        loyaltyRewards={[]}
+        pricingExperiments={pricingExperiments}
+      />
+    );
   }
 
   const [loyaltyMember, loyaltyRewards] = await Promise.all([
@@ -45,6 +59,7 @@ export default async function CheckoutPage() {
       trustContent={trustExperience}
       loyaltyMember={loyaltyMember}
       loyaltyRewards={loyaltyRewards}
+      pricingExperiments={pricingExperiments}
     />
   );
 }

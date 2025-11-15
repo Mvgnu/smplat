@@ -18,13 +18,22 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "CREATE TYPE fulfillment_task_type_enum AS ENUM ('instagram_setup', 'follower_growth', "
-        "'engagement_boost', 'content_promotion', 'analytics_collection', 'campaign_optimization')"
-    )
-    op.execute(
-        "CREATE TYPE fulfillment_task_status_enum AS ENUM ('pending', 'in_progress', 'completed', 'failed', 'cancelled')"
-    )
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'fulfillment_task_type_enum') THEN
+                CREATE TYPE fulfillment_task_type_enum AS ENUM ('instagram_setup', 'follower_growth', 'engagement_boost', 'content_promotion', 'analytics_collection', 'campaign_optimization');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'fulfillment_task_status_enum') THEN
+                CREATE TYPE fulfillment_task_status_enum AS ENUM ('pending', 'in_progress', 'completed', 'failed', 'cancelled');
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "instagram_accounts",
@@ -83,12 +92,12 @@ def upgrade() -> None:
         sa.Column("order_item_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "task_type",
-            sa.Enum(name="fulfillment_task_type_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("instagram_setup", "follower_growth", "engagement_boost", "content_promotion", "analytics_collection", "campaign_optimization", name="fulfillment_task_type_enum", create_type=False),
             nullable=False,
         ),
         sa.Column(
             "status",
-            sa.Enum(name="fulfillment_task_status_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("pending", "in_progress", "completed", "failed", "cancelled", name="fulfillment_task_status_enum", create_type=False),
             nullable=False,
             server_default="pending",
         ),

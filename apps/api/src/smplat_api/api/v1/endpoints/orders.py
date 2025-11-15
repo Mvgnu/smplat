@@ -1,6 +1,7 @@
 """Order management API endpoints."""
 
-from typing import List, Dict, Any, Optional
+import re
+from typing import List, Dict, Any, Optional, Sequence
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,9 +15,11 @@ from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.db.session import get_session
 from smplat_api.models.order import Order, OrderItem, OrderStatusEnum, OrderSourceEnum
 from smplat_api.models.product import Product
+from smplat_api.models.fulfillment import FulfillmentProviderOrder
 from smplat_api.models.customer_profile import CurrencyEnum
-from smplat_api.services.fulfillment import FulfillmentService
+from smplat_api.services.fulfillment import FulfillmentService, ProviderAutomationService
 from smplat_api.services.orders.acceptance import BundleAcceptanceService
+from smplat_api.schemas.fulfillment_provider import FulfillmentProviderOrderResponse
 
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -40,6 +43,10 @@ class OrderCreate(BaseModel):
     source: str = Field("checkout", description="Order source")
     user_id: Optional[UUID] = Field(None, description="User ID (optional for guest checkout)")
     notes: Optional[str] = Field(None, description="Order notes")
+    loyalty_projection_points: Optional[int] = Field(
+        None,
+        description="Projected loyalty points for the order (structured value preferred over notes)",
+    )
 
 
 class OrderItemResponse(BaseModel):
@@ -66,9 +73,13 @@ class OrderResponse(BaseModel):
     total: float
     currency: str
     notes: Optional[str]
+    loyalty_projection_points: Optional[int] = Field(
+        None, description="Projected loyalty points for this order"
+    )
     created_at: str
     updated_at: str
     items: List[OrderItemResponse]
+    provider_orders: List[FulfillmentProviderOrderResponse] = Field(default_factory=list, alias="providerOrders")
 
 
 class OrderStatusUpdate(BaseModel):
@@ -130,7 +141,10 @@ async def create_order(
         order_count = await db.scalar(select(func.count(Order.id)))
         order_number = f"SM{(order_count or 0) + 1:06d}"
         
-        # Create order
+        loyalty_projection_points = order_data.loyalty_projection_points
+        if loyalty_projection_points is None and order_data.notes:
+            loyalty_projection_points = _extract_loyalty_projection_points(order_data.notes)
+
         order = Order(
             order_number=order_number,
             user_id=order_data.user_id,
@@ -140,7 +154,8 @@ async def create_order(
             tax=tax,
             total=total,
             currency=currency_enum,
-            notes=order_data.notes
+            notes=order_data.notes,
+            loyalty_projection_points=loyalty_projection_points,
         )
         
         db.add(order)
@@ -185,7 +200,11 @@ async def create_order(
         await db.refresh(order)
         
         # Fetch order with items for response
-        stmt = select(Order).options(selectinload(Order.items)).where(Order.id == order.id)
+        stmt = (
+            select(Order)
+            .options(selectinload(Order.items).selectinload(OrderItem.provider_orders))
+            .where(Order.id == order.id)
+        )
         result = await db.execute(stmt)
         created_order = result.scalar_one()
         
@@ -197,7 +216,9 @@ async def create_order(
             items_count=len(created_order.items)
         )
         
-        return _order_to_response(created_order)
+        automation = ProviderAutomationService(db)
+        provider_orders = await automation.list_orders_for_order(created_order.id)
+        return _order_to_response(created_order, provider_orders=provider_orders)
         
     except HTTPException:
         raise
@@ -232,14 +253,20 @@ async def get_order(
         HTTPException: If order not found
     """
     try:
-        stmt = select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
+        stmt = (
+            select(Order)
+            .options(selectinload(Order.items).selectinload(OrderItem.provider_orders))
+            .where(Order.id == order_id)
+        )
         result = await db.execute(stmt)
         order = result.scalar_one_or_none()
         
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-            
-        return _order_to_response(order)
+        
+        automation = ProviderAutomationService(db)
+        provider_orders = await automation.list_orders_for_order(order.id)
+        return _order_to_response(order, provider_orders=provider_orders)
         
     except HTTPException:
         raise
@@ -271,7 +298,7 @@ async def list_orders(
         List of orders
     """
     try:
-        stmt = select(Order).options(selectinload(Order.items))
+        stmt = select(Order).options(selectinload(Order.items).selectinload(OrderItem.provider_orders))
         
         if status_filter:
             try:
@@ -287,8 +314,10 @@ async def list_orders(
         
         result = await db.execute(stmt)
         orders = result.scalars().all()
-        
-        return [_order_to_response(order) for order in orders]
+
+        automation = ProviderAutomationService(db)
+        provider_orders_map = await automation.list_orders_for_orders([order.id for order in orders])
+        return [_order_to_response(order, provider_orders=provider_orders_map.get(order.id)) for order in orders]
         
     except HTTPException:
         raise
@@ -315,7 +344,7 @@ async def list_orders_for_user(
     try:
         stmt = (
             select(Order)
-            .options(selectinload(Order.items))
+            .options(selectinload(Order.items).selectinload(OrderItem.provider_orders))
             .where(Order.user_id == user_id)
             .offset(skip)
             .limit(limit)
@@ -325,7 +354,9 @@ async def list_orders_for_user(
         result = await db.execute(stmt)
         orders = result.scalars().all()
 
-        return [_order_to_response(order) for order in orders]
+        automation = ProviderAutomationService(db)
+        provider_orders_map = await automation.list_orders_for_orders([order.id for order in orders])
+        return [_order_to_response(order, provider_orders=provider_orders_map.get(order.id)) for order in orders]
 
     except HTTPException:
         raise
@@ -367,7 +398,11 @@ async def update_order_status(
                 detail=f"Invalid status: {status_update.status}"
             )
         
-        stmt = select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
+        stmt = (
+            select(Order)
+            .options(selectinload(Order.items).selectinload(OrderItem.provider_orders))
+            .where(Order.id == order_id)
+        )
         result = await db.execute(stmt)
         order = result.scalar_one_or_none()
         
@@ -389,7 +424,9 @@ async def update_order_status(
             new_status=new_status.value
         )
         
-        return _order_to_response(order)
+        automation = ProviderAutomationService(db)
+        provider_orders = await automation.list_orders_for_order(order.id)
+        return _order_to_response(order, provider_orders=provider_orders)
         
     except HTTPException:
         raise
@@ -402,7 +439,11 @@ async def update_order_status(
         raise HTTPException(status_code=500, detail="Failed to update order status")
 
 
-def _order_to_response(order: Order) -> OrderResponse:
+def _order_to_response(
+    order: Order,
+    *,
+    provider_orders: Sequence[FulfillmentProviderOrder] | None = None,
+) -> OrderResponse:
     """Convert Order model to response format.
     
     Args:
@@ -411,6 +452,18 @@ def _order_to_response(order: Order) -> OrderResponse:
     Returns:
         OrderResponse object
     """
+    provider_entries: List[FulfillmentProviderOrderResponse] = []
+    seen: set[str] = set()
+    source = provider_orders or []
+    for provider_order in source:
+        provider_order_id = getattr(provider_order, "id", None)
+        key = str(provider_order_id) if provider_order_id is not None else None
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        provider_entries.append(FulfillmentProviderOrderResponse.model_validate(provider_order))
+
     return OrderResponse(
         id=str(order.id),
         order_number=order.order_number,
@@ -422,6 +475,7 @@ def _order_to_response(order: Order) -> OrderResponse:
         total=float(order.total),
         currency=order.currency.value,
         notes=order.notes,
+        loyalty_projection_points=order.loyalty_projection_points,
         created_at=order.created_at.isoformat(),
         updated_at=order.updated_at.isoformat(),
         items=[
@@ -436,8 +490,27 @@ def _order_to_response(order: Order) -> OrderResponse:
                 attributes=item.attributes
             )
             for item in order.items
-        ]
+        ],
+        provider_orders=provider_entries,
     )
+
+
+_LOYALTY_NOTE_REGEX = re.compile(r"loyaltyProjection=(\d+)", re.IGNORECASE)
+
+
+def _extract_loyalty_projection_points(notes: Optional[str]) -> Optional[int]:
+    """Parse loyalty projection from order notes for backward compatibility."""
+    if not notes:
+        return None
+    match = _LOYALTY_NOTE_REGEX.search(notes)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 
 
 @router.get(

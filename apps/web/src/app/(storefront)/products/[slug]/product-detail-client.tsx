@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 
@@ -10,6 +10,7 @@ import {
   type ConfiguratorAddOn,
   type ConfiguratorCustomField,
   type ConfiguratorOptionGroup,
+  type ConfiguratorPreset,
   type ConfiguratorSelection,
   type SubscriptionPlan
 } from "@/components/products/product-configurator";
@@ -18,13 +19,34 @@ import {
   useSavedConfigurationsStore,
   type SavedConfiguration
 } from "@/store/saved-configurations";
-import type { ProductDetail, ProductOptionGroup } from "@/types/product";
+import { calculateAddOnDelta, calculateOptionDelta, getAddOnPricingInfo } from "@/lib/product-pricing";
+import { normalizeCustomFieldMetadata as sharedNormalizeCustomFieldMetadata } from "@/lib/product-metadata";
+import type {
+  ProductDetail,
+  ProductAddOn,
+  ProductOptionGroup,
+  ProductOptionStructuredPricing,
+  ProductOptionMetadata,
+} from "@/types/product";
+import type {
+  CartAddOnSelection,
+  CartCustomFieldValue,
+  CartOptionCalculatorPreview,
+  CartOptionSelection,
+  CartProductExperience,
+  CartSubscriptionSelection,
+} from "@/types/cart";
 import type { CatalogBundleRecommendation, CatalogExperimentResponse } from "@smplat/types";
+import type { PricingExperiment, PricingExperimentVariant } from "@/types/pricing-experiments";
+import { selectPricingExperimentVariant } from "@/lib/pricing-experiments";
+import { logPricingExperimentEvents } from "@/lib/pricing-experiment-events";
 import {
   buildBundleExperimentOverlay,
   hasGuardrailBreaches,
 } from "../experiment-overlay";
 import type { MarketingContent } from "../marketing-content";
+import { ProductExperienceCard } from "@/components/storefront/product-experience-card";
+import type { StorefrontProduct } from "@/data/storefront-experience";
 
 type ConfigSelection = {
   total: number;
@@ -32,21 +54,11 @@ type ConfigSelection = {
   addOns: string[];
   subscriptionPlanId?: string;
   customFieldValues: Record<string, string>;
+  presetId?: string | null;
 };
 
-type SelectedOptionDetail = {
-  groupId: string;
-  groupName: string;
-  optionId: string;
-  label: string;
-  priceDelta: number;
-};
-
-type SelectedAddOnDetail = {
-  id: string;
-  label: string;
-  priceDelta: number;
-};
+type SelectedOptionDetail = CartOptionSelection;
+type SelectedAddOnDetail = CartAddOnSelection;
 
 type ProductDetailClientProps = {
   product: ProductDetail;
@@ -54,7 +66,10 @@ type ProductDetailClientProps = {
   recommendations: CatalogBundleRecommendation[];
   recommendationFallback?: string | null;
   experiments: CatalogExperimentResponse[];
+  pricingExperiments: PricingExperiment[];
 };
+
+const PRICING_EXPERIMENT_SESSION_KEY = "smplat.pricingExperimentExposures";
 
 function formatCurrency(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
@@ -73,6 +88,24 @@ function formatCurrencyDelta(amount: number, currency: string): string {
   return amount > 0 ? `+${formatted}` : `-${formatted}`;
 }
 
+const formatPricingExperimentAdjustment = (
+  variant: PricingExperimentVariant,
+  currency: string,
+): string => {
+  if (variant.adjustmentKind === "multiplier") {
+    if (typeof variant.priceMultiplier === "number" && Number.isFinite(variant.priceMultiplier)) {
+      return `${variant.priceMultiplier.toFixed(2)}× base`;
+    }
+    return "Multiplier TBD";
+  }
+  if (variant.priceDeltaCents === 0) {
+    return "No change";
+  }
+  const dollars = variant.priceDeltaCents / 100;
+  const formatted = formatCurrency(Math.abs(dollars), currency);
+  return variant.priceDeltaCents > 0 ? `+${formatted}` : `-${formatted}`;
+};
+
 function formatPercentage(value: number | null | undefined): string {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return "–";
@@ -90,6 +123,57 @@ function formatQueueDepth(count: number): string {
   return `${count}+ queued`;
 }
 
+const isSafeCalculatorExpression = (expression: string): boolean => {
+  const sanitized = expression
+    .replace(/\bamount\b/gi, "")
+    .replace(/\bdays\b/gi, "")
+    .replace(/[0-9+\-*/().\s]/g, "");
+  return sanitized.trim().length === 0;
+};
+
+const evaluateCalculatorSample = (
+  expression: string,
+  amount: number | null | undefined,
+  days: number | null | undefined
+): number | null => {
+  const trimmed = expression.trim();
+  if (!trimmed || !isSafeCalculatorExpression(trimmed)) {
+    return null;
+  }
+  try {
+    const fn = Function("amount", "days", `return ${trimmed};`) as (amount: number, days: number) => unknown;
+    const resolvedAmount = typeof amount === "number" && Number.isFinite(amount) ? amount : 0;
+    const resolvedDays = typeof days === "number" && Number.isFinite(days) ? days : 0;
+    const result = fn(resolvedAmount, resolvedDays);
+    return typeof result === "number" && Number.isFinite(result) ? result : null;
+  } catch {
+    return null;
+  }
+};
+
+const buildCalculatorPreview = (
+  metadata: ProductOptionMetadata["calculator"] | null | undefined
+): CartOptionCalculatorPreview | null => {
+  if (!metadata || typeof metadata.expression !== "string") {
+    return null;
+  }
+  const expression = metadata.expression.trim();
+  if (!expression || !isSafeCalculatorExpression(expression)) {
+    return null;
+  }
+  const sampleAmount =
+    metadata.sampleAmount != null && Number.isFinite(metadata.sampleAmount) ? metadata.sampleAmount : null;
+  const sampleDays =
+    metadata.sampleDays != null && Number.isFinite(metadata.sampleDays) ? metadata.sampleDays : null;
+  const sampleResult = evaluateCalculatorSample(expression, sampleAmount, sampleDays);
+  return {
+    expression,
+    sampleAmount,
+    sampleDays,
+    sampleResult,
+  };
+};
+
 function mapOptionGroups(groups: ProductOptionGroup[]): ConfiguratorOptionGroup[] {
   return groups
     .slice()
@@ -100,6 +184,7 @@ function mapOptionGroups(groups: ProductOptionGroup[]): ConfiguratorOptionGroup[
       description: group.description ?? undefined,
       type: group.groupType === "multiple" ? "multiple" : "single",
       required: group.isRequired,
+      metadata: group.metadataJson ?? null,
       options: group.options
         .slice()
         .sort((a, b) => a.displayOrder - b.displayOrder)
@@ -108,7 +193,10 @@ function mapOptionGroups(groups: ProductOptionGroup[]): ConfiguratorOptionGroup[
           label: option.label,
           description: option.description ?? undefined,
           priceDelta: option.priceDelta,
-          recommended: option.metadataJson?.recommended === true
+          recommended: option.metadataJson?.recommended === true,
+          structuredPricing: option.metadataJson?.structuredPricing ?? null,
+          media: option.metadataJson?.media ?? null,
+          metadata: option.metadataJson ?? null
         }))
     }));
 }
@@ -122,7 +210,12 @@ function mapAddOns(addOns: ProductDetail["addOns"]): ConfiguratorAddOn[] {
       label: addOn.label,
       description: addOn.description ?? undefined,
       priceDelta: addOn.priceDelta,
-      recommended: addOn.isRecommended
+      recommended: addOn.isRecommended,
+      metadata: addOn.metadataJson ?? null,
+      metadataJson: addOn.metadataJson ?? null,
+      pricing: addOn.pricing ?? null,
+      computedDelta: addOn.computedDelta ?? addOn.priceDelta,
+      percentageMultiplier: addOn.percentageMultiplier ?? null
     }));
 }
 
@@ -130,14 +223,41 @@ function mapCustomFields(fields: ProductDetail["customFields"]): ConfiguratorCus
   return fields
     .slice()
     .sort((a, b) => a.displayOrder - b.displayOrder)
-    .map((field) => ({
-      id: field.id,
-      label: field.label,
-      type: field.fieldType,
-      placeholder: field.placeholder ?? undefined,
-      helpText: field.helpText ?? undefined,
-      required: field.isRequired
-    }));
+    .filter((field) => {
+      const metadata = sharedNormalizeCustomFieldMetadata(field.metadataJson);
+      const checkout =
+        metadata.passthrough && typeof metadata.passthrough.checkout === "boolean"
+          ? metadata.passthrough.checkout
+          : true;
+      return checkout && field.label.trim().length > 0;
+    })
+    .map((field) => {
+      const metadata = sharedNormalizeCustomFieldMetadata(field.metadataJson);
+      const validation =
+        metadata.validation && Object.keys(metadata.validation).length > 0
+          ? metadata.validation
+          : undefined;
+      const passthrough =
+        metadata.passthrough && typeof metadata.passthrough.fulfillment === "boolean"
+          ? { fulfillment: metadata.passthrough.fulfillment }
+          : undefined;
+      return {
+        id: field.id,
+        label: field.label,
+        type: field.fieldType,
+        placeholder: field.placeholder ?? undefined,
+        helpText: field.helpText ?? undefined,
+        required: field.isRequired,
+        validation,
+        passthrough,
+        defaultValue:
+          typeof metadata.defaultValue === "string" && metadata.defaultValue.length > 0
+            ? metadata.defaultValue
+            : undefined,
+        conditional: metadata.conditionalVisibility ?? undefined,
+        sampleValues: metadata.sampleValues ?? undefined,
+      } satisfies ConfiguratorCustomField;
+    });
 }
 
 function mapSubscriptionPlans(plans: ProductDetail["subscriptionPlans"]): SubscriptionPlan[] {
@@ -162,6 +282,27 @@ function mapSubscriptionPlans(plans: ProductDetail["subscriptionPlans"]): Subscr
     }));
 }
 
+function mapConfigurationPresets(presets: ProductDetail["configurationPresets"]): ConfiguratorPreset[] {
+  return (presets ?? [])
+    .slice()
+    .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
+    .map((preset, index) => ({
+      id: preset.id ?? `preset-${index}`,
+      label: preset.label,
+      summary: preset.summary ?? null,
+      heroImageUrl: preset.heroImageUrl ?? null,
+      badge: preset.badge ?? null,
+      priceHint: preset.priceHint ?? null,
+      displayOrder: preset.displayOrder ?? null,
+      selection: {
+        optionSelections: preset.selection.optionSelections,
+        addOnIds: preset.selection.addOnIds,
+        subscriptionPlanId: preset.selection.subscriptionPlanId ?? undefined,
+        customFieldValues: preset.selection.customFieldValues,
+      },
+    }));
+}
+
 function renderStars(rating: number): string {
   const clamped = Math.min(Math.max(Math.round(rating), 0), 5);
   return `${"★".repeat(clamped)}${"☆".repeat(5 - clamped)}`;
@@ -177,8 +318,64 @@ function cloneSelection(selection: ConfigSelection): ConfiguratorSelection {
     ),
     addOns: [...selection.addOns],
     subscriptionPlanId: selection.subscriptionPlanId,
-    customFieldValues: { ...selection.customFieldValues }
+    customFieldValues: { ...selection.customFieldValues },
+    presetId: selection.presetId ?? null,
   };
+}
+
+function buildPresetSelection(preset: ConfiguratorPreset): ConfiguratorSelection {
+  return {
+    selectedOptions: Object.fromEntries(
+      Object.entries(preset.selection.optionSelections).map(([groupId, optionIds]) => [
+        groupId,
+        [...optionIds]
+      ])
+    ),
+    addOns: [...preset.selection.addOnIds],
+    subscriptionPlanId: preset.selection.subscriptionPlanId,
+    customFieldValues: { ...preset.selection.customFieldValues },
+    presetId: preset.id ?? null,
+  };
+}
+
+type PresetAnalyticsEvent = {
+  productSlug: string;
+  presetId: string | null;
+  presetLabel?: string | null;
+  source: "marketing-card" | "configurator";
+  eventType: string;
+};
+
+async function recordPresetAnalyticsEvent({
+  productSlug,
+  presetId,
+  presetLabel,
+  source,
+  eventType,
+}: PresetAnalyticsEvent) {
+  if (!presetId) {
+    return;
+  }
+  try {
+    await fetch("/api/analytics/offer-events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        offerSlug: productSlug,
+        eventType,
+        action: "apply",
+        metadata: {
+          presetId,
+          presetLabel: presetLabel ?? null,
+          source,
+        },
+      }),
+    });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("Failed to record preset analytics event", error);
+    }
+  }
 }
 
 type PriceBreakdownItem = {
@@ -187,6 +384,18 @@ type PriceBreakdownItem = {
   amount: number;
   variant: "base" | "option" | "addOn" | "plan";
 };
+
+function computeOptionDelta(
+  option: ProductOptionGroup["options"][number],
+  groupType: ProductOptionGroup["groupType"],
+  productBasePrice: number
+): number {
+  return calculateOptionDelta(option, productBasePrice, groupType);
+}
+
+function computeAddOnDelta(addOn: ProductAddOn, subtotal: number): number {
+  return calculateAddOnDelta(addOn, subtotal);
+}
 
 function computePriceBreakdown(product: ProductDetail, selection: ConfigSelection): PriceBreakdownItem[] {
   const items: PriceBreakdownItem[] = [
@@ -207,13 +416,14 @@ function computePriceBreakdown(product: ProductDetail, selection: ConfigSelectio
       if (!option) {
         return;
       }
+      const delta = computeOptionDelta(option, group.groupType, product.basePrice);
       items.push({
         id: `option-${group.id}-${option.id}`,
         label: `${group.name}: ${option.label}`,
-        amount: option.priceDelta,
+        amount: delta,
         variant: "option"
       });
-      running += option.priceDelta;
+      running += delta;
     });
   });
 
@@ -222,13 +432,14 @@ function computePriceBreakdown(product: ProductDetail, selection: ConfigSelectio
     if (!addOn) {
       return;
     }
+    const delta = computeAddOnDelta(addOn, running);
     items.push({
       id: `addon-${addOn.id}`,
       label: addOn.label,
-      amount: addOn.priceDelta,
+      amount: delta,
       variant: "addOn"
     });
-    running += addOn.priceDelta;
+    running += delta;
   });
 
   const plan = selection.subscriptionPlanId
@@ -281,17 +492,22 @@ export function ProductDetailClient({
   recommendations,
   recommendationFallback,
   experiments,
+  pricingExperiments,
+  storefrontProduct,
 }: ProductDetailClientProps) {
   const [selection, setSelection] = useState<ConfigSelection>({
     total: product.basePrice,
     selectedOptions: {},
     addOns: [],
     subscriptionPlanId: product.subscriptionPlans.find((plan) => plan.isDefault)?.id,
-    customFieldValues: {}
+    customFieldValues: {},
+    presetId: null
   });
   const [errors, setErrors] = useState<string[]>([]);
   const [confirmation, setConfirmation] = useState<string | null>(null);
   const [configPreset, setConfigPreset] = useState<ConfiguratorSelection | undefined>(undefined);
+  const configuratorSectionRef = useRef<HTMLDivElement | null>(null);
+  const lastConfiguratorPresetRef = useRef<string | null>(null);
 
   const addItem = useCartStore((state) => state.addItem);
   const cartTotal = useCartStore(cartTotalSelector);
@@ -310,6 +526,97 @@ export function ProductDetailClient({
     () => mapSubscriptionPlans(product.subscriptionPlans),
     [product.subscriptionPlans]
   );
+  const configurationPresets = useMemo(
+    () => mapConfigurationPresets(product.configurationPresets ?? []),
+    [product.configurationPresets]
+  );
+  const presetLabelLookup = useMemo(() => {
+    const map = new Map<string, string>();
+    configurationPresets.forEach((preset) => {
+      if (preset.id) {
+        map.set(preset.id, preset.label);
+      }
+    });
+    return map;
+  }, [configurationPresets]);
+
+  useEffect(() => {
+    const currentPresetId = selection.presetId ?? null;
+    const previousPresetId = lastConfiguratorPresetRef.current;
+
+    if (currentPresetId && currentPresetId !== previousPresetId) {
+      lastConfiguratorPresetRef.current = currentPresetId;
+      const presetLabel = presetLabelLookup.get(currentPresetId) ?? null;
+      void recordPresetAnalyticsEvent({
+        productSlug: product.slug,
+        presetId: currentPresetId,
+        presetLabel,
+        source: "configurator",
+        eventType: "preset_configurator_apply",
+      });
+      return;
+    }
+
+    if (!currentPresetId && previousPresetId) {
+      lastConfiguratorPresetRef.current = null;
+      const presetLabel = presetLabelLookup.get(previousPresetId) ?? null;
+      void recordPresetAnalyticsEvent({
+        productSlug: product.slug,
+        presetId: previousPresetId,
+        presetLabel,
+        source: "configurator",
+        eventType: "preset_configurator_clear",
+      });
+      return;
+    }
+
+    if (!currentPresetId) {
+      lastConfiguratorPresetRef.current = null;
+    }
+  }, [presetLabelLookup, product.slug, selection.presetId]);
+  const mediaGallery = useMemo(
+    () =>
+      (product.mediaAssets ?? [])
+        .slice()
+        .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0)),
+    [product.mediaAssets]
+  );
+
+  const computeFieldError = useCallback((field: ConfiguratorCustomField, rawValue: string): string | null => {
+    const value = rawValue ?? "";
+    const trimmed = field.type === "number" ? value.trim() : value.trim();
+
+    if ((field.required ?? false) && trimmed.length === 0) {
+      return `${field.label} is required.`;
+    }
+
+    if (trimmed.length === 0) {
+      return null;
+    }
+
+    const rules = field.validation;
+    if (rules?.minLength != null && trimmed.length < rules.minLength) {
+      return `${field.label} must be at least ${rules.minLength} characters.`;
+    }
+    if (rules?.maxLength != null && trimmed.length > rules.maxLength) {
+      return `${field.label} must be at most ${rules.maxLength} characters.`;
+    }
+    if (rules?.disallowWhitespace && /\s/.test(value)) {
+      return `${field.label} cannot include whitespace.`;
+    }
+    if (rules?.pattern) {
+      try {
+        const regex = new RegExp(rules.pattern);
+        if (!regex.test(value)) {
+          return `${field.label} must match the required format.`;
+        }
+      } catch {
+        // ignore malformed regex at runtime
+      }
+    }
+
+    return null;
+  }, []);
   const priceBreakdown = useMemo(
     () => computePriceBreakdown(product, selection),
     [product, selection]
@@ -348,23 +655,101 @@ export function ProductDetailClient({
     [experiments]
   );
 
+  const visiblePricingExperiments = useMemo(
+    () => pricingExperiments.filter((experiment) => experiment.variants.length > 0),
+    [pricingExperiments],
+  );
+
+  useEffect(() => {
+    if (visiblePricingExperiments.length === 0) {
+      return;
+    }
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    let storedKeys: string[] = [];
+    try {
+      storedKeys = JSON.parse(window.sessionStorage.getItem(PRICING_EXPERIMENT_SESSION_KEY) ?? "[]");
+      if (!Array.isArray(storedKeys)) {
+        storedKeys = [];
+      }
+    } catch {
+      storedKeys = [];
+    }
+
+    const seen = new Set(storedKeys);
+    const events: Array<{ slug: string; variantKey: string; exposures: number }> = [];
+
+    visiblePricingExperiments.forEach((experiment) => {
+      const variant = selectPricingExperimentVariant(experiment);
+      if (!variant) {
+        return;
+      }
+      const dedupKey = `${experiment.slug}:${variant.key}`;
+      if (seen.has(dedupKey)) {
+        return;
+      }
+      seen.add(dedupKey);
+      events.push({
+        slug: experiment.slug,
+        variantKey: variant.key,
+        exposures: 1,
+      });
+    });
+
+    if (events.length === 0) {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(PRICING_EXPERIMENT_SESSION_KEY, JSON.stringify(Array.from(seen)));
+    } catch {
+      // ignore storage failures
+    }
+
+    logPricingExperimentEvents(events).catch((error) => {
+      console.warn("Failed to log pricing experiment exposures", error);
+    });
+  }, [visiblePricingExperiments]);
+
   const handleConfiguratorChange = (next: ConfigSelection) => {
     setSelection(next);
     setErrors([]);
     setConfirmation(null);
   };
 
+  const focusConfigurator = useCallback(() => {
+    if (configuratorSectionRef.current) {
+      configuratorSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
+
+  const applyConfigurationSelection = useCallback(
+    (selectionDraft: ConfiguratorSelection, toast?: string) => {
+      setConfigPreset(selectionDraft);
+      if (toast) {
+        setConfirmation(toast);
+      } else {
+        setConfirmation(null);
+      }
+      setErrors([]);
+      focusConfigurator();
+    },
+    [focusConfigurator]
+  );
+
   const validateCustomFields = (): string[] => {
-    const missing: string[] = [];
+    const issues: string[] = [];
     customFields.forEach((field) => {
-      if (field.required) {
-        const value = selection.customFieldValues[field.id];
-        if (!value || value.trim().length === 0) {
-          missing.push(`${field.label} is required`);
-        }
+      const value = selection.customFieldValues[field.id] ?? "";
+      const error = computeFieldError(field, value);
+      if (error) {
+        issues.push(error);
       }
     });
-    return missing;
+    return issues;
   };
 
   const handleSaveConfiguration = () => {
@@ -392,19 +777,18 @@ export function ProductDetailClient({
   };
 
   const handleApplySavedConfiguration = (config: SavedConfiguration) => {
-    setConfigPreset({
-      selectedOptions: Object.fromEntries(
-        Object.entries(config.selection.selectedOptions).map(([groupId, optionIds]) => [
-          groupId,
-          [...optionIds]
-        ])
-      ),
-      addOns: [...config.selection.addOns],
-      subscriptionPlanId: config.selection.subscriptionPlanId,
-      customFieldValues: { ...config.selection.customFieldValues }
+    applyConfigurationSelection(cloneSelection(config.selection), `Applied "${config.label}" configuration.`);
+  };
+
+  const handleApplyMarketingPreset = (preset: ConfiguratorPreset) => {
+    applyConfigurationSelection(buildPresetSelection(preset), `Applied "${preset.label}" preset.`);
+    void recordPresetAnalyticsEvent({
+      productSlug: product.slug,
+      presetId: preset.id ?? null,
+      presetLabel: preset.label,
+      eventType: "preset_cta_apply",
+      source: "marketing-card",
     });
-    setConfirmation(`Applied "${config.label}" configuration.`);
-    setErrors([]);
   };
 
   const handleRenameSavedConfiguration = (config: SavedConfiguration) => {
@@ -437,35 +821,82 @@ export function ProductDetailClient({
       return;
     }
 
-    const selectedOptionDetails: SelectedOptionDetail[] = product.optionGroups.flatMap((group) => {
+    const selectedOptionDetails: SelectedOptionDetail[] = [];
+    let runningSubtotal = product.basePrice;
+
+    product.optionGroups.forEach((group) => {
       const ids = selection.selectedOptions[group.id] ?? [];
-      return ids
-        .map((id) => {
-          const option = group.options.find((opt) => opt.id === id);
-          if (!option) {
-            return null;
-          }
-          return {
-            groupId: group.id,
-            groupName: group.name,
-            optionId: option.id,
-            label: option.label,
-            priceDelta: option.priceDelta
-          };
-        })
-        .filter((option): option is SelectedOptionDetail => option !== null);
+      ids.forEach((id) => {
+        const option = group.options.find((opt) => opt.id === id);
+        if (!option) {
+          return;
+        }
+        const delta = computeOptionDelta(option, group.groupType, product.basePrice);
+        const metadata: ProductOptionMetadata | null | undefined = option.metadataJson ?? null;
+        const calculatorPreview = buildCalculatorPreview(metadata?.calculator);
+        selectedOptionDetails.push({
+          groupId: group.id,
+          groupName: group.name,
+          optionId: option.id,
+          label: option.label,
+          priceDelta: delta,
+          structuredPricing: metadata?.structuredPricing ?? null,
+          marketingTagline: metadata?.marketingTagline ?? null,
+          fulfillmentSla: metadata?.fulfillmentSla ?? null,
+          heroImageUrl: metadata?.heroImageUrl ?? null,
+          calculator: calculatorPreview,
+        });
+        runningSubtotal += delta;
+      });
     });
 
-    const selectedAddOnDetails: SelectedAddOnDetail[] = product.addOns
-      .filter((addOn) => selection.addOns.includes(addOn.id))
-      .map((addOn) => ({
+    const selectedAddOnDetails: SelectedAddOnDetail[] = [];
+    selection.addOns.forEach((id) => {
+      const addOn = product.addOns.find((item) => item.id === id);
+      if (!addOn) {
+        return;
+      }
+      const delta = computeAddOnDelta(addOn, runningSubtotal);
+      const pricingInfo = getAddOnPricingInfo(addOn.metadataJson, addOn.pricing ?? null);
+      selectedAddOnDetails.push({
         id: addOn.id,
         label: addOn.label,
-        priceDelta: addOn.priceDelta
-      }));
+        priceDelta: delta,
+        pricingMode: pricingInfo.mode,
+        pricingAmount: pricingInfo.amount ?? null,
+        serviceId: pricingInfo.mode === "serviceOverride" ? pricingInfo.serviceId ?? null : null,
+        serviceProviderId: pricingInfo.serviceProviderId ?? null,
+        serviceProviderName: pricingInfo.serviceProviderName ?? null,
+        serviceAction: pricingInfo.serviceAction ?? null,
+        serviceDescriptor: pricingInfo.serviceDescriptor ?? null,
+        providerCostAmount: pricingInfo.providerCostAmount ?? null,
+        providerCostCurrency: pricingInfo.providerCostCurrency ?? null,
+        marginTarget: pricingInfo.marginTarget ?? null,
+        fulfillmentMode: pricingInfo.fulfillmentMode ?? undefined,
+        payloadTemplate: pricingInfo.payloadTemplate ?? null,
+        dripPerDay: pricingInfo.dripPerDay ?? null,
+        previewQuantity: pricingInfo.previewQuantity ?? null,
+        serviceRules: pricingInfo.serviceRules ?? null,
+      });
+      runningSubtotal += delta;
+    });
 
     const subscriptionSelection = selection.subscriptionPlanId
       ? product.subscriptionPlans.find((plan) => plan.id === selection.subscriptionPlanId)
+      : undefined;
+
+    const presetLabel = selection.presetId ? presetLabelLookup.get(selection.presetId) ?? null : null;
+    const cartExperience: CartProductExperience | undefined = storefrontProduct
+      ? {
+          slug: storefrontProduct.slug,
+          name: storefrontProduct.name,
+          category: storefrontProduct.category,
+          journeyInsight: storefrontProduct.journeyInsight,
+          trustSignal: storefrontProduct.trustSignal,
+          loyaltyHint: storefrontProduct.loyaltyHint,
+          highlights: storefrontProduct.highlights,
+          sla: storefrontProduct.sla
+        }
       : undefined;
 
     addItem({
@@ -493,7 +924,10 @@ export function ProductDetailClient({
       })),
       deliveryEstimate: product.fulfillmentSummary?.delivery ?? null,
       assuranceHighlights: product.fulfillmentSummary?.assurances ?? [],
-      supportChannels: product.fulfillmentSummary?.support ?? []
+      supportChannels: product.fulfillmentSummary?.support ?? [],
+      presetId: selection.presetId ?? null,
+      presetLabel,
+      experience: cartExperience
     });
 
     setConfirmation("Service configuration added to cart.");
@@ -506,7 +940,7 @@ export function ProductDetailClient({
         <Link href="/products" className="text-sm text-white/60 transition hover:text-white/80">
           ← All services
         </Link>
-        <div className="grid gap-8 lg:grid-cols-[2fr,1fr]">
+        <div className="flex flex-col gap-8">
           <div className="space-y-4">
             {marketing.heroEyebrow ? (
               <span className="inline-flex items-center rounded-full border border-white/15 px-4 py-1 text-xs uppercase tracking-wide text-white/60">
@@ -525,19 +959,75 @@ export function ProductDetailClient({
               <span>Cart total: {formatCurrency(cartTotal, product.currency)}</span>
             </div>
           </div>
-          {marketing.metrics.length > 0 ? (
-            <div className="grid gap-4 rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur sm:grid-cols-3 sm:divide-x sm:divide-white/10">
-              {marketing.metrics.map((metric) => (
-                <div key={metric.label} className="sm:px-4">
-                  <p className="text-xs uppercase tracking-wide text-white/40">{metric.label}</p>
-                  <p className="mt-2 text-2xl font-semibold text-white">{metric.value}</p>
-                  {metric.caption ? <p className="mt-1 text-xs text-white/60">{metric.caption}</p> : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
+          <div className="grid gap-6 lg:grid-cols-[1.25fr,0.75fr]">
+            {marketing.metrics.length > 0 ? (
+              <div className="grid gap-4 rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur sm:grid-cols-3 sm:divide-x sm:divide-white/10">
+                {marketing.metrics.map((metric) => (
+                  <div key={metric.label} className="sm:px-4">
+                    <p className="text-xs uppercase tracking-wide text-white/40">{metric.label}</p>
+                    <p className="mt-2 text-2xl font-semibold text-white">{metric.value}</p>
+                    {metric.caption ? <p className="mt-1 text-xs text-white/60">{metric.caption}</p> : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <ProductExperienceCard product={storefrontProduct} />
+          </div>
         </div>
       </header>
+
+      {mediaGallery.length > 0 ? (
+        <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-white">Product media gallery</h2>
+              <p className="text-sm text-white/60">
+                Ordered preview assets with hero/detail/social usage tags for buyers and operators.
+              </p>
+            </div>
+            <span className="text-xs uppercase tracking-wide text-white/40">
+              {mediaGallery.length} asset{mediaGallery.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {mediaGallery.map((asset, index) => (
+              <article
+                key={asset.id ?? `${asset.assetUrl}-${index}`}
+                className="overflow-hidden rounded-2xl border border-white/10 bg-black/40"
+              >
+                <div className="relative aspect-video w-full border-b border-white/10">
+                  <Image
+                    src={asset.assetUrl}
+                    alt={asset.altText ?? asset.label ?? `Product asset ${index + 1}`}
+                    fill
+                    sizes="(max-width: 1024px) 100vw, 33vw"
+                    className="object-cover"
+                  />
+                </div>
+                <div className="space-y-2 p-4 text-sm text-white/70">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate font-semibold text-white">{asset.label ?? "Untitled asset"}</p>
+                    <span className="rounded-full border border-white/15 px-2 py-0.5 text-[0.6rem] uppercase tracking-[0.3em] text-white/60">
+                      #{(Number(asset.displayOrder) ?? index) + 1}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[0.65rem] uppercase tracking-[0.25em] text-white/60">
+                    {asset.isPrimary ? (
+                      <span className="rounded-full border border-emerald-400/40 px-2 py-0.5 text-emerald-200">Primary</span>
+                    ) : null}
+                    {(asset.usageTags ?? []).map((tag) => (
+                      <span key={`${asset.id}-${tag}`} className="rounded-full border border-white/15 px-2 py-0.5">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                  {asset.altText ? <p className="text-xs text-white/50">Alt text: {asset.altText}</p> : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {marketing.gallery.length > 0 ? (
         <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
@@ -576,6 +1066,88 @@ export function ProductDetailClient({
         </section>
       ) : null}
 
+      {configurationPresets.length > 0 ? (
+        <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-white">Curated configuration presets</h2>
+              <p className="text-sm text-white/60">
+                Ready-made bundles combining hero imagery, plan hints, and recommended add-ons.
+              </p>
+            </div>
+            <span className="text-xs uppercase tracking-wide text-white/40">
+              {configurationPresets.length} preset{configurationPresets.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {configurationPresets.map((preset, index) => {
+              const presetActive = selection.presetId === preset.id;
+              return (
+                <article
+                  key={preset.id ?? `preset-${index}`}
+                  className="overflow-hidden rounded-2xl border border-white/10 bg-black/40"
+                >
+                {preset.heroImageUrl ? (
+                  <div className="relative h-44 w-full overflow-hidden border-b border-white/10">
+                    <Image
+                      src={preset.heroImageUrl}
+                      alt={preset.label}
+                      fill
+                      sizes="(max-width: 1024px) 100vw, 33vw"
+                      className="object-cover"
+                    />
+                    {preset.badge ? (
+                      <span className="absolute left-3 top-3 inline-flex items-center rounded-full bg-black/70 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-white">
+                        {preset.badge}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="space-y-2 p-4 text-sm text-white/70">
+                  <div>
+                    <p className="text-base font-semibold text-white">{preset.label}</p>
+                    {preset.summary ? <p className="text-xs text-white/60">{preset.summary}</p> : null}
+                  </div>
+                  {preset.priceHint ? (
+                    <p className="text-xs text-white/50">Price hint: {preset.priceHint}</p>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2 text-[0.65rem] uppercase tracking-wide text-white/40">
+                    {(() => {
+                      const optionCount = Object.values(preset.selection.optionSelections).reduce(
+                        (total, values) => total + values.length,
+                        0
+                      );
+                      return (
+                        <span>
+                          {optionCount} option{optionCount === 1 ? "" : "s"}
+                        </span>
+                      );
+                    })()}
+                    {preset.selection.addOnIds.length > 0 ? (
+                      <span>
+                        {preset.selection.addOnIds.length} add-on{preset.selection.addOnIds.length === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                    {preset.selection.subscriptionPlanId ? <span>Plan linked</span> : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleApplyMarketingPreset(preset)}
+                    disabled={presetActive}
+                    className={`w-full rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-wide transition ${
+                      presetActive ? "border-white/30 text-white/50" : "border-white/50 text-white hover:border-white/80"
+                    }`}
+                  >
+                    {presetActive ? "Preset active" : "Apply in configurator"}
+                  </button>
+                </div>
+              </article>
+            );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       {confirmation ? (
         <div className="rounded-2xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100" data-testid="cart-notification">
           {confirmation}{" "}
@@ -596,41 +1168,45 @@ export function ProductDetailClient({
         </div>
       ) : null}
 
-      <ProductConfigurator
-        basePrice={product.basePrice}
-        currency={product.currency}
-        optionGroups={optionGroups}
-        addOns={addOns}
-        customFields={customFields}
-        subscriptionPlans={subscriptionPlans}
-        initialConfig={configPreset}
-        onChange={handleConfiguratorChange}
-        actions={
-          <>
-            <button
-              type="button"
-              onClick={handleAddToCart}
-              className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-white/90"
-              data-testid="add-to-cart"
-            >
-              Add to cart
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveConfiguration}
-              className="inline-flex items-center justify-center rounded-full border border-white/30 px-6 py-3 text-sm font-semibold text-white transition hover:border-white/60"
-            >
-              Save configuration
-            </button>
-            <Link
-              href="/cart"
-              className="inline-flex items-center justify-center rounded-full border border-white/30 px-6 py-3 text-sm font-semibold text-white transition hover:border-white/60"
-            >
-              Go to cart
-            </Link>
-          </>
-        }
-      />
+      <div ref={configuratorSectionRef}>
+        <ProductConfigurator
+          basePrice={product.basePrice}
+          currency={product.currency}
+          optionGroups={optionGroups}
+          addOns={addOns}
+          customFields={customFields}
+          subscriptionPlans={subscriptionPlans}
+          configurationPresets={configurationPresets}
+          initialConfig={configPreset}
+          onChange={handleConfiguratorChange}
+          activeChannel="storefront"
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={handleAddToCart}
+                className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-white/90"
+                data-testid="add-to-cart"
+              >
+                Add to cart
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveConfiguration}
+                className="inline-flex items-center justify-center rounded-full border border-white/30 px-6 py-3 text-sm font-semibold text-white transition hover:border-white/60"
+              >
+                Save configuration
+              </button>
+              <Link
+                href="/cart"
+                className="inline-flex items-center justify-center rounded-full border border-white/30 px-6 py-3 text-sm font-semibold text-white transition hover:border-white/60"
+              >
+                Go to cart
+              </Link>
+            </>
+          }
+        />
+      </div>
 
       <section className="grid gap-6 lg:grid-cols-[2fr,1fr]">
         <div className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
@@ -663,6 +1239,11 @@ export function ProductDetailClient({
                       <p className="text-xs text-white/50">
                         {formatCurrency(config.total, config.currency)} • Updated {formatTimestamp(config.updatedAt)}
                       </p>
+                      {config.selection.presetId ? (
+                        <p className="mt-1 inline-flex items-center rounded-full border border-white/15 px-2 py-0.5 text-[0.65rem] uppercase tracking-[0.3em] text-white/60">
+                          Preset: {presetLabelLookup.get(config.selection.presetId) ?? "Deprecated"}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -763,6 +1344,40 @@ export function ProductDetailClient({
             <p className="mt-4 text-sm text-white/60">
               Pricing adjusts based on selected campaign length, experimentation focus, and add-ons chosen above.
             </p>
+            {visiblePricingExperiments.length > 0 ? (
+              <div className="mt-4 space-y-4 rounded-2xl border border-dashed border-white/20 bg-black/30 p-4 text-xs text-white/70">
+                <p className="text-sm font-semibold uppercase tracking-[0.3em] text-white/60">Dynamic pricing lab</p>
+                {visiblePricingExperiments.map((experiment) => (
+                  <div key={experiment.slug} className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-white">{experiment.name}</p>
+                      <span className="rounded-full border border-white/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.3em] text-white/60">
+                        {experiment.status}
+                      </span>
+                    </div>
+                    <p className="text-white/60">
+                      Testing {experiment.variants.length} price points ({experiment.assignmentStrategy}) to inform PDP and checkout incentives.
+                    </p>
+                    <ul className="space-y-1 rounded-xl border border-white/10 bg-white/5 p-3 text-white">
+                      {experiment.variants.map((variant) => (
+                        <li key={`${experiment.slug}-${variant.key}`} className="flex items-center justify-between text-xs">
+                          <span>
+                            {variant.name}
+                            {variant.isControl ? " · Control" : ""}
+                          </span>
+                          <span className="text-white/70">
+                            {formatPricingExperimentAdjustment(variant, product.currency)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+                <p className="text-[11px] text-white/50">
+                  Customers in enabled feature flags see live trial pricing. Operators can override assignments from the admin control hub.
+                </p>
+              </div>
+            ) : null}
             <div className="mt-6 flex flex-col gap-3">
               <Link
                 href={`/checkout?product=${product.slug}`}

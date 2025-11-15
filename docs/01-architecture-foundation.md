@@ -3,7 +3,7 @@
 ## System Overview
 - **Frontend**: Next.js 14 (App Router) with TypeScript, leveraging server components, React Server Actions, and edge-friendly routes. Deployed on Vercel. Integrate a design system (e.g., Tailwind + Radix UI + shadcn/ui) for rapid development of marketing pages, product catalog, and dashboards.
 - **Backend**: FastAPI (Python 3.12) providing REST and background task APIs. Structured as modular services (auth, catalog, orders, billing, integrations) with async execution via `asyncio`/`httpx`.
-- **Database**: PostgreSQL (managed service such as Neon or Supabase) with Prisma or Drizzle on the frontend (for incremental features) and SQLAlchemy 2.0 + Alembic migrations on the backend.
+- **Database**: PostgreSQL (managed service such as Neon or Supabase) surfaced through FastAPI (SQLAlchemy 2.0 + Alembic); frontend consumes REST/JSON APIs without a direct ORM.
 - **Queue / Task Processing**: Redis-backed Celery or Dramatiq workers for long-running tasks—API fulfillment, Instagram data syncing, invoicing, email dispatch.
 - **File Storage**: S3-compatible storage (AWS S3 or compatible provider) for invoice PDFs, exports, and media.
 - **Authentication & Authorization**: Self-managed Auth.js (NextAuth) deployment with OAuth/OpenID Connect providers (Google, Facebook, Instagram) and email/password flows; session tokens persisted in Postgres, backend verifies via JWT/session introspection. RBAC roles (`client`, `admin`, `finance`).

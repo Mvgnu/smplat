@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -27,13 +27,63 @@ const mapAuthError = (code: string | null) => {
   }
 };
 
+type DevShortcutKey = "customer" | "admin" | "testing" | "analysis";
+
+const devShortcutOptions: Array<{ key: DevShortcutKey; label: string }> = [
+  { key: "customer", label: "Customer dashboard" },
+  { key: "admin", label: "Admin control center" },
+  { key: "testing", label: "Testing sandbox" },
+  { key: "analysis", label: "Analysis workspace" }
+];
+
 export default function LoginPage() {
   const searchParams = useSearchParams();
   const defaultCallbackUrl = searchParams.get("callbackUrl") ?? "/dashboard";
+  const cmsEnv =
+    (process.env.NEXT_PUBLIC_CMS_ENV ?? process.env.NODE_ENV ?? "").toLowerCase();
+  const enableDevShortcuts = cmsEnv === "development";
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [devLoginKey, setDevLoginKey] = useState<DevShortcutKey | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(() => mapAuthError(searchParams.get("error")));
+
+  const handleDevLogin = async (userKey: DevShortcutKey) => {
+    setDevLoginKey(userKey);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const result = await signIn("dev-shortcut", {
+        userKey,
+        callbackUrl: defaultCallbackUrl,
+        redirect: false
+      });
+
+      if (result?.error) {
+        setErrorMessage("Immediate login failed. Ensure dev users are seeded.");
+        setDevLoginKey(null);
+        return;
+      }
+
+      if (result?.url) {
+        setDevLoginKey(null);
+        window.location.href = result.url;
+        return;
+      }
+
+      if (!result || !result.error) {
+        setDevLoginKey(null);
+        router.replace(defaultCallbackUrl);
+        return;
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Immediate login failed.");
+    }
+
+    setDevLoginKey(null);
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -148,6 +198,29 @@ export default function LoginPage() {
             {isSubmitting ? "Sending link..." : "Continue with email"}
           </button>
         </form>
+
+        {enableDevShortcuts && (
+          <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/80">
+            <p className="font-medium text-white">Immediate development logins</p>
+            <p className="mt-1 text-xs text-white/60">
+              Available locally when CMS_ENV=development and dev users have been seeded.
+            </p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {devShortcutOptions.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className="w-full rounded-lg border border-white/20 bg-transparent px-4 py-2 text-sm font-medium text-white transition hover:border-white/60 hover:bg-white/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:opacity-70"
+                  onClick={() => handleDevLogin(option.key)}
+                  disabled={isSubmitting || (devLoginKey !== null && devLoginKey !== option.key)}
+                  data-testid={`dev-login-${option.key}`}
+                >
+                  {devLoginKey === option.key ? "Signing in…" : option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mt-6 space-y-3 text-sm text-white/60">
           <p>Single sign-on with Google or Instagram coming soon.</p>

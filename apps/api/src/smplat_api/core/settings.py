@@ -11,6 +11,16 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production"] = "development"
     database_url: str = "sqlite+aiosqlite:///./smplat.db"
     redis_url: str = "redis://localhost:6379/0"
+    celery_broker_url: str | None = None
+    celery_result_backend: str | None = None
+    celery_default_queue: str = "smplat-default"
+    journey_runtime_worker_enabled: bool = False
+    journey_runtime_task_queue: str = "journey-runtime"
+    journey_runtime_poll_interval_seconds: int = 5
+    journey_runtime_batch_size: int = 10
+    journey_runtime_runner_url: str | None = None
+    journey_runtime_runner_api_key: str | None = None
+    journey_runtime_runner_timeout_seconds: float = 15.0
     secret_key: str = "change-me"
     sentry_dsn: str | None = None
     
@@ -93,6 +103,47 @@ class Settings(BaseSettings):
     catalog_job_scheduler_enabled: bool = False
     catalog_job_schedule_path: str = "config/schedules.toml"
     bundle_acceptance_aggregation_enabled: bool = False
+
+    # Provider automation replay worker
+    provider_replay_worker_enabled: bool = False
+    provider_replay_worker_interval_seconds: int = 300
+    provider_replay_worker_limit: int = 25
+    provider_automation_replay_task_queue: str = "provider-replay"
+    provider_automation_alert_worker_enabled: bool = False
+    provider_automation_alert_interval_seconds: int = 15 * 60
+    provider_automation_alert_snapshot_limit: int = 25
+    provider_automation_alert_guardrail_fail_threshold: int = 3
+    provider_automation_alert_guardrail_warn_threshold: int = 5
+    provider_automation_alert_replay_failure_threshold: int = 3
+    provider_automation_alert_task_queue: str = "provider-alerts"
+    provider_automation_alert_email_recipients: list[str] = Field(default_factory=list)
+    provider_automation_alert_slack_webhook_url: str | None = None
+    provider_automation_alert_slack_channel: str | None = None
+    provider_load_alert_enabled: bool = True
+    provider_load_alert_short_window_days: int = 7
+    provider_load_alert_long_window_days: int = 90
+    provider_load_alert_share_threshold: float = 0.6
+    provider_load_alert_delta_threshold: float = 0.2
+    provider_load_alert_min_engagements: int = 10
+    provider_load_alert_max_results: int = 25
+    provider_automation_status_history_limit: int = 20
+
+    @field_validator("provider_automation_alert_email_recipients", mode="before")
+    @classmethod
+    def _parse_provider_alert_recipients(cls, value: object) -> list[str]:
+        return cls._parse_rollout_list(value)
+
+    # Preset analytics alerting
+    preset_event_alert_notifications_enabled: bool = False
+    preset_event_alert_window_days: int = 30
+    preset_event_alert_email_recipients: list[str] = Field(default_factory=list)
+    preset_event_alert_slack_webhook_url: str | None = None
+    preset_event_alert_slack_channel: str | None = None
+
+    @field_validator("preset_event_alert_email_recipients", mode="before")
+    @classmethod
+    def _parse_preset_alert_recipients(cls, value: object) -> list[str]:
+        return cls._parse_rollout_list(value)
 
     # Email / notification settings
     smtp_host: str | None = None

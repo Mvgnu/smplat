@@ -113,6 +113,21 @@ async def service_readiness(request: Request) -> ReadinessPayload:
             detail="Guardrail worker disabled via settings",
         )
 
+    provider_alert_worker = getattr(request.app.state, "provider_automation_alert_worker", None)
+    provider_alerts_enabled = settings.provider_automation_alert_worker_enabled
+    if provider_alerts_enabled and provider_alert_worker is not None:
+        running = bool(getattr(provider_alert_worker, "is_running", False))
+        alert_status: Literal["ready", "starting", "disabled", "error"] = "ready" if running else "starting"
+        detail = None if running else "Provider automation alert worker not running"
+        if not running:
+            status = "degraded" if status != "error" else status
+        components["provider_automation_alerts"] = ComponentStatus(status=alert_status, detail=detail)
+    else:
+        components["provider_automation_alerts"] = ComponentStatus(
+            status="disabled",
+            detail="Provider automation alert worker disabled via settings",
+        )
+
     scheduler = getattr(request.app.state, "catalog_job_scheduler", None)
     if scheduler_enabled and scheduler is not None:
         running = bool(getattr(scheduler, "is_running", False))

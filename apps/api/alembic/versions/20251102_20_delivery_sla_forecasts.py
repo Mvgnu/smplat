@@ -13,6 +13,28 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Create fulfillment_metric_cache table if it doesn't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'fulfillment_metric_cache') THEN
+                CREATE TABLE fulfillment_metric_cache (
+                    id UUID PRIMARY KEY,
+                    sku VARCHAR NOT NULL,
+                    metric_type VARCHAR NOT NULL,
+                    value NUMERIC(12, 2) NOT NULL,
+                    forecast JSON,
+                    computed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                    UNIQUE (sku, metric_type)
+                );
+                CREATE INDEX ix_fulfillment_metric_cache_sku ON fulfillment_metric_cache(sku);
+            ELSE
+                ALTER TABLE fulfillment_metric_cache ADD COLUMN IF NOT EXISTS forecast JSON;
+            END IF;
+        END $$;
+    """)
+
     op.create_table(
         "fulfillment_staffing_shifts",
         sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
@@ -30,13 +52,8 @@ def upgrade() -> None:
         ["sku", "starts_at", "ends_at"],
     )
 
-    op.add_column(
-        "fulfillment_metric_cache",
-        sa.Column("forecast", sa.JSON(), nullable=True),
-    )
-
 
 def downgrade() -> None:
-    op.drop_column("fulfillment_metric_cache", "forecast")
     op.drop_index("ix_fulfillment_staffing_shifts_window", table_name="fulfillment_staffing_shifts")
     op.drop_table("fulfillment_staffing_shifts")
+    op.drop_table("fulfillment_metric_cache")

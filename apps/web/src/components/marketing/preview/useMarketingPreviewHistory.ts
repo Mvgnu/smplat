@@ -3,7 +3,7 @@
 // meta: hook: useMarketingPreviewHistory
 // meta: feature: marketing-preview-cockpit
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import type {
@@ -31,6 +31,7 @@ import {
   type MarketingPreviewHistoryClientParams,
   type MarketingPreviewHistoryEntryResponse
 } from "./historyClient";
+import { primeHistoryClientCache } from "./historyClientCache";
 
 const HISTORY_CACHE_KEY = "marketing-preview-history-cache-v3";
 
@@ -65,11 +66,26 @@ type HistoryFilters = {
   mode?: "live" | "rehearsal" | "all";
 };
 
+const normalizeFilters = (filters: HistoryFilters): HistoryFilters => ({
+  route: filters.route || undefined,
+  variant: filters.variant || undefined,
+  severity: filters.severity || undefined,
+  mode: filters.mode || undefined,
+});
+
+const filtersEqual = (a: HistoryFilters, b: HistoryFilters): boolean =>
+  a.route === b.route &&
+  a.variant === b.variant &&
+  a.severity === b.severity &&
+  a.mode === b.mode;
+
 const defaultGovernance: MarketingPreviewGovernanceStats = {
   totalActions: 0,
   actionsByKind: {},
   lastActionAt: null
 };
+
+type HistoryClientResponse = Awaited<ReturnType<typeof fetchMarketingPreviewHistory>>;
 
 const splitSnapshotsByPreview = (
   snapshots: MarketingPreviewSnapshot[]
@@ -453,7 +469,8 @@ export const useMarketingPreviewHistory = ({
   const [isOffline, setIsOffline] = useState<boolean>(() =>
     typeof navigator === "undefined" ? false : !navigator.onLine
   );
-
+  const defaultResponseRef = useRef<HistoryClientResponse | null>(null);
+  const defaultParamsRef = useRef<HistoryCacheParams | null>(null);
   const params = useMemo<HistoryCacheParams>(
     () => ({
       limit: initialLimit,
@@ -471,7 +488,11 @@ export const useMarketingPreviewHistory = ({
       return undefined;
     }
 
-    setCache(readCache());
+    const cached = readCache();
+    setCache(cached);
+    if (cached?.payload) {
+      defaultResponseRef.current = null;
+    }
 
     const handleOnlineStatus = () => {
       setIsOffline(!navigator.onLine);
@@ -494,7 +515,10 @@ export const useMarketingPreviewHistory = ({
 
   const query = useQuery({
     queryKey: ["marketing-preview-history", params],
-    queryFn: ({ signal }) => fetchMarketingPreviewHistory({ ...params, signal }),
+    queryFn: async ({ signal }) => {
+      const payload = await fetchMarketingPreviewHistory({ ...params, signal });
+      return payload;
+    },
     placeholderData: keepPreviousData,
     staleTime: 60_000,
     gcTime: 5 * 60_000
@@ -515,6 +539,22 @@ export const useMarketingPreviewHistory = ({
       analytics: query.data.analytics
     };
   }, [query.data]);
+
+  useEffect(() => {
+    if (!query.data || params.actionMode || params.offset !== 0) {
+      return;
+    }
+
+    defaultResponseRef.current = query.data;
+    defaultParamsRef.current = {
+      limit: params.limit,
+      offset: params.offset,
+      route: params.route,
+      variant: params.variant,
+      actionMode: undefined,
+      severity: params.severity
+    };
+  }, [params, query.data]);
 
   useEffect(() => {
     if (!queryPayload) {
@@ -573,10 +613,16 @@ export const useMarketingPreviewHistory = ({
 
   const updateFilters = useCallback(
     (updater: (filters: HistoryFilters) => HistoryFilters) => {
-      setFilters((previous) => updater(previous));
-      setPage(0);
+      setFilters((previous) => {
+        const next = normalizeFilters(updater(previous));
+        if (filtersEqual(previous, next)) {
+          return previous;
+        }
+        setPage(0);
+        return next;
+      });
     },
-    []
+    [setPage]
   );
 
   const setRouteFilter = useCallback(
@@ -600,11 +646,42 @@ export const useMarketingPreviewHistory = ({
     [updateFilters]
   );
 
+  const primeDefaultModeCache = useCallback(
+    (next: HistoryFilters) => {
+      if (!defaultResponseRef.current || !defaultParamsRef.current) {
+        return;
+      }
+      const pendingParams: HistoryCacheParams = {
+        limit: initialLimit,
+        offset: 0,
+        route: next.route,
+        variant: next.variant,
+        actionMode: undefined,
+        severity: next.severity
+      };
+      if (paramsEqual(defaultParamsRef.current, pendingParams)) {
+        primeHistoryClientCache(pendingParams, defaultResponseRef.current);
+      }
+    },
+    [initialLimit]
+  );
+
   const setActionModeFilter = useCallback(
     (mode?: "live" | "rehearsal" | "all") => {
-      updateFilters((previous) => ({ ...previous, mode: mode === "all" ? undefined : mode }));
+      const normalized = mode === "all" ? undefined : mode;
+      setFilters((previous) => {
+        const next = normalizeFilters({ ...previous, mode: normalized });
+        if (filtersEqual(previous, next)) {
+          return previous;
+        }
+        if (previous.mode && !next.mode) {
+          primeDefaultModeCache(next);
+        }
+        setPage(0);
+        return next;
+      });
     },
-    [updateFilters]
+    [primeDefaultModeCache]
   );
 
   const nextPage = useCallback(() => {

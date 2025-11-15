@@ -58,7 +58,7 @@ class TestResponse {
 }
 
 if (typeof globalThis.Response === "undefined") {
-  (globalThis as typeof globalThis & { Response: typeof TestResponse }).Response = TestResponse as unknown as typeof Response;
+  globalThis.Response = TestResponse as unknown as typeof Response;
 }
 
 const createRequest = (url: string, init: { method?: string; headers?: Record<string, string>; body?: unknown }) => {
@@ -134,7 +134,7 @@ describe("revalidate POST", () => {
     });
 
     const response = await POST(request);
-    const json = (await response.json()) as { paths: string[] };
+    const json = (await response.json()) as { paths: string[]; mode?: string };
 
     expect(response.status).toBe(200);
     expect(json.paths).toEqual(["/pricing"]);

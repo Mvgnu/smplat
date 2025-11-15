@@ -9,6 +9,7 @@ import type {
   MarketingPreviewSnapshot,
   MarketingPreviewSnapshotManifest
 } from "@/server/cms/preview";
+import { consumeHistoryClientCache } from "./historyClientCache";
 
 const metricsSchema = z.object({
   label: z.string().optional(),
@@ -269,6 +270,11 @@ const buildQuery = (params: MarketingPreviewHistoryClientParams) => {
 export const fetchMarketingPreviewHistory = async (
   params: MarketingPreviewHistoryClientParams
 ): Promise<MarketingPreviewHistoryResponse> => {
+  const cached = consumeHistoryClientCache(params);
+  if (cached) {
+    return cached;
+  }
+
   const query = buildQuery(params);
   const url = query ? `/api/marketing-preview/history?${query}` : "/api/marketing-preview/history";
 

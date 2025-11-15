@@ -1,133 +1,47 @@
-import pytest
-import pytest_asyncio
-from decimal import Decimal
+from __future__ import annotations
+
 from uuid import uuid4
-from datetime import datetime
 
-from smplat_api.models.user import User
-from smplat_api.models.order import Order, OrderStatusEnum, OrderSourceEnum
-from smplat_api.models.customer_profile import CurrencyEnum
-from smplat_api.models.notification import NotificationPreference
-from smplat_api.services.notifications import NotificationService
-
-
-@pytest_asyncio.fixture
-async def persisted_user(session_factory):
-    async with session_factory() as session:
-        user = User(
-            id=uuid4(),
-            email="client@example.com",
-            display_name="Client Example",
-        )
-        session.add(user)
-        await session.commit()
-        yield user
-
-
-@pytest_asyncio.fixture
-async def persisted_order(session_factory, persisted_user):
-    async with session_factory() as session:
-        order = Order(
-            id=uuid4(),
-            order_number="SM000123",
-            user_id=persisted_user.id,
-            status=OrderStatusEnum.PROCESSING,
-            source=OrderSourceEnum.CHECKOUT,
-            subtotal=Decimal("120.00"),
-            tax=Decimal("0.00"),
-            total=Decimal("120.00"),
-            currency=CurrencyEnum.EUR,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        session.add(order)
-        await session.commit()
-        yield order
+import pytest
+from httpx import AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_order_status_notification_skips_when_preference_disabled(session_factory, persisted_user, persisted_order):
-    async with session_factory() as session:
-        preference = NotificationPreference(
-            user_id=persisted_user.id,
-            order_updates=False,
-            payment_updates=True,
-            fulfillment_alerts=True,
-            marketing_messages=False,
-        )
-        session.add(preference)
-        await session.commit()
+async def test_get_preferences_creates_defaults(app_with_db):
+    app, _session_factory = app_with_db
+    user_id = uuid4()
 
-        service = NotificationService(session)
-        backend = service.use_in_memory_backend()
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/notifications/preferences/{user_id}")
 
-        await service.send_order_status_update(persisted_order)
-
-        assert backend.sent_messages == []
-        assert service.sent_events == []
+    assert response.status_code == 200
+    body = response.json()
+    assert body["order_updates"] is True
+    assert body["payment_updates"] is True
+    assert body["fulfillment_alerts"] is True
+    assert body["marketing_messages"] is False
+    assert body["billing_alerts"] is False
+    assert body["last_selected_order_id"] is None
 
 
 @pytest.mark.asyncio
-async def test_weekly_digest_respects_marketing_preference(session_factory):
-    async with session_factory() as session:
-        user = User(
-            id=uuid4(),
-            email="digest@example.com",
-            display_name="Digest Owner",
-        )
-        session.add(user)
-        await session.flush()
+async def test_update_preferences(app_with_db):
+    app, _session_factory = app_with_db
+    user_id = uuid4()
 
-        preference = NotificationPreference(
-            user_id=user.id,
-            order_updates=True,
-            payment_updates=True,
-            fulfillment_alerts=True,
-            marketing_messages=False,
-        )
-        session.add(preference)
-
-        order = Order(
-            id=uuid4(),
-            order_number="SM900001",
-            user_id=user.id,
-            status=OrderStatusEnum.PROCESSING,
-            source=OrderSourceEnum.CHECKOUT,
-            subtotal=Decimal("45.00"),
-            tax=Decimal("0"),
-            total=Decimal("45.00"),
-            currency=CurrencyEnum.EUR,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        session.add(order)
-        await session.commit()
-
-        service = NotificationService(session)
-        backend = service.use_in_memory_backend()
-
-        await service.send_weekly_digest(
-            user,
-            highlighted_orders=[order],
-            pending_actions=["Approve new Instagram assets"],
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        await client.get(f"/api/v1/notifications/preferences/{user_id}")
+        response = await client.patch(
+            f"/api/v1/notifications/preferences/{user_id}",
+            json={
+                "order_updates": False,
+                "marketing_messages": True,
+                "last_selected_order_id": str(uuid4())
+            },
         )
 
-        assert service.sent_events == []
-        assert backend.sent_messages == []
-
-        preference.marketing_messages = True
-        await session.commit()
-
-        await service.send_weekly_digest(
-            user,
-            highlighted_orders=[order],
-            pending_actions=["Approve new Instagram assets"],
-        )
-
-        digest_events = [event for event in service.sent_events if event.event_type == "weekly_digest"]
-        assert digest_events
-        digest = digest_events[-1]
-        assert digest.metadata["orders"] == [order.order_number]
-        message = backend.sent_messages[-1]
-        html_part = message.get_body(preferencelist=("html",))
-        assert html_part is not None
+    assert response.status_code == 200
+    body = response.json()
+    assert body["order_updates"] is False
+    assert body["marketing_messages"] is True
+    assert body["last_selected_order_id"] is not None

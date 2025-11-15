@@ -2,7 +2,17 @@
 
 import { describe, expect, it, beforeAll, afterAll, jest } from "@jest/globals";
 
-const draftState = { isEnabled: false } satisfies { isEnabled: boolean };
+const draftState: { isEnabled: boolean } = { isEnabled: false };
+
+type PayloadCollectionResponse<T> = {
+  docs?: T[];
+};
+
+type PayloadBlogDoc = {
+  id?: string;
+  _id?: string;
+  title?: string;
+};
 
 jest.mock("next/headers", () => ({
   draftMode: () => draftState
@@ -62,7 +72,7 @@ if (!runIntegration) {
       const environment = process.env.CMS_ENV ?? "test";
       const slug = process.env.PAYLOAD_INTEGRATION_DRAFT_SLUG ?? "automation-workflows";
 
-      const response = await payloadGet<{ docs?: Array<Record<string, unknown>> }>({
+      const response = await payloadGet<PayloadCollectionResponse<Record<string, unknown>>>({
         path: "/api/blog-posts",
         query: {
           "where[slug][equals]": slug,
@@ -71,14 +81,18 @@ if (!runIntegration) {
         }
       });
 
-      const doc = Array.isArray(response.docs) ? response.docs[0] : undefined;
+      const doc = (Array.isArray(response.docs) ? response.docs[0] : undefined) as PayloadBlogDoc | undefined;
       expect(doc).toBeTruthy();
 
-      const docId = typeof doc?.id === "string" ? doc.id : typeof doc?._id === "string" ? doc._id : undefined;
+      const docId = doc?.id ?? doc?._id;
       expect(docId).toBeTruthy();
 
-      const originalTitle = typeof doc?.title === "string" ? doc.title : undefined;
+      const originalTitle = doc?.title;
       expect(originalTitle).toBeTruthy();
+
+      if (!docId || !originalTitle) {
+        throw new Error("Missing payload blog identifiers");
+      }
 
       const draftTitle = `${originalTitle} (preview ${Date.now()})`;
 

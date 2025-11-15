@@ -1,62 +1,25 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('Admin Order Management', () => {
-  test('should display orders in admin panel', async ({ page }) => {
-    // Login as admin (this would need proper auth setup in test environment)
-    await page.goto('/login');
-    await page.fill('[data-testid="email-input"]', 'admin@test.com');
-    await page.locator('[data-testid="login-button"]').click();
+async function signInAdmin(page: Parameters<typeof test>[0]['page']) {
+  await page.goto('/login?callbackUrl=%2Fadmin%2Forders');
+  const devButton = page.getByTestId('dev-login-admin');
+  await expect(devButton).toBeVisible();
+  await devButton.click();
+  await page.waitForURL('**/admin/orders', { waitUntil: 'load' });
+}
 
-    // Navigate to admin orders
-    await page.goto('/admin/orders');
-    await expect(page.locator('[data-testid="orders-page"]')).toBeVisible();
+test.describe('Admin orders', () => {
+  test('renders provider telemetry for selected order', async ({ page }) => {
+    await signInAdmin(page);
 
-    // Check if orders table is present
-    await expect(page.locator('[data-testid="orders-table"]')).toBeVisible();
+    const providerSection = page.getByTestId('admin-provider-automation').first();
+    await expect(providerSection).toBeVisible();
+    await expect(providerSection.getByText('Provider automation', { exact: true })).toBeVisible();
+    await expect(providerSection.getByText('Scheduled pending', { exact: true })).toBeVisible();
 
-    // Check for order status indicators
-    await expect(page.locator('[data-testid="order-status"]')).toBeVisible();
-  });
-
-  test('should allow order status updates', async ({ page }) => {
-    await page.goto('/login');
-    await page.fill('[data-testid="email-input"]', 'admin@test.com');
-    await page.locator('[data-testid="login-button"]').click();
-
-    await page.goto('/admin/orders');
-
-    // Find first order and update status
-    const firstOrderStatus = await page.locator('[data-testid="order-status"]').first().textContent();
-
-    // Click status form
-    await page.locator('[data-testid="status-form"]').first().click();
-
-    // Change status
-    await page.selectOption('[data-testid="status-select"]', 'completed');
-    await page.locator('[data-testid="update-status"]').click();
-
-    // Check if status changed
-    const updatedStatus = await page.locator('[data-testid="order-status"]').first().textContent();
-    expect(updatedStatus).not.toBe(firstOrderStatus);
-  });
-
-  test('should display order details and fulfillment progress', async ({ page }) => {
-    await page.goto('/login');
-    await page.fill('[data-testid="email-input"]', 'admin@test.com');
-    await page.locator('[data-testid="login-button"]').click();
-
-    await page.goto('/admin/orders');
-
-    // Click on first order to view details
-    await page.locator('[data-testid="order-row"]').first().click();
-
-    // Check order details section
-    await expect(page.locator('[data-testid="order-details"]')).toBeVisible();
-
-    // Check fulfillment progress
-    await expect(page.locator('[data-testid="fulfillment-progress"]')).toBeVisible();
-
-    // Check order items
-    await expect(page.locator('[data-testid="order-items"]')).toBeVisible();
+    const providerCard = page.getByTestId('provider-order-card').first();
+    await expect(providerCard).toBeVisible();
+    await expect(providerCard.getByText(/Service /i)).toBeVisible();
+    await expect(providerCard.getByText('Replay history')).toBeVisible();
   });
 });

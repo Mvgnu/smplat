@@ -4,7 +4,7 @@
 - Middleware (`apps/web/middleware.ts`) now evaluates sessions for `/admin`, `/dashboard`, `/account`, and select API
   routes. Requests without an authenticated session are redirected to `/login` with the original path captured via `next`.
 - `requireRole` (`apps/web/src/server/auth/policies.ts`) exposes `member`, `operator`, and `admin` tiers mapped to
-  Prisma `UserRole` values. Layouts and server actions call this helper to assert privileges before hydrating the
+  FastAPI `UserRole` values. Layouts and server actions call this helper to assert privileges before hydrating the
   `SessionProviderBoundary`.
 
 ## CSRF protections
@@ -14,15 +14,15 @@
   header). Non-production and test bypasses log warnings instead of throwing.
 
 ## Session persistence
-- NextAuth callbacks persist `roleSnapshot` and `permissions` to the Prisma `Session` model so server-rendered components can
+- NextAuth callbacks persist `roleSnapshot` and `permissions` via the FastAPI identity endpoints so server-rendered components can
   enforce role-aware features without recomputing permissions.
-- Use `pnpm --filter @smplat/web prisma migrate dev` to apply the `role_snapshot` and `permissions` additions locally.
+- Local environments rely on Alembic-managed schemas; run `poetry run alembic upgrade head` inside `apps/api` after pulling new migrations.
 
 ## Operator onboarding
-- Promote operators by updating the `User` record via Prisma Studio or a SQL client: set `role` to `FINANCE` for operator
-  access or `ADMIN` for full control. New sessions capture permission snapshots automatically.
-- Seed installs may provision a super-operator manually using `pnpm --filter @smplat/web prisma db seed` once seed scripts are
-  updated to include `role` assignments.
+- Promote operators by calling the FastAPI admin endpoints or issuing direct SQL updates against the API schema: set `role`
+  to `FINANCE` for operator access or `ADMIN` for full control. New sessions capture permission snapshots automatically.
+- For local bootstrap, execute `poetry run python apps/api/tooling/seed_dev_users.py` to provision super-operators with the
+  expected role assignments.
 
 ## HTTP security headers
 - `apps/web/next.config.mjs` appends a platform-wide CSP, HSTS, Permissions-Policy, and X-Frame-Options header set. Adjust

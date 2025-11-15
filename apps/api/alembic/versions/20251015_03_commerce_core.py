@@ -18,11 +18,54 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE TYPE product_status_enum AS ENUM ('draft', 'active', 'archived')")
-    op.execute("CREATE TYPE order_status_enum AS ENUM ('pending', 'processing', 'active', 'completed', 'on_hold', 'canceled')")
-    op.execute("CREATE TYPE order_source_enum AS ENUM ('checkout', 'manual')")
-    op.execute("CREATE TYPE payment_status_enum AS ENUM ('pending', 'succeeded', 'failed', 'refunded')")
-    op.execute("CREATE TYPE payment_provider_enum AS ENUM ('stripe', 'manual')")
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preferred_currency_enum') THEN
+                CREATE TYPE preferred_currency_enum AS ENUM ('EUR', 'USD');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'product_status_enum') THEN
+                CREATE TYPE product_status_enum AS ENUM ('draft', 'active', 'archived');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_status_enum') THEN
+                CREATE TYPE order_status_enum AS ENUM ('pending', 'processing', 'active', 'completed', 'on_hold', 'canceled');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_source_enum') THEN
+                CREATE TYPE order_source_enum AS ENUM ('checkout', 'manual');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_provider_enum') THEN
+                CREATE TYPE payment_provider_enum AS ENUM ('stripe', 'manual');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_status_enum') THEN
+                CREATE TYPE payment_status_enum AS ENUM ('pending', 'succeeded', 'failed', 'refunded');
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "products",
@@ -34,13 +77,13 @@ def upgrade() -> None:
         sa.Column("base_price", sa.Numeric(10, 2), nullable=False),
         sa.Column(
             "currency",
-            sa.Enum(name="preferred_currency_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("EUR", "USD", name="preferred_currency_enum", create_type=False),
             nullable=False,
             server_default="EUR",
         ),
         sa.Column(
             "status",
-            sa.Enum(name="product_status_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("draft", "active", "archived", name="product_status_enum", create_type=False),
             nullable=False,
             server_default="draft",
         ),
@@ -81,13 +124,13 @@ def upgrade() -> None:
         sa.Column("user_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column(
             "status",
-            sa.Enum(name="order_status_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("pending", "processing", "active", "completed", "on_hold", "canceled", name="order_status_enum", create_type=False),
             nullable=False,
             server_default="pending",
         ),
         sa.Column(
             "source",
-            sa.Enum(name="order_source_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("checkout", "manual", name="order_source_enum", create_type=False),
             nullable=False,
             server_default="checkout",
         ),
@@ -96,7 +139,7 @@ def upgrade() -> None:
         sa.Column("total", sa.Numeric(12, 2), nullable=False, server_default="0"),
         sa.Column(
             "currency",
-            sa.Enum(name="preferred_currency_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("EUR", "USD", name="preferred_currency_enum", create_type=False),
             nullable=False,
             server_default="EUR",
         ),
@@ -129,21 +172,21 @@ def upgrade() -> None:
         sa.Column("order_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "provider",
-            sa.Enum(name="payment_provider_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("stripe", "manual", name="payment_provider_enum", create_type=False),
             nullable=False,
             server_default="stripe",
         ),
         sa.Column("provider_reference", sa.String(), nullable=False, unique=True),
         sa.Column(
             "status",
-            sa.Enum(name="payment_status_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("pending", "succeeded", "failed", "refunded", name="payment_status_enum", create_type=False),
             nullable=False,
             server_default="pending",
         ),
         sa.Column("amount", sa.Numeric(12, 2), nullable=False),
         sa.Column(
             "currency",
-            sa.Enum(name="preferred_currency_enum", create_type=False),
+            sa.dialects.postgresql.ENUM("EUR", "USD", name="preferred_currency_enum", create_type=False),
             nullable=False,
             server_default="EUR",
         ),

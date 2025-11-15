@@ -47,6 +47,7 @@ class Order(Base):
         nullable=False,
         server_default=CurrencyEnum.EUR.value,
     )
+    loyalty_projection_points = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -78,3 +79,8 @@ class OrderItem(Base):
     order = relationship("Order", back_populates="items")
     fulfillment_tasks = relationship("FulfillmentTask", back_populates="order_item", cascade="all, delete-orphan")
     service_campaign = relationship("ServiceCampaign", back_populates="order_item", uselist=False)
+    provider_orders = relationship(
+        "FulfillmentProviderOrder",
+        back_populates="order_item",
+        cascade="all, delete-orphan",
+    )

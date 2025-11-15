@@ -11,6 +11,7 @@ import type {
 } from "@smplat/types";
 import type { CheckoutMetricVerification, CheckoutTrustExperience } from "@/server/cms/trust";
 import { cartTotalSelector, useCartStore } from "@/store/cart";
+import { getStorefrontProductExperience } from "@/data/storefront-experience";
 import { marketingFallbacks } from "../products/marketing-content";
 import { AlertTriangle, BadgeCheck, Clock, ShieldCheck, Sparkles, Users } from "lucide-react";
 import {
@@ -18,7 +19,9 @@ import {
   queueCheckoutIntents,
   type CheckoutIntentDraft
 } from "@/lib/loyalty/intents";
-
+import type { PricingExperiment } from "@/types/pricing-experiments";
+import { selectPricingExperimentVariant } from "@/lib/pricing-experiments";
+import { logPricingExperimentEvents, type PricingExperimentEventInput } from "@/lib/pricing-experiment-events";
 const alertDescriptions: Record<string, string> = {
   sla_breach_risk: "Projected clearance exceeds the guaranteed delivery SLA.",
   sla_watch: "Operators are tracking elevated backlog depth.",
@@ -51,6 +54,24 @@ function formatPoints(points: number): string {
   }).format(points);
 }
 
+const formatCheckoutExperimentAdjustment = (
+  variant: PricingExperiment["variants"][number],
+  currency: string
+): string => {
+  if (variant.adjustmentKind === "multiplier") {
+    if (typeof variant.priceMultiplier === "number" && Number.isFinite(variant.priceMultiplier)) {
+      return `${variant.priceMultiplier.toFixed(2)}×`;
+    }
+    return "Multiplier TBD";
+  }
+  if (variant.priceDeltaCents === 0) {
+    return "No change";
+  }
+  const dollars = variant.priceDeltaCents / 100;
+  const formatted = formatCurrency(Math.abs(dollars), currency);
+  return variant.priceDeltaCents > 0 ? `+${formatted}` : `-${formatted}`;
+};
+
 type CheckoutState = {
   fullName: string;
   email: string;
@@ -62,6 +83,7 @@ type CheckoutPageClientProps = {
   trustContent: CheckoutTrustExperience;
   loyaltyMember: LoyaltyMemberSummary | null;
   loyaltyRewards: LoyaltyReward[];
+  pricingExperiments: PricingExperiment[];
 };
 
 type AssuranceDisplay = {
@@ -199,7 +221,12 @@ function MetricBadge({ metric }: { metric?: CheckoutMetricVerification }) {
   );
 }
 
-export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards }: CheckoutPageClientProps) {
+export function CheckoutPageClient({
+  trustContent,
+  loyaltyMember,
+  loyaltyRewards,
+  pricingExperiments,
+}: CheckoutPageClientProps) {
   const items = useCartStore((state) => state.items);
   const cartTotal = useCartStore(cartTotalSelector);
   const clearCart = useCartStore((state) => state.clear);
@@ -247,6 +274,158 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
       })),
     [items]
   );
+
+  const orderExperienceSummary = useMemo(() => {
+    const entries: Array<{
+      id: string;
+      title: string;
+      quantity: number;
+      trustValue: string;
+      trustLabel: string;
+      loyaltyValue: string;
+      loyaltyReward: string;
+    }> = [];
+    let projectedPoints = 0;
+    const snapshot: Array<{
+      productId: string;
+      slug: string;
+      quantity: number;
+      trustSignal?: { value: string; label: string } | null;
+      loyaltyHint?: { value: string; reward: string; pointsEstimate?: number; progress: number } | null;
+      journeyInsight?: string | null;
+      highlights?: string[];
+      sla?: string | null;
+      pointsTotal?: number;
+    }> = [];
+
+    items.forEach((item) => {
+      const experience = item.experience ?? getStorefrontProductExperience(item.slug);
+      if (!experience) {
+        return;
+      }
+      if (experience.loyaltyHint.pointsEstimate != null) {
+        projectedPoints += experience.loyaltyHint.pointsEstimate * item.quantity;
+      }
+      entries.push({
+        id: item.id,
+        title: item.title,
+        quantity: item.quantity,
+        trustValue: experience.trustSignal.value,
+        trustLabel: experience.trustSignal.label,
+        loyaltyValue: experience.loyaltyHint.value,
+        loyaltyReward: experience.loyaltyHint.reward
+      });
+      snapshot.push({
+        productId: item.productId,
+        slug: item.slug,
+        quantity: item.quantity,
+        trustSignal: experience.trustSignal,
+        loyaltyHint: experience.loyaltyHint,
+        journeyInsight: experience.journeyInsight,
+        highlights: experience.highlights.map((highlight) => highlight.label),
+        sla: experience.sla,
+        pointsTotal:
+          experience.loyaltyHint.pointsEstimate != null
+            ? experience.loyaltyHint.pointsEstimate * item.quantity
+            : undefined
+      });
+    });
+
+    return {
+      entries,
+      projectedPoints,
+      snapshot
+    };
+  }, [items]);
+  const orderExperiences = orderExperienceSummary.entries;
+  const projectedLoyaltyPoints = orderExperienceSummary.projectedPoints;
+  const journeyCartSnapshot = orderExperienceSummary.snapshot;
+  const cartPricingExperiments = useMemo(() => {
+    const experimentsBySlug = new Map<string, PricingExperiment>();
+    pricingExperiments.forEach((experiment) => {
+      const key = experiment.targetProductSlug?.toLowerCase();
+      if (key) {
+        experimentsBySlug.set(key, experiment);
+      }
+    });
+    const seen = new Set<string>();
+    return items
+      .map((item) => {
+        const key = item.slug.toLowerCase();
+        const experiment = experimentsBySlug.get(key);
+        if (!experiment || seen.has(experiment.slug)) {
+          return null;
+        }
+        seen.add(experiment.slug);
+        return {
+          experiment,
+          productTitle: item.title,
+          slug: item.slug,
+          quantity: item.quantity,
+          lineTotalCents: Math.round(item.unitPrice * item.quantity * 100),
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          experiment: PricingExperiment;
+          productTitle: string;
+          slug: string;
+          quantity: number;
+          lineTotalCents: number;
+        } => Boolean(entry),
+      );
+  }, [items, pricingExperiments]);
+
+  const pricingExperimentContext = useMemo(
+    () =>
+      cartPricingExperiments.map(({ experiment, slug, lineTotalCents, quantity }) => {
+        const assignedVariant = selectPricingExperimentVariant(experiment);
+        return {
+          slug: experiment.slug,
+          status: experiment.status,
+          assignmentStrategy: experiment.assignmentStrategy,
+          targetProductSlug: experiment.targetProductSlug,
+          featureFlagKey: experiment.featureFlagKey,
+          sourceProductSlug: slug,
+          assignedVariantKey: assignedVariant?.key ?? null,
+          lineTotalCents,
+          quantity,
+          variants: experiment.variants.map((variant) => ({
+            key: variant.key,
+            isControl: variant.isControl,
+            adjustmentKind: variant.adjustmentKind,
+            priceDeltaCents: variant.priceDeltaCents,
+            priceMultiplier: variant.priceMultiplier,
+          })),
+        };
+      }),
+    [cartPricingExperiments]
+  );
+
+  const logCheckoutPricingExperimentConversions = useCallback(async () => {
+    if (cartPricingExperiments.length === 0) {
+      return;
+    }
+    const events: PricingExperimentEventInput[] = [];
+    cartPricingExperiments.forEach(({ experiment, lineTotalCents, quantity }) => {
+      const variant = selectPricingExperimentVariant(experiment);
+      if (!variant) {
+        return;
+      }
+      events.push({
+        slug: experiment.slug,
+        variantKey: variant.key,
+        conversions: quantity,
+        revenueCents: lineTotalCents,
+      });
+    });
+    if (events.length === 0) {
+      return;
+    }
+    await logPricingExperimentEvents(events);
+  }, [cartPricingExperiments]);
 
   // meta: trust-module: checkout-assurances
   const aggregatedAssurances = useMemo<AssuranceDisplay[]>(() => {
@@ -538,6 +717,12 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
 
     let queuedIntents: LoyaltyCheckoutIntent[] = [];
     try {
+      try {
+        await logCheckoutPricingExperimentConversions();
+      } catch (experimentLogError) {
+        console.warn("Failed to log pricing experiment conversions", experimentLogError);
+      }
+
       if (plannedRewardSlug || (planReferralFollowUp && loyaltyMember?.referralCode)) {
         const intentsToPersist: CheckoutIntentDraft[] = [];
         if (selectedReward) {
@@ -575,13 +760,69 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
 
       const origin = typeof window !== "undefined" ? window.location.origin : "";
 
+      const journeyCartWithPoints = journeyCartSnapshot.map((item) => ({
+        ...item,
+        loyaltyHint: item.loyaltyHint
+          ? {
+              ...item.loyaltyHint,
+              pointsEstimate:
+                typeof item.loyaltyHint.pointsEstimate === "number" ? item.loyaltyHint.pointsEstimate : null
+            }
+          : null,
+        pointsTotal: typeof item.pointsTotal === "number" ? item.pointsTotal : null
+      }));
+
+      const journeyContext = {
+        channel: "checkout",
+        cart: journeyCartWithPoints,
+        form: formState,
+        loyalty: loyaltyMember
+          ? {
+              id: loyaltyMember.id,
+              tier: loyaltyMember.currentTier,
+              referralCode: loyaltyMember.referralCode ?? null,
+              pointsBalance: loyaltyMember.pointsBalance,
+              availablePoints: loyaltyMember.availablePoints,
+            }
+          : null,
+        loyaltyProjection: {
+          projectedPoints: projectedLoyaltyPoints
+        },
+        plannedRewardSlug: plannedRewardSlug ?? null,
+        referralPlanEnabled: Boolean(planReferralFollowUp && loyaltyMember?.referralCode),
+        intents: queuedIntents.map((intent) => ({
+          id: intent.id,
+          kind: intent.kind,
+          rewardSlug: intent.rewardSlug ?? null,
+          channel: intent.channel ?? null,
+        })),
+        rewards: loyaltyRewards.map((reward) => ({
+          id: reward.id,
+          slug: reward.slug,
+          name: reward.name,
+          costPoints: reward.costPoints,
+        })),
+        pricingExperiments: pricingExperimentContext,
+      };
+
+      const successUrl = new URL(`${origin}/checkout/success`);
+      if (projectedLoyaltyPoints > 0) {
+        successUrl.searchParams.set("projectedPoints", projectedLoyaltyPoints.toString());
+      }
+
+      const noteSegments = [
+        `Customer: ${formState.fullName} (${formState.email})`,
+        formState.company ? `Company: ${formState.company}` : null,
+        formState.notes ? `Notes: ${formState.notes}` : null,
+        projectedLoyaltyPoints > 0 ? `loyaltyProjection=${projectedLoyaltyPoints}` : null
+      ].filter(Boolean);
+
       const payload = {
         order: {
           currency,
           source: "checkout",
-          notes: `Customer: ${formState.fullName} (${formState.email})${formState.company ? ` | Company: ${formState.company}` : ""}${
-            formState.notes ? ` | Notes: ${formState.notes}` : ""
-          }`,
+          notes: noteSegments.join(" | "),
+          loyalty_projection_points: projectedLoyaltyPoints > 0 ? projectedLoyaltyPoints : null,
           items: items.map((item) => ({
             product_id: item.productId,
             product_title: item.title,
@@ -591,7 +832,9 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
             selected_options: {
               options: item.selectedOptions,
               addOns: item.addOns,
-              subscriptionPlan: item.subscriptionPlan
+              subscriptionPlan: item.subscriptionPlan,
+              presetId: item.presetId ?? null,
+              presetLabel: item.presetLabel ?? null
             },
             attributes: {
               customFields: item.customFields
@@ -600,9 +843,10 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
         },
         payment: {
           customer_email: formState.email,
-          success_url: `${origin}/checkout/success`,
+          success_url: successUrl.toString(),
           cancel_url: `${origin}/checkout`
-        }
+        },
+        journeyContext,
       };
 
       const response = await fetch("/api/checkout", {
@@ -762,6 +1006,11 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
             <div className="space-y-1">
               <h2 className="text-lg font-semibold text-white">Loyalty perks</h2>
               <p className="text-sm text-white/60">Earn tiered rewards by completing campaigns and referrals.</p>
+              {projectedLoyaltyPoints > 0 ? (
+                <p className="text-xs text-emerald-200">
+                  This cart will earn approximately {formatPoints(projectedLoyaltyPoints)} pts.
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="mt-4 text-sm text-white/70">
@@ -907,6 +1156,61 @@ export function CheckoutPageClient({ trustContent, loyaltyMember, loyaltyRewards
               </div>
             ))}
           </div>
+          {cartPricingExperiments.length > 0 ? (
+            <div className="space-y-3 rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4 text-xs text-amber-50">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-white">Dynamic pricing trial</h3>
+                <span className="rounded-full border border-amber-200/30 px-2 py-0.5 text-[10px] uppercase tracking-[0.3em] text-amber-100">
+                  Beta
+                </span>
+              </div>
+              {cartPricingExperiments.map(({ experiment, productTitle }) => (
+                <div key={experiment.slug} className="rounded-xl border border-white/10 bg-black/20 p-3 text-white/80">
+                  <p className="text-sm font-semibold text-white">{experiment.name}</p>
+                  <p className="text-xs text-white/60">
+                    Applied to {productTitle} · {experiment.assignmentStrategy}
+                  </p>
+                  <ul className="mt-2 space-y-1 text-xs text-white/70">
+                    {experiment.variants.map((variant) => (
+                      <li key={`${experiment.slug}-${variant.key}`} className="flex items-center justify-between">
+                        <span>
+                          {variant.name}
+                          {variant.isControl ? " · Control" : ""}
+                        </span>
+                        <span>{formatCheckoutExperimentAdjustment(variant, currency)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              <p className="text-[11px] text-white/60">
+                Variant telemetry syncs back to merchandising so future PDP and checkout pricing stays aligned.
+              </p>
+            </div>
+          ) : null}
+          {orderExperiences.length > 0 ? (
+            <div className="space-y-3 rounded-2xl border border-white/10 bg-black/20 p-4 text-xs text-white/70">
+              <div className="flex items-center justify-between">
+                <h3 className="uppercase tracking-wide text-white/50">Trust & loyalty</h3>
+                {projectedLoyaltyPoints > 0 ? (
+                  <span className="text-white/60">~{formatPoints(projectedLoyaltyPoints)} pts</span>
+                ) : null}
+              </div>
+              <ul className="space-y-2">
+                {orderExperiences.map((entry) => (
+                  <li key={entry.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                    <p className="text-sm font-semibold text-white">{entry.title}</p>
+                    <p className="text-white/60">
+                      {entry.trustValue} · {entry.trustLabel}
+                    </p>
+                    <p className="text-white/50">
+                      {entry.loyaltyValue} · {entry.loyaltyReward}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between border-t border-white/10 pt-4 text-sm">
             <span className="uppercase tracking-wide text-white/40">Subtotal</span>
             <span className="text-xl font-semibold text-white">{formatCurrency(cartTotal, currency)}</span>

@@ -257,11 +257,19 @@ class LoyaltyService:
                     "Ignoring unsupported dispatch event channel", channel=channel_value
                 )
 
-        # Always append SMS/PUSH for fallback sequencing to ensure multi-channel fan-out.
         fallback_order: list[LoyaltyNudgeChannel] = []
-        for channel in [*base_channels, LoyaltyNudgeChannel.SMS, LoyaltyNudgeChannel.PUSH]:
+        for channel in base_channels:
             if channel not in fallback_order:
                 fallback_order.append(channel)
+
+        if LoyaltyNudgeChannel.SMS not in fallback_order:
+            fallback_order.append(LoyaltyNudgeChannel.SMS)
+
+        campaign_channels = campaign.channels or []
+        if (
+            LoyaltyNudgeChannel.PUSH in campaign_channels and LoyaltyNudgeChannel.PUSH not in fallback_order
+        ):
+            fallback_order.append(LoyaltyNudgeChannel.PUSH)
 
         # Prioritize channels that have not yet been attempted for this nudge.
         plan: list[LoyaltyNudgeChannel] = [

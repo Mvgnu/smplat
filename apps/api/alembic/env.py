@@ -4,7 +4,7 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 from smplat_api.core.settings import settings
 
@@ -22,9 +22,7 @@ def get_metadata():
 
 def run_migrations_offline():
     """Run migrations in 'offline' mode."""
-    # Ensure sync driver for offline context (psycopg2 for Postgres)
-    url = settings.database_url.replace("+asyncpg", "+psycopg2")
-    context.configure(url=url, target_metadata=get_metadata(), literal_binds=True)
+    context.configure(url=settings.database_url, target_metadata=get_metadata(), literal_binds=True)
 
     with context.begin_transaction():
         context.run_migrations()
@@ -32,16 +30,17 @@ def run_migrations_offline():
 
 def run_migrations_online():
     """Run migrations in 'online' mode."""
-    configuration = config.get_section(config.config_ini_section, {})
-    # Force sync driver for online context as well
-    if "sqlalchemy.url" in configuration:
-        configuration["sqlalchemy.url"] = configuration["sqlalchemy.url"].replace("+asyncpg", "+psycopg2")
-
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    # Convert async database URL to sync for migrations
+    database_url = settings.database_url
+    # Replace async drivers with sync equivalents
+    if database_url.startswith("postgresql+asyncpg"):
+        database_url = database_url.replace("postgresql+asyncpg", "postgresql")
+    elif database_url.startswith("postgresql+aiosqlite"):
+        database_url = database_url.replace("postgresql+aiosqlite", "sqlite")
+    elif "+aiosqlite" in database_url:
+        database_url = database_url.replace("+aiosqlite", "")
+    
+    connectable = create_engine(database_url, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=get_metadata())

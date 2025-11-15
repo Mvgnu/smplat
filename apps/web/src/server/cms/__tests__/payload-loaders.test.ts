@@ -8,6 +8,7 @@ import pageFixture from "../__fixtures__/payload-page.json";
 import pageDraftFixture from "../__fixtures__/payload-page-draft.json";
 import { normalizeMarketingLexicalContent } from "../lexical";
 import type { BlogPostSummary, MarketingContentDocument, PageDocument } from "../types";
+import type { LexicalEditorState } from "@/marketing/content";
 
 jest.mock("@/components/marketing/sections", () => {
   const React = require("react");
@@ -18,12 +19,42 @@ jest.mock("@/components/marketing/sections", () => {
   };
 });
 
+type PageContentBlock = NonNullable<PageDocument["content"]>[number];
+type SectionBlock = Extract<PageContentBlock, { _type: "section" }>;
+
+const MARKETING_BLOCK_KINDS: readonly MarketingContentDocument["kind"][] = [
+  "hero",
+  "metrics",
+  "testimonial",
+  "product",
+  "timeline",
+  "feature-grid",
+  "media-gallery",
+  "cta-cluster",
+  "comparison-table"
+];
+
+const isSectionBlock = (block: PageContentBlock): block is SectionBlock => block._type === "section";
+
+const isMarketingBlockKind = (value: unknown): value is MarketingContentDocument["kind"] =>
+  typeof value === "string" && MARKETING_BLOCK_KINDS.includes(value as MarketingContentDocument["kind"]);
+
+type FetchArgs = Parameters<typeof fetch>;
+type GlobalWithFetch = typeof global & { fetch: typeof fetch | undefined };
+const globalWithFetch = global as GlobalWithFetch;
+const originalFetch = globalWithFetch.fetch;
+const setGlobalFetch = (fn?: typeof fetch) => {
+  if (fn) {
+    globalWithFetch.fetch = fn;
+  } else {
+    globalWithFetch.fetch = undefined as unknown as typeof fetch;
+  }
+};
+
 const {
   collectMarketingPreviewSnapshots,
   collectMarketingPreviewSnapshotTimeline
 } = require("../preview") as typeof import("../preview");
-
-type FetchArgs = Parameters<typeof fetch>;
 
 type MockResponseInit = {
   ok?: boolean;
@@ -42,11 +73,8 @@ const createResponse = (body: unknown, init: MockResponseInit = {}) => {
 };
 
 const originalEnv = { ...process.env };
-const originalFetch = global.fetch;
 
-const lexicalState = lexicalMarketingFixture as unknown;
-
-type SectionBlock = Extract<NonNullable<PageDocument["content"]>[number], { _type: "section" }>;
+const lexicalState = lexicalMarketingFixture as LexicalEditorState;
 
 const createLexicalSection = (): SectionBlock => {
   const normalized = normalizeMarketingLexicalContent(lexicalState, {
@@ -94,7 +122,7 @@ const baseSections = [createLexicalSection()];
 const sectionsWithBlog = [...baseSections, createBlogSection()];
 const expectedBlockKinds = (baseSections[0].marketingContent ?? [])
   .map((block) => block?.kind)
-  .filter((kind): kind is string => typeof kind === "string");
+  .filter(isMarketingBlockKind);
 
 type PageFactoryOptions = {
   variant: string;
@@ -217,11 +245,7 @@ describe("payload client", () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    if (originalFetch) {
-      global.fetch = originalFetch;
-    } else {
-      (global as typeof global & { fetch?: typeof fetch }).fetch = undefined;
-    }
+    setGlobalFetch(originalFetch);
     jest.useRealTimers();
     jest.clearAllMocks();
     draftState.isEnabled = false;
@@ -240,7 +264,7 @@ describe("payload client", () => {
       return createResponse({ result: "ok" });
     }) as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { payloadFetch } = await import("../client");
 
@@ -261,14 +285,14 @@ describe("payload client", () => {
 
   it("retries failed requests before succeeding", async () => {
     jest.useFakeTimers();
-    const fetchMock = jest
-      .fn<(...args: FetchArgs) => Promise<Response>>()
+    const fetchMock = jest.fn() as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
+    fetchMock
       .mockResolvedValueOnce(createResponse({}, { ok: false, status: 500, statusText: "Server Error" }))
       .mockResolvedValueOnce(createResponse({ done: true }));
     const onRetry = jest.fn();
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { payloadFetch, PayloadRequestError } = await import("../client");
 
@@ -289,12 +313,11 @@ describe("payload client", () => {
   });
 
   it("throws the final error after exhausting retries", async () => {
-    const fetchMock = jest
-      .fn<(...args: FetchArgs) => Promise<Response>>()
-      .mockResolvedValue(createResponse({}, { ok: false, status: 503, statusText: "Unavailable" }));
+    const fetchMock = jest.fn() as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
+    fetchMock.mockResolvedValue(createResponse({}, { ok: false, status: 503, statusText: "Unavailable" }));
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { payloadFetch, PayloadRequestError } = await import("../client");
 
@@ -314,7 +337,7 @@ describe("payload client", () => {
       return createResponse({ result: "ok" });
     }) as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { payloadFetch } = await import("../client");
 
@@ -351,22 +374,17 @@ describe("payload loaders", () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    if (originalFetch) {
-      global.fetch = originalFetch;
-    } else {
-      (global as typeof global & { fetch?: typeof fetch }).fetch = undefined;
-    }
+    setGlobalFetch(originalFetch);
     jest.clearAllMocks();
     draftState.isEnabled = false;
   });
 
   it("normalises payload homepage responses", async () => {
-    const fetchMock = jest
-      .fn<(...args: FetchArgs) => Promise<Response>>()
-      .mockResolvedValue(createResponse(homepageFixture));
+    const fetchMock = jest.fn() as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
+    fetchMock.mockResolvedValue(createResponse(homepageFixture));
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { fetchHomepage } = await import("../loaders");
 
@@ -480,12 +498,11 @@ describe("payload loaders", () => {
   });
 
   it("normalises payload marketing pages with nested relationships", async () => {
-    const fetchMock = jest
-      .fn<(...args: FetchArgs) => Promise<Response>>()
-      .mockResolvedValue(createResponse(pageFixture));
+    const fetchMock = jest.fn() as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
+    fetchMock.mockResolvedValue(createResponse(pageFixture));
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { getPageBySlug } = await import("../loaders");
 
@@ -504,7 +521,9 @@ describe("payload loaders", () => {
       seoDescription: "Automate the delivery pipeline"
     });
 
-    const lexicalSection = page?.content?.find((block) => block._key === "lexical-marketing");
+    const lexicalSection = page?.content?.find(
+      (block): block is SectionBlock => isSectionBlock(block) && block._key === "lexical-marketing"
+    );
     expect(lexicalSection?.marketingContent).toBeDefined();
     expect(lexicalSection?.marketingContent?.map((node) => node.kind)).toEqual(
       expect.arrayContaining([
@@ -522,7 +541,9 @@ describe("payload loaders", () => {
     const heroBlock = lexicalSection?.marketingContent?.find((node) => node.kind === "hero");
     expect(heroBlock).toMatchObject({ headline: "Launch orchestrated campaigns without the chaos" });
 
-    const blogSection = page?.content?.find((block) => block.layout === "blog");
+    const blogSection = page?.content?.find(
+      (block): block is SectionBlock => isSectionBlock(block) && block.layout === "blog"
+    );
     expect(blogSection?.blogPosts).toHaveLength(2);
     expect(blogSection?.blogPosts).toEqual(
       expect.arrayContaining([
@@ -541,7 +562,9 @@ describe("payload loaders", () => {
       ])
     );
 
-    const pricingSection = page?.content?.find((block) => block.layout === "pricing");
+    const pricingSection = page?.content?.find(
+      (block): block is SectionBlock => isSectionBlock(block) && block.layout === "pricing"
+    );
     expect(pricingSection?.pricingTiers).toHaveLength(2);
 
     const testimonialHighlight = page?.content?.find((block) => block._type === "testimonial");
@@ -554,12 +577,11 @@ describe("payload loaders", () => {
   });
 
   it("fetches payload blog summaries", async () => {
-    const fetchMock = jest
-      .fn<(...args: FetchArgs) => Promise<Response>>()
-      .mockResolvedValue(createResponse(blogPostsFixture));
+    const fetchMock = jest.fn() as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
+    fetchMock.mockResolvedValue(createResponse(blogPostsFixture));
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { getBlogPosts } = await import("../loaders");
 
@@ -592,12 +614,11 @@ describe("payload loaders", () => {
   });
 
   it("fetches payload blog detail with lexical body", async () => {
-    const fetchMock = jest
-      .fn<(...args: FetchArgs) => Promise<Response>>()
-      .mockResolvedValue(createResponse(blogPostDetailFixture));
+    const fetchMock = jest.fn() as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
+    fetchMock.mockResolvedValue(createResponse(blogPostDetailFixture));
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { getBlogPostBySlug } = await import("../loaders");
 
@@ -621,11 +642,10 @@ describe("payload loaders", () => {
 
   it("fetches draft payload pages when draft mode is enabled", async () => {
     draftState.isEnabled = true;
-    const fetchMock = jest
-      .fn<(...args: FetchArgs) => Promise<Response>>()
-      .mockResolvedValue(createResponse(pageDraftFixture));
+    const fetchMock = jest.fn() as jest.MockedFunction<(...args: FetchArgs) => Promise<Response>>;
+    fetchMock.mockResolvedValue(createResponse(pageDraftFixture));
 
-    global.fetch = fetchMock as unknown as typeof fetch;
+    setGlobalFetch(fetchMock as unknown as typeof fetch);
 
     const { getPageBySlug } = await import("../loaders");
 
@@ -645,7 +665,9 @@ describe("payload loaders", () => {
       }
     });
 
-    const metricsSection = page?.content?.find((block) => block._type === "section" && block.layout === "metrics");
+    const metricsSection = page?.content?.find(
+      (block): block is SectionBlock => isSectionBlock(block) && block.layout === "metrics"
+    );
     expect(metricsSection?.metrics).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "Launch window", value: "2 weeks" }),
@@ -653,7 +675,9 @@ describe("payload loaders", () => {
       ])
     );
 
-    const blogSection = page?.content?.find((block) => block._type === "section" && block.layout === "blog");
+    const blogSection = page?.content?.find(
+      (block): block is SectionBlock => isSectionBlock(block) && block.layout === "blog"
+    );
     expect(blogSection?.blogPosts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -687,7 +711,7 @@ describe.each([
   it("serializes hero, metrics, and marketing blocks deterministically", async () => {
     const snapshots = await collectMarketingPreviewSnapshots({
       preview,
-      fallbackLexicalState: lexicalMarketingFixture as unknown,
+      fallbackLexicalState: lexicalState,
       loaders: {
         getHomepage: async () => (preview ? homepageVariants.draft : homepageVariants.published),
         getPageBySlug: async (slug: string) => {
@@ -711,7 +735,7 @@ describe.each([
 it("collects timeline payloads with route summaries", async () => {
   const timeline = await collectMarketingPreviewSnapshotTimeline({
     historyLimit: 2,
-    fallbackLexicalState: lexicalMarketingFixture as unknown,
+    fallbackLexicalState: lexicalState,
     loaders: {
       getHomepage: async () => homepageVariants.published,
       getPageBySlug: async (slug: string) => {

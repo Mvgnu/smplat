@@ -19,8 +19,8 @@ import { parseMarketingSectionContent } from "@/marketing/content";
 import type { MarketingContentDocument, PageDocument } from "@/server/cms/types";
 
 export type PageSection = NonNullable<PageDocument["content"]>[number];
-
-export type MetricItem = NonNullable<PageSection["metrics"]>[number];
+type SectionBlock = Extract<PageSection, { _type: "section" }>;
+export type MetricItem = NonNullable<SectionBlock["metrics"]>[number];
 
 const DEFAULT_METRIC_FALLBACK: MetricItem[] = [
   { label: "Campaigns launched", value: "1,200+", description: "Successful campaigns delivered" },
@@ -34,8 +34,6 @@ type MarketingSectionsProps = {
   metricFallback?: MetricItem[];
   id?: string;
 };
-
-type SectionBlock = Extract<PageSection, { _type: "section" }>;
 
 type TestimonialBlock = Extract<PageSection, { _type: "testimonial" }>;
 

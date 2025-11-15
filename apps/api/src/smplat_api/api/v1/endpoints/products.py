@@ -6,22 +6,31 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from smplat_api.db.session import get_session
 from smplat_api.schemas.product import (
+    JourneyComponentHealthSummaryResponse,
+    JourneyComponentRunResponse,
     ProductAssetCreate,
+    ProductAuditLogEntry,
     ProductConfigurationMutation,
     ProductCreate,
     ProductDetailResponse,
-    ProductAuditLogEntry,
+    ProductJourneyComponentResponse,
+    ProductJourneyRuntimeResponse,
     ProductMediaAssetResponse,
     ProductResponse,
     ProductUpdate,
 )
 from smplat_api.services.products import ProductService
+from smplat_api.services.journey_runtime import JourneyRuntimeService
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
 
 async def get_product_service(session=Depends(get_session)) -> ProductService:
     return ProductService(session)
+
+
+async def get_journey_runtime_service(session=Depends(get_session)) -> JourneyRuntimeService:
+    return JourneyRuntimeService(session)
 
 
 @router.get("/", summary="List products", response_model=list[ProductResponse])
@@ -37,6 +46,54 @@ async def get_product(slug: str, service: ProductService = Depends(get_product_s
         raise HTTPException(status_code=404, detail="Product not found")
 
     return ProductDetailResponse.model_validate(product)
+
+
+@router.get(
+    "/{product_id}/journeys",
+    summary="List product journey components and recent runs",
+    response_model=ProductJourneyRuntimeResponse,
+)
+async def get_product_journeys(
+    product_id: UUID,
+    product_service: ProductService = Depends(get_product_service),
+    runtime_service: JourneyRuntimeService = Depends(get_journey_runtime_service),
+) -> ProductJourneyRuntimeResponse:
+    product = await product_service.get_product_by_id(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    runs = await runtime_service.list_product_runs(product.id)
+    components = [
+        ProductJourneyComponentResponse.model_validate(entry)
+        for entry in (product.journey_components or [])
+    ]
+    recent_runs = [JourneyComponentRunResponse.model_validate(run) for run in runs]
+    component_metrics = JourneyRuntimeService.summarize_component_health(
+        product.journey_components or [],
+        runs,
+    )
+    component_health = [
+        JourneyComponentHealthSummaryResponse(
+            componentId=summary.component_id,
+            productComponentId=summary.product_component_id,
+            runCount=summary.run_count,
+            successCount=summary.success_count,
+            failureCount=summary.failure_count,
+            lastRun=(
+                JourneyComponentRunResponse.model_validate(summary.last_run)
+                if summary.last_run
+                else None
+            ),
+        )
+        for summary in component_metrics
+    ]
+    return ProductJourneyRuntimeResponse(
+        productId=product.id,
+        slug=product.slug,
+        title=product.title,
+        journeyComponents=components,
+        recentRuns=recent_runs,
+        componentHealth=component_health,
+    )
 
 
 @router.post("/", summary="Create product", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
@@ -92,6 +149,12 @@ async def attach_asset(
         label=payload.label,
         asset_url=payload.asset_url,
         storage_key=payload.storage_key,
+        client_id=payload.client_id,
+        display_order=payload.display_order,
+        is_primary=payload.is_primary,
+        usage_tags=payload.usage_tags,
+        alt_text=payload.alt_text,
+        checksum=payload.checksum,
         metadata=payload.metadata,
     )
     return ProductMediaAssetResponse.model_validate(asset)

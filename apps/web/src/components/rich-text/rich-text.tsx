@@ -4,9 +4,10 @@ import {
   type JSXConverters,
   type JSXConvertersFunction
 } from "@payloadcms/richtext-lexical/react";
-import type { SerializedEditorState, SerializedLexicalNode } from "lexical";
+import type { SerializedEditorState, SerializedLexicalNode } from "@payloadcms/richtext-lexical";
 
 import { marketingLexicalConverters } from "./marketing-converters";
+import { customLexicalConverters } from "./custom-converters";
 
 const defaultPortableTextComponents: PortableTextComponents = {
   types: {
@@ -54,7 +55,8 @@ const isLexicalEditorState = (value: unknown): value is LexicalEditorState => {
   return type === "root" && Array.isArray(children);
 };
 
-const hasLexicalContent = (state: LexicalEditorState) => state.root.children.length > 0;
+const hasLexicalContent = (state: LexicalEditorState) =>
+  Array.isArray(state.root.children) && state.root.children.length > 0;
 
 const mergeConverters = (base: JSXConverters, extension?: JSXConverters): JSXConverters => {
   if (!extension) {
@@ -82,17 +84,19 @@ const withMarketingConverters = (
   converters?: JSXConverters | JSXConvertersFunction
 ): JSXConvertersFunction => {
   return ({ defaultConverters }) => {
+    // Merge in order: default -> marketing -> custom -> user-provided
     const baseWithMarketing = mergeConverters(defaultConverters, marketingLexicalConverters);
+    const baseWithCustom = mergeConverters(baseWithMarketing, customLexicalConverters);
 
     if (!converters) {
-      return baseWithMarketing;
+      return baseWithCustom;
     }
 
     if (typeof converters === "function") {
-      return converters({ defaultConverters: baseWithMarketing });
+      return converters({ defaultConverters: baseWithCustom });
     }
 
-    return mergeConverters(baseWithMarketing, converters);
+    return mergeConverters(baseWithCustom, converters);
   };
 };
 

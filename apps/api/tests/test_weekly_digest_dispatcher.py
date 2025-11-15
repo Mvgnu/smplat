@@ -58,6 +58,25 @@ async def test_weekly_digest_sends_for_opted_in_user(session_factory):
             quantity=1,
             unit_price=Decimal("150.00"),
             total_price=Decimal("150.00"),
+            selected_options={
+                "options": [
+                    {
+                        "groupId": "hero",
+                        "groupName": "Hero",
+                        "optionId": "bundle-hero",
+                        "label": "Hero resonance",
+                        "marketingTagline": "Top-of-feed reach",
+                    }
+                ],
+                "addOns": [
+                    {
+                        "id": "concierge",
+                        "label": "Concierge QA",
+                        "priceDelta": 75,
+                        "pricingMode": "flat",
+                    }
+                ],
+            },
         )
         task = FulfillmentTask(
             order_item=order_item,
@@ -83,7 +102,14 @@ async def test_weekly_digest_sends_for_opted_in_user(session_factory):
         assert "SM900010" in digest_event.metadata["orders"]
         html_part = backend.sent_messages[-1].get_body(preferencelist=("html",))
         assert html_part is not None
-        assert "weekly summary" in html_part.get_content().lower()
+        html_content = html_part.get_content()
+        assert "weekly summary" in html_content.lower()
+        assert "Order SM900010 blueprint" in html_content
+        text_part = backend.sent_messages[-1].get_body(preferencelist=("plain",))
+        assert text_part is not None
+        text_content = text_part.get_content()
+        assert "Blueprint snapshots" in text_content
+        assert "Concierge QA" in text_content
 
 
 @pytest.mark.asyncio

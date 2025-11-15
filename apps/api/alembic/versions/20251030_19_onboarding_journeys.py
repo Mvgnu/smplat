@@ -14,21 +14,46 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "CREATE TYPE onboarding_journey_status AS ENUM ('not_started', 'active', 'completed', 'stalled')"
-    )
-    op.execute(
-        "CREATE TYPE onboarding_task_status AS ENUM ('pending', 'in_progress', 'completed', 'blocked')"
-    )
-    op.execute(
-        "CREATE TYPE onboarding_actor_type AS ENUM ('client', 'operator', 'system')"
-    )
-    op.execute(
-        "CREATE TYPE onboarding_interaction_channel AS ENUM ('dashboard', 'email', 'slack', 'other')"
-    )
-    op.execute(
-        "CREATE TYPE onboarding_event_type AS ENUM ('journey_started', 'task_status_changed', 'artifact_received', 'referral_copied')"
-    )
+    # Create enum types if they don't exist
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'onboarding_journey_status') THEN
+                CREATE TYPE onboarding_journey_status AS ENUM ('not_started', 'active', 'completed', 'stalled');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'onboarding_task_status') THEN
+                CREATE TYPE onboarding_task_status AS ENUM ('pending', 'in_progress', 'completed', 'blocked');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'onboarding_actor_type') THEN
+                CREATE TYPE onboarding_actor_type AS ENUM ('client', 'operator', 'system');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'onboarding_interaction_channel') THEN
+                CREATE TYPE onboarding_interaction_channel AS ENUM ('dashboard', 'email', 'slack', 'other');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'onboarding_event_type') THEN
+                CREATE TYPE onboarding_event_type AS ENUM ('journey_started', 'task_status_changed', 'artifact_received', 'referral_copied');
+            END IF;
+        END $$;
+    """)
 
     op.create_table(
         "onboarding_journeys",
@@ -36,7 +61,7 @@ def upgrade() -> None:
         sa.Column("order_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "status",
-            sa.Enum(name="onboarding_journey_status", create_type=False),
+            sa.dialects.postgresql.ENUM("not_started", "active", "completed", "stalled", name="onboarding_journey_status", create_type=False),
             nullable=False,
             server_default="not_started",
         ),
@@ -71,7 +96,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column(
             "status",
-            sa.Enum(name="onboarding_task_status", create_type=False),
+            sa.dialects.postgresql.ENUM("pending", "in_progress", "completed", "blocked", name="onboarding_task_status", create_type=False),
             nullable=False,
             server_default="pending",
         ),
@@ -118,13 +143,13 @@ def upgrade() -> None:
         sa.Column("task_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column(
             "actor_type",
-            sa.Enum(name="onboarding_actor_type", create_type=False),
+            sa.dialects.postgresql.ENUM("client", "operator", "system", name="onboarding_actor_type", create_type=False),
             nullable=False,
             server_default="system",
         ),
         sa.Column(
             "channel",
-            sa.Enum(name="onboarding_interaction_channel", create_type=False),
+            sa.dialects.postgresql.ENUM("dashboard", "email", "slack", "other", name="onboarding_interaction_channel", create_type=False),
             nullable=False,
             server_default="dashboard",
         ),
@@ -149,7 +174,7 @@ def upgrade() -> None:
         sa.Column("order_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "event_type",
-            sa.Enum(name="onboarding_event_type", create_type=False),
+            sa.dialects.postgresql.ENUM("journey_started", "task_status_changed", "artifact_received", "referral_copied", name="onboarding_event_type", create_type=False),
             nullable=False,
         ),
         sa.Column("status_before", sa.String(length=255), nullable=True),

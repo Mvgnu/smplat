@@ -4,5 +4,8 @@ __all__ = [
     "bundle_acceptance",
     "bundle_guardrails",
     "checkout_recovery",
+    "fulfillment",
     "loyalty",
+    "preset_event_alerts",
+    "preset_event_metrics",
 ]
