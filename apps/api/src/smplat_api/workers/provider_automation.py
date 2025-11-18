@@ -14,6 +14,11 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from smplat_api.models.fulfillment import FulfillmentProviderOrder
 from smplat_api.services.fulfillment import ProviderAutomationService
+from smplat_api.services.orders.state_machine import (
+    OrderStateActorTypeEnum,
+    OrderStateEventTypeEnum,
+    OrderStateMachine,
+)
 
 SessionFactory = Callable[[], AsyncSession] | Callable[[], Awaitable[AsyncSession]]
 AutomationFactory = Callable[[AsyncSession], ProviderAutomationService]
@@ -53,6 +58,7 @@ class ProviderOrderReplayWorker:
 
         async with session as db:
             automation = self._automation_factory(db)
+            machine = OrderStateMachine(db)
             stmt = (
                 select(FulfillmentProviderOrder)
                 .where(FulfillmentProviderOrder.payload.isnot(None))
@@ -92,7 +98,27 @@ class ProviderOrderReplayWorker:
                             rule_ids=rule_ids,
                             rule_labels=rule_labels,
                         )
+                        await self._record_timeline_event(
+                            machine,
+                            order,
+                            event_type=OrderStateEventTypeEnum.REPLAY_EXECUTED,
+                            actor_type=OrderStateActorTypeEnum.AUTOMATION,
+                            metadata=ProviderAutomationService.build_timeline_metadata(
+                                order,
+                                entry=replay_entry,
+                                extra={
+                                    "scheduleId": entry_id,
+                                    "trigger": "scheduled_replay",
+                                },
+                            ),
+                            notes="Automation replay executed from schedule",
+                        )
                     except Exception as exc:
+                        failure_entry = self._record_failed_replay(
+                            order,
+                            requested_amount=requested_amount,
+                            error=str(exc),
+                        )
                         self._mark_schedule_entry(
                             order,
                             entry_id,
@@ -100,7 +126,6 @@ class ProviderOrderReplayWorker:
                             performed_at=self._clock().isoformat(),
                             response={"error": str(exc)},
                         )
-                        self._record_failed_replay(order, requested_amount=requested_amount, error=str(exc))
                         summary["failed"] += 1
                         schedule_rule_ids = entry.get("ruleIds")
                         schedule_rule_labels = ProviderAutomationService._summarize_rule_labels(
@@ -114,6 +139,22 @@ class ProviderOrderReplayWorker:
                             error=str(exc),
                             rule_ids=schedule_rule_ids,
                             rule_labels=schedule_rule_labels,
+                        )
+                        await self._record_timeline_event(
+                            machine,
+                            order,
+                            event_type=OrderStateEventTypeEnum.REPLAY_EXECUTED,
+                            actor_type=OrderStateActorTypeEnum.AUTOMATION,
+                            metadata=ProviderAutomationService.build_timeline_metadata(
+                                order,
+                                entry=failure_entry,
+                                extra={
+                                    "scheduleId": entry_id,
+                                    "trigger": "scheduled_replay",
+                                    "error": str(exc),
+                                },
+                            ),
+                            notes="Automation replay attempt failed",
                         )
 
                 if summary["processed"] >= effective_limit:
@@ -218,7 +259,7 @@ class ProviderOrderReplayWorker:
         *,
         requested_amount: float | None,
         error: str,
-    ) -> None:
+    ) -> dict[str, Any]:
         payload = self._safe_payload(order.payload)
         rule_ids, rule_metadata = ProviderAutomationService._extract_rule_context(payload)
         entry = {
@@ -239,6 +280,7 @@ class ProviderOrderReplayWorker:
         else:
             payload["replays"] = [entry]
         self._apply_payload(order, payload)
+        return entry
 
     @staticmethod
     def _safe_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -281,6 +323,35 @@ class ProviderOrderReplayWorker:
     def _apply_payload(order: FulfillmentProviderOrder, payload: dict[str, Any]) -> None:
         order.payload = payload
         flag_modified(order, "payload")
+
+    async def _record_timeline_event(
+        self,
+        machine: OrderStateMachine,
+        provider_order: FulfillmentProviderOrder,
+        *,
+        event_type: OrderStateEventTypeEnum,
+        actor_type: OrderStateActorTypeEnum,
+        metadata: Mapping[str, Any],
+        notes: str | None = None,
+    ) -> None:
+        if not provider_order.order_id:
+            return
+        try:
+            await machine.record_event(
+                order_id=provider_order.order_id,
+                event_type=event_type,
+                actor_type=actor_type,
+                actor_id=str(provider_order.id),
+                actor_label=None,
+                notes=notes,
+                metadata=dict(metadata),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record automation replay timeline event",
+                order_id=str(provider_order.order_id),
+                event_type=event_type.value,
+            )
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():

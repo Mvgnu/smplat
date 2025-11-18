@@ -20,6 +20,7 @@ from .workers import (
     JourneyRuntimeWorker,
     ProviderAutomationAlertWorker,
     ProviderOrderReplayWorker,
+    ReceiptStorageProbeWorker,
 )
 
 
@@ -79,6 +80,10 @@ async def lifespan(app: FastAPI):
         interval_seconds=settings.weekly_digest_interval_seconds,
         dry_run=settings.weekly_digest_dry_run,
     )
+    receipt_storage_probe_worker = ReceiptStorageProbeWorker(
+        session_factory=_session_factory,
+        interval_seconds=settings.receipt_storage_probe_interval_seconds,
+    )
 
     async with async_session() as session:
         await provider_registry.refresh_catalog(session, force=True)
@@ -92,6 +97,7 @@ async def lifespan(app: FastAPI):
     app.state.provider_automation_alert_worker = provider_alert_worker
     app.state.journey_runtime_worker = journey_runtime_worker
     app.state.catalog_job_scheduler = job_scheduler
+    app.state.receipt_storage_probe_worker = receipt_storage_probe_worker
 
     if settings.fulfillment_worker_enabled:
         worker_task = asyncio.create_task(processor.start())
@@ -196,6 +202,19 @@ async def lifespan(app: FastAPI):
             reason="provider_automation_alert_worker_enabled is false",
         )
 
+    receipt_probe_enabled = settings.receipt_storage_probe_worker_enabled
+    if receipt_probe_enabled:
+        receipt_storage_probe_worker.start()
+        logger.info(
+            "Receipt storage probe worker enabled",
+            interval_seconds=receipt_storage_probe_worker.interval_seconds,
+        )
+    else:
+        logger.info(
+            "Receipt storage probe worker disabled",
+            reason="receipt_storage_probe_worker_enabled is false",
+        )
+
     runtime_worker_started = False
     if settings.journey_runtime_worker_enabled and not settings.celery_broker_url:
         journey_runtime_worker.start()
@@ -235,6 +254,8 @@ async def lifespan(app: FastAPI):
             await provider_replay_worker.stop()
         if provider_alerts_enabled and provider_alert_worker.is_running:
             await provider_alert_worker.stop()
+        if receipt_probe_enabled and receipt_storage_probe_worker.is_running:
+            await receipt_storage_probe_worker.stop()
         if runtime_worker_started and journey_runtime_worker.is_running:
             await journey_runtime_worker.stop()
 

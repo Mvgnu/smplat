@@ -32,4 +32,4 @@ class CustomerProfile(Base):
     
     # Relationships
     instagram_accounts = relationship("InstagramAccount", back_populates="customer_profile", cascade="all, delete-orphan")
-
+    social_accounts = relationship("CustomerSocialAccount", back_populates="customer_profile", cascade="all, delete-orphan")

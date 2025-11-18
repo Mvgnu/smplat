@@ -4,6 +4,9 @@ import { readFile } from "node:fs/promises";
 
 import type { AdminOrder, OrderPayload } from "./admin-orders";
 import { mapOrderPayload } from "./admin-orders";
+import { fetchOrderDeliveryProof } from "./delivery-proof";
+import { fetchDeliveryProofAggregates } from "@/server/metrics/delivery-proof-aggregates";
+import type { DeliveryProofAggregateResponse, OrderDeliveryProof } from "@/types/delivery-proof";
 
 type ClientOrderSummary = {
   id: string;
@@ -88,14 +91,31 @@ export async function fetchClientOrders(userId: string, limit = 10): Promise<Cli
   }
 }
 
-export async function fetchClientOrderHistory(userId: string, limit = 10): Promise<AdminOrder[]> {
+export type ClientOrderHistoryRecord = AdminOrder & {
+  deliveryProof?: OrderDeliveryProof | null;
+  deliveryProofAggregates?: DeliveryProofAggregateResponse | null;
+};
+
+type ClientOrderHistoryOptions = {
+  includeDeliveryProof?: boolean;
+};
+
+export async function fetchClientOrderHistory(
+  userId: string,
+  limit = 10,
+  options: ClientOrderHistoryOptions = {}
+): Promise<ClientOrderHistoryRecord[]> {
   if (!userId) {
     return [];
   }
 
   const mockOrders = await loadMockClientOrders();
   if (mockOrders) {
-    return filterOrdersForUser(mockOrders, userId).slice(0, limit);
+    const orders = filterOrdersForUser(mockOrders, userId).slice(0, limit);
+    if (!options.includeDeliveryProof) {
+      return orders;
+    }
+    return augmentOrdersWithDeliveryProof(orders);
   }
 
   if (!checkoutApiKey) {
@@ -115,7 +135,11 @@ export async function fetchClientOrderHistory(userId: string, limit = 10): Promi
     }
 
     const payload = (await response.json()) as OrderPayload[];
-    return payload.map(mapOrderPayload);
+    const orders = payload.map(mapOrderPayload);
+    if (!options.includeDeliveryProof) {
+      return orders;
+    }
+    return augmentOrdersWithDeliveryProof(orders);
   } catch (error) {
     console.warn("Unexpected error fetching client order history", error);
     return [];
@@ -142,3 +166,28 @@ async function loadMockClientOrders(): Promise<AdminOrder[] | null> {
 
 const filterOrdersForUser = (orders: AdminOrder[], userId: string): AdminOrder[] =>
   orders.filter((order) => !order.userId || order.userId === userId);
+
+const augmentOrdersWithDeliveryProof = async (
+  orders: AdminOrder[]
+): Promise<ClientOrderHistoryRecord[]> => {
+  return Promise.all(
+    orders.map(async (order) => {
+      const productIds = Array.from(
+        new Set(
+          order.items
+            .map((item) => item.productId)
+            .filter((value): value is string => typeof value === "string" && value.length > 0)
+        )
+      );
+      const [deliveryProof, aggregates] = await Promise.all([
+        fetchOrderDeliveryProof(order.id),
+        productIds.length ? fetchDeliveryProofAggregates(productIds) : Promise.resolve(null),
+      ]);
+      return {
+        ...order,
+        deliveryProof,
+        deliveryProofAggregates: aggregates,
+      };
+    })
+  );
+};

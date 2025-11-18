@@ -56,9 +56,28 @@ Full-stack platform for social media service storefronts.
 - `tooling/scripts/check_observability.py` — consolidated validation for fulfillment, payments, and catalog search telemetry (including a zero-result rate SLO). Fails with non-zero exit status when thresholds are exceeded, making it ideal for CI/CD gates.
 - `tooling/scripts/export_catalog_insights.py` — exports top catalog queries and zero-result searches (JSON/Markdown) to feed merchandising experiments.
 - `tooling/scripts/validate-payload-preview.mjs` — automates Payload preview and webhook validation; run via `pnpm payload:validate` once environment secrets point at a live Payload + marketing deployment pair.
+- `tooling/scripts/export_guardrail_followups.py` — streams provider guardrail follow-up rows (action, provider metadata, conversion cursor/link, platform context) to stdout/NDJSON/webhook sinks with resumable file cursors; `.github/workflows/guardrail-followup-export.yml` wires the script to hourly GitHub Actions runs that optionally sync cursors to S3 and alert Slack on completion/failure.
+  - `/admin/reports` now surfaces a Guardrail Export health card (controlled via `GUARDRAIL_EXPORT_STATUS_URL`) with a **Download latest NDJSON** button that proxies the presigned artifact through `/api/reporting/guardrail-followups/export`, so ops can grab the warehouse feed without touching GitHub or S3.
 - `.github/workflows/observability-checks.yml` — GitHub Actions job that runs the consolidated checker with the staging API base URL and checkout API key stored as repository configuration.
   - Runs the catalog observability pytest suite via Poetry before executing runtime checks.
   - Uploads Markdown/JSON catalog insights artifacts for merchandising after each run.
+
+### Metric Sourcing Testbed
+- `apps/api/src/smplat_api/services/metrics/sourcer.py` implements the MetricSourcer abstraction (scraper client + manual fallback) backing `POST /api/v1/metrics/accounts/validate`. Schema notes + architecture live in [`docs/metric-sourcing.md`](./docs/metric-sourcing.md).
+- `/admin/reports` now includes the **Account validation testbed** card so ops can validate handles, capture baseline snapshots, and persist metadata inside `customer_social_accounts` without leaving the dashboard.
+- `python tooling/scripts/validate_social_account.py instagram @brand --manual followers=12000 avgLikes=540` provides a CLI harness for CI smoke tests or local validation. Follow [`docs/runbooks/account-validation.md`](./docs/runbooks/account-validation.md) for the full operator workflow.
+
+### Order State Machine & Delivery Proof
+- `/api/v1/orders/{id}/status` now uses the Track 0 state machine (pending → processing → active → completed/on_hold/canceled plus refill reopen). Every transition writes an `order_state_events` audit entry that the admin UI renders as the **Order timeline** card on `/admin/orders`.
+- `GET /api/v1/orders/{id}/state-events` + `GET /api/v1/orders/{id}/delivery-proof` feed the new admin timeline + delivery proof panels. Operators can filter events, see actor metadata, and inspect baseline/latest metric snapshots without digging through raw JSON.
+- Storefront receipts (JSON export + `/checkout/success` + `/account/orders`) now fetch `/api/v1/orders/delivery-proof` alongside the aggregate metrics endpoint so customers and operators read the same follower lift deltas. When a line item hasn’t captured a live snapshot yet, the UI and downloads fall back to the aggregated sample size + formatted delta pulled from `/orders/delivery-proof/metrics`.
+- Payment-success receipt emails reuse the same delivery proof payload (with aggregate fallback) so concierge notifications cite the latest follower lift metrics without diverging from storefront receipts.
+- Docs: [`docs/order-state-machine.md`](./docs/order-state-machine.md) covers transitions, endpoints, and the delivery proof workflow; use it alongside the account validation runbook.
+
+#### Telemetry dispatch
+
+- Admin/storefront telemetry now uses `NEXT_PUBLIC_TELEMETRY_ENDPOINT` when provided. When unset, browser requests fall back to `/api/telemetry`, which proxies to the server-only `TELEMETRY_ENDPOINT`. This keeps guardrail automation and experiment events flowing even if the public endpoint is disabled in production.
+- Local development: leave `NEXT_PUBLIC_TELEMETRY_ENDPOINT` empty to exercise the proxy path, set `TELEMETRY_ENDPOINT=http://localhost:8787/collect` (or similar) to forward batched events to your dev collector, and inspect the console for `[telemetry:event]` logs if both variables are empty.
 - `docs/18-fulfillment-observability.md` and `docs/19-ci-observability.md` describe staging rollout and CI integration patterns.
 - Prometheus scrape endpoint: `/api/v1/observability/prometheus` (requires `X-API-Key` with the checkout key) aggregates fulfillment, payments, and catalog counters for exporters.
 - Grafana dashboard (`docs/20-grafana-dashboard.json`) and runbook (`docs/20-observability-dashboards.md`) provide ready-to-import visualizations and alert rule suggestions.
@@ -107,10 +126,17 @@ Maintain secrets in your platform secret manager (1Password, Vault, Doppler) and
 | Web (Next.js) | `PAYLOAD_API_TOKEN`, `PAYLOAD_PREVIEW_SECRET`, `PAYLOAD_REVALIDATE_SECRET` | Authenticate CMS preview + webhook flows. |
 | Web (Next.js) | `RESEND_API_KEY` or SMTP credentials | Outbound email for auth and notifications. |
 | Web (Next.js) | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Client-side Stripe proxy credentials and webhook verification. |
+| Web (Next.js) | `NEXT_PUBLIC_TELEMETRY_ENDPOINT` | Optional direct telemetry sink for admin/storefront event dispatch (bypasses proxy when set). |
+| Web (Next.js) | `TELEMETRY_ENDPOINT` | Server-only endpoint used by `/api/telemetry` to forward batched admin events when the public endpoint is unset. |
+| Web (Next.js) | `GUARDRAIL_EXPORT_STATUS_URL` | Optional JSON endpoint (S3/object store) describing the latest guardrail follow-up export cursor used by `/admin/reports`. |
+| Web (Next.js) | `GUARDRAIL_EXPORT_WORKFLOW_URL` | Overrides the “View workflow” link shown in `/admin/reports` if the exports live outside the default smplat GitHub workflow. |
+| Web (Next.js) | `GUARDRAIL_EXPORT_TRIGGER_URL`, `GUARDRAIL_EXPORT_TRIGGER_TOKEN` | Enable the “Run export now” button in `/admin/reports`; typically points to a GitHub Actions workflow_dispatch endpoint plus a PAT/Bearer token. |
 | API (FastAPI) | `SECRET_KEY` | Cryptographic signing + CSRF token validation. |
 | API (FastAPI) | `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET` | Payment capture and webhook validation. |
 | API (FastAPI) | `LEXOFFICE_CLIENT_ID`, `LEXOFFICE_CLIENT_SECRET` | Optional invoicing integration. |
 | API (FastAPI) | `SENTRY_DSN` | Structured error + trace export. |
+| API (FastAPI) | `METRIC_SCRAPER_API_BASE_URL`, `METRIC_SCRAPER_API_TOKEN` | Upstream scraper endpoint + bearer token used by the MetricSourcer service. |
+| API (FastAPI) | `METRIC_VALIDATION_MANUAL_FALLBACK`, `METRIC_VALIDATION_TIMEOUT_SECONDS` | Enable/disable synthetic metric fallback and tune scraper HTTP timeouts. |
 | Shared | `DATABASE_URL`, `REDIS_URL` | Primary Postgres and Redis connection strings. |
 
 Rotate secrets after incident response events and record changes in the security runbook. Use environment-specific `.env` files for local development only.

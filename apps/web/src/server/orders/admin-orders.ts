@@ -25,6 +25,13 @@ const checkoutApiKey = process.env.CHECKOUT_API_KEY ?? "";
 const mockAdminOrdersPath = process.env.MOCK_ADMIN_ORDER_HISTORY_PATH ?? null;
 let mockAdminOrdersCache: AdminOrder[] | null | undefined;
 
+export type OrderItemPlatformContext = {
+  id: string;
+  label: string;
+  handle: string | null;
+  platformType: string | null;
+};
+
 export type AdminOrderItem = {
   id: string;
   productId: string | null;
@@ -34,6 +41,11 @@ export type AdminOrderItem = {
   totalPrice: number;
   selectedOptions: CartSelectionSnapshot | null;
   attributes: Record<string, unknown> | null;
+  platformContext: OrderItemPlatformContext | null;
+  customerSocialAccountId: string | null;
+  baselineMetrics: Record<string, unknown> | null;
+  deliverySnapshots: Record<string, unknown> | null;
+  targetMetrics: Record<string, unknown> | null;
 };
 
 export type AdminOrder = {
@@ -52,6 +64,9 @@ export type AdminOrder = {
   items: AdminOrderItem[];
   providerOrders: FulfillmentProviderOrder[];
   loyaltyProjectionPoints: number | null;
+  receiptStorageKey: string | null;
+  receiptStorageUrl: string | null;
+  receiptStorageUploadedAt: string | null;
 };
 
 export type OrderItemPayload = {
@@ -63,6 +78,12 @@ export type OrderItemPayload = {
   total_price: number;
   selected_options: Record<string, unknown> | null;
   attributes: Record<string, unknown> | null;
+  platform_context?: Record<string, unknown> | null;
+  platformContext?: Record<string, unknown> | null;
+  customer_social_account_id?: string | null;
+  baseline_metrics?: Record<string, unknown> | null;
+  delivery_snapshots?: Record<string, unknown> | null;
+  target_metrics?: Record<string, unknown> | null;
 };
 
 export type OrderPayload = {
@@ -82,6 +103,9 @@ export type OrderPayload = {
   providerOrders?: unknown;
   provider_orders?: unknown;
   loyalty_projection_points?: number | null;
+  receipt_storage_key?: string | null;
+  receipt_storage_url?: string | null;
+  receipt_storage_uploaded_at?: string | null;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -199,6 +223,30 @@ const parseAddOnSelection = (raw: unknown): CartAddOnSelection | null => {
   };
 };
 
+const parsePlatformContext = (raw: unknown): OrderItemPlatformContext | null => {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const id = typeof raw.id === "string" ? raw.id : null;
+  const label = typeof raw.label === "string" ? raw.label : null;
+  if (!id || !label) {
+    return null;
+  }
+  const handle = typeof raw.handle === "string" ? raw.handle : null;
+  const platformType =
+    typeof raw.platformType === "string"
+      ? raw.platformType
+      : typeof raw.platform_type === "string"
+        ? raw.platform_type
+        : null;
+  return {
+    id,
+    label,
+    handle,
+    platformType,
+  };
+};
+
 const parseSubscriptionSelection = (raw: unknown): CartSubscriptionSelection | null => {
   if (!isRecord(raw)) {
     return null;
@@ -261,6 +309,8 @@ const parseSelectedOptionsPayload = (raw: unknown): CartSelectionSnapshot | null
   return Object.keys(snapshot).length > 0 ? snapshot : null;
 };
 
+const coerceRecord = (value: unknown): Record<string, unknown> | null => (isRecord(value) ? value : null);
+
 export const mapOrderPayload = (payload: OrderPayload): AdminOrder => ({
   id: payload.id,
   orderNumber: payload.order_number,
@@ -285,10 +335,25 @@ export const mapOrderPayload = (payload: OrderPayload): AdminOrder => ({
         unitPrice: Number(item.unit_price ?? 0),
         totalPrice: Number(item.total_price ?? 0),
         selectedOptions: parseSelectedOptionsPayload(item.selected_options),
-        attributes: item.attributes ?? null
+        attributes: item.attributes ?? null,
+        platformContext: parsePlatformContext(item.platform_context ?? item.platformContext ?? null),
+        customerSocialAccountId: item.customer_social_account_id ?? null,
+        baselineMetrics: coerceRecord(item.baseline_metrics),
+        deliverySnapshots: coerceRecord(item.delivery_snapshots),
+        targetMetrics: coerceRecord(item.target_metrics),
       }))
     : [],
-  providerOrders: parseProviderOrdersPayload(payload.providerOrders ?? payload.provider_orders ?? null)
+  providerOrders: parseProviderOrdersPayload(payload.providerOrders ?? payload.provider_orders ?? null),
+  receiptStorageKey:
+    typeof payload.receipt_storage_key === "string" && payload.receipt_storage_key.trim().length > 0
+      ? payload.receipt_storage_key.trim()
+      : null,
+  receiptStorageUrl:
+    typeof payload.receipt_storage_url === "string" && payload.receipt_storage_url.trim().length > 0
+      ? payload.receipt_storage_url.trim()
+      : null,
+  receiptStorageUploadedAt:
+    typeof payload.receipt_storage_uploaded_at === "string" ? payload.receipt_storage_uploaded_at : null,
 });
 
 const parseProviderOrdersPayload = (raw: unknown): FulfillmentProviderOrder[] => {
@@ -540,19 +605,27 @@ export async function fetchAdminOrder(orderId: string): Promise<AdminOrder | nul
   }
 }
 
-export async function updateAdminOrderStatus(orderId: string, status: string): Promise<boolean> {
+export async function updateAdminOrderStatus(orderId: string, status: string, options: { notes?: string } = {}): Promise<boolean> {
   if (!orderId || !status) {
     return false;
   }
 
   try {
+    const payload: Record<string, unknown> = {
+      status,
+      actorType: "operator",
+      actorLabel: "Admin console",
+    };
+    if (options.notes && options.notes.trim().length > 0) {
+      payload.notes = options.notes.trim();
+    }
     const response = await fetch(`${apiBaseUrl}/api/v1/orders/${orderId}/status`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
         ...defaultHeaders
       },
-      body: JSON.stringify({ status })
+      body: JSON.stringify(payload)
     });
 
     if (!response.ok) {

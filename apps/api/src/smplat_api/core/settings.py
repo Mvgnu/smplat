@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     api_base_url: str = "http://localhost:8000"
 
+    # Receipt artifact storage
+    receipt_storage_bucket: str | None = None
+    receipt_storage_region: str = "us-east-1"
+    receipt_storage_prefix: str = "order-receipts"
+    receipt_storage_public_base_url: str | None = None
+    receipt_storage_endpoint: str | None = None
+    receipt_storage_force_path_style: bool = False
+    receipt_storage_acl: str = "private"
+    receipt_pdf_fetch_timeout_seconds: float = 10.0
+    receipt_storage_probe_worker_enabled: bool = False
+    receipt_storage_probe_interval_seconds: int = 24 * 60 * 60
+    receipt_storage_probe_max_stale_hours: int = 48
+
     # Fulfillment worker
     fulfillment_worker_enabled: bool = False
     fulfillment_poll_interval_seconds: int = 30
@@ -127,6 +140,7 @@ class Settings(BaseSettings):
     provider_load_alert_min_engagements: int = 10
     provider_load_alert_max_results: int = 25
     provider_automation_status_history_limit: int = 20
+    guardrail_workflow_telemetry_summary_url: str | None = None
 
     @field_validator("provider_automation_alert_email_recipients", mode="before")
     @classmethod
@@ -162,6 +176,12 @@ class Settings(BaseSettings):
     vault_namespace: str | None = None
     vault_timeout_seconds: float = 5.0
     vault_stripe_mount_path: str | None = None
+
+    # Metric sourcing configuration
+    metric_scraper_api_base_url: str | None = None
+    metric_scraper_api_token: str | None = None
+    metric_validation_timeout_seconds: float = 8.0
+    metric_validation_manual_fallback: bool = True
 
 
 @lru_cache

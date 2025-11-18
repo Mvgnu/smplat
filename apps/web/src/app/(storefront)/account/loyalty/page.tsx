@@ -32,7 +32,13 @@ export const metadata: Metadata = {
   description: "Review tier progress, point balances, and redeem rewards."
 };
 
-export default async function LoyaltyHubPage() {
+type LoyaltyHubPageProps = {
+  searchParams?: {
+    experiment?: string;
+  };
+};
+
+export default async function LoyaltyHubPage({ searchParams }: LoyaltyHubPageProps) {
   const { session } = await requireRole("member", {
     context: {
       route: "storefront.account.loyalty.page",
@@ -40,6 +46,10 @@ export default async function LoyaltyHubPage() {
     }
   });
   const csrfToken = getOrCreateCsrfToken();
+  const experimentSlug =
+    typeof searchParams?.experiment === "string" && searchParams.experiment.trim().length > 0
+      ? searchParams.experiment.trim()
+      : null;
 
   if (allowAuthBypass()) {
     configureLoyaltyTimelineFetchers({
@@ -66,6 +76,7 @@ export default async function LoyaltyHubPage() {
         nudges={buildBypassNudges()}
         timeline={timeline}
         csrfToken={csrfToken}
+        focusExperimentSlug={experimentSlug}
       />
     );
   }
@@ -98,6 +109,7 @@ export default async function LoyaltyHubPage() {
       nudges={nudges}
       timeline={timeline}
       csrfToken={csrfToken}
+      focusExperimentSlug={experimentSlug}
     />
   );
 }

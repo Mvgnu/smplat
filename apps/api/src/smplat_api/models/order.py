@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from smplat_api.db.base import Base
+from .order_state_event import OrderStateEvent
 from .customer_profile import CurrencyEnum
 
 
@@ -49,6 +50,9 @@ class Order(Base):
     )
     loyalty_projection_points = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
+    receipt_storage_key = Column(String(512), nullable=True)
+    receipt_storage_url = Column(String(2048), nullable=True)
+    receipt_storage_uploaded_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     
@@ -57,6 +61,12 @@ class Order(Base):
     payments = relationship("Payment", back_populates="order", cascade="all, delete-orphan")
     checkout_orchestration = relationship(
         "CheckoutOrchestration", back_populates="order", uselist=False
+    )
+    state_events = relationship(
+        "OrderStateEvent",
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by=OrderStateEvent.created_at.desc(),
     )
 
 
@@ -72,6 +82,15 @@ class OrderItem(Base):
     total_price = Column(Numeric(12, 2), nullable=False)
     selected_options = Column(JSON, nullable=True)
     attributes = Column(JSON, nullable=True)
+    platform_context = Column(JSON, nullable=True)
+    customer_social_account_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("customer_social_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    baseline_metrics = Column(JSON, nullable=True)
+    delivery_snapshots = Column(JSON, nullable=True)
+    target_metrics = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     
@@ -84,3 +103,4 @@ class OrderItem(Base):
         back_populates="order_item",
         cascade="all, delete-orphan",
     )
+    customer_social_account = relationship("CustomerSocialAccount", back_populates="order_items")

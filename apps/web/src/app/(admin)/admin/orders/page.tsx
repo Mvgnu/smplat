@@ -20,6 +20,9 @@ import {
 } from "@/server/fulfillment/provider-automation-insights";
 import { fetchAdminOrder, fetchAdminOrders } from "@/server/orders/admin-orders";
 import { fetchOrderProgress } from "@/server/orders/progress";
+import { fetchOrderStateEvents, type OrderStateEvent } from "@/server/orders/state-events";
+import { fetchOrderDeliveryProof } from "@/server/orders/delivery-proof";
+import type { DeliveryProofItem, OrderDeliveryProof } from "@/types/delivery-proof";
 import { getOrCreateCsrfToken } from "@/server/security/csrf";
 import type { MarginStatus, ProviderAutomationTelemetry, RuleOverrideServiceSummary } from "@/lib/provider-service-insights";
 import { summarizeProviderAutomationTelemetry } from "@/lib/provider-service-insights";
@@ -115,6 +118,12 @@ export default async function AdminOrdersPage({ searchParams }: AdminOrdersPageP
 
   const effectiveOrder = selectedOrder ?? (selectedOrderId ? await fetchAdminOrder(selectedOrderId) : null);
   const progress = effectiveOrder ? await fetchOrderProgress(effectiveOrder.id) : null;
+  const [stateEvents, deliveryProof] = effectiveOrder
+    ? await Promise.all([
+        fetchOrderStateEvents(effectiveOrder.id).catch(() => []),
+        fetchOrderDeliveryProof(effectiveOrder.id).catch(() => null),
+      ])
+    : [[], null];
   const downloadHref = effectiveOrder ? buildOrderJsonDownloadHref(effectiveOrder) : null;
   const downloadFilename = effectiveOrder ? getOrderDownloadFilename(effectiveOrder) : null;
   const providerOrders = (effectiveOrder?.providerOrders ?? []) as FulfillmentProviderOrder[];
@@ -467,6 +476,20 @@ export default async function AdminOrdersPage({ searchParams }: AdminOrdersPageP
             </div>
           </section>
 
+{deliveryProof ? (
+  <section className="space-y-3">
+    <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-white/50">Delivery proof</h3>
+    <DeliveryProofPanel proof={deliveryProof} />
+  </section>
+) : null}
+
+          {stateEvents.length ? (
+            <section className="space-y-3">
+              <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-white/50">Order timeline</h3>
+              <OrderTimeline events={stateEvents} />
+            </section>
+          ) : null}
+
           {providerOrders.length ? (
             <section className="space-y-3" data-testid="admin-provider-automation">
               <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-white/50">Provider automation</h3>
@@ -632,6 +655,195 @@ function ProviderLoadAlertsCallout({ alerts }: { alerts: ProviderLoadAlert[] }) 
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+function OrderTimeline({ events }: { events: OrderStateEvent[] }) {
+  const automationEventTypes = new Set([
+    "replay_scheduled",
+    "replay_executed",
+    "refill_requested",
+    "refill_completed",
+    "automation_alert",
+  ]);
+  const automationEventLabels: Record<string, string> = {
+    replay_scheduled: "Automation replay scheduled",
+    replay_executed: "Automation replay executed",
+    refill_requested: "Refill requested",
+    refill_completed: "Refill completed",
+    automation_alert: "Automation alert",
+  };
+  if (!events.length) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white/60">
+        No timeline entries yet. Status changes and manual notes will appear here.
+      </div>
+    );
+  }
+  const sorted = [...events].sort(
+    (a, b) => new Date(b.createdAt).valueOf() - new Date(a.createdAt).valueOf(),
+  );
+  return (
+    <ol className="space-y-3">
+      {sorted.map((event) => (
+        <li key={event.id} className="rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white/80">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <p className="font-semibold text-white">
+                {event.eventType === "state_change"
+                  ? `Status: ${ORDER_STATUS_LABELS[event.toStatus ?? ""] ?? event.toStatus ?? "—"}`
+                  : automationEventLabels[event.eventType] ?? event.eventType.replace("_", " ")}
+              </p>
+              {automationEventTypes.has(event.eventType) || event.actorType === "automation" ? (
+                <span className="rounded-full bg-amber-400/20 px-2 py-0.5 text-xs uppercase tracking-[0.3em] text-amber-200">
+                  Automation
+                </span>
+              ) : null}
+            </div>
+            <span className="text-xs uppercase tracking-[0.3em] text-white/50">
+              {ORDER_DATE_TIME_FORMATTER.format(new Date(event.createdAt))}
+            </span>
+          </div>
+          {event.fromStatus || event.toStatus ? (
+            <p className="text-xs text-white/60">
+              {ORDER_STATUS_LABELS[event.fromStatus ?? ""] ?? event.fromStatus ?? "—"} →
+              {ORDER_STATUS_LABELS[event.toStatus ?? ""] ?? event.toStatus ?? "—"}
+            </p>
+          ) : null}
+          {event.notes ? <p className="mt-2 text-white/70">{event.notes}</p> : null}
+          {event.actorLabel || event.actorType ? (
+            <p className="mt-2 text-xs text-white/50">
+              Actor: {event.actorLabel ?? event.actorType ?? "unknown"}
+            </p>
+          ) : null}
+          {(automationEventTypes.has(event.eventType) || event.actorType === "automation") && event.metadata ? (
+            <AutomationMetadata metadata={event.metadata} />
+          ) : null}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function AutomationMetadata({ metadata }: { metadata: Record<string, unknown> }) {
+  const status = typeof metadata.status === "string" ? metadata.status : null;
+  const scheduledFor =
+    typeof metadata.scheduledFor === "string"
+      ? ORDER_DATE_TIME_FORMATTER.format(new Date(metadata.scheduledFor))
+      : null;
+  const performedAt =
+    typeof metadata.performedAt === "string"
+      ? ORDER_DATE_TIME_FORMATTER.format(new Date(metadata.performedAt))
+      : null;
+  const trigger =
+    typeof metadata.trigger === "string"
+      ? metadata.trigger.replace(/_/g, " ").trim()
+      : null;
+
+  if (!status && !scheduledFor && !performedAt && !trigger) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 text-xs text-white/60">
+      {status ? <p>Status: {status}</p> : null}
+      {scheduledFor ? <p>Scheduled for: {scheduledFor}</p> : null}
+      {performedAt ? <p>Performed: {performedAt}</p> : null}
+      {trigger ? <p>Source: {trigger}</p> : null}
+    </div>
+  );
+}
+
+function DeliveryProofPanel({ proof }: { proof: OrderDeliveryProof }) {
+  if (!proof.items.length) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white/60">
+        No delivery snapshots captured for this order yet. Link a validated social account to the order item to start collecting before/after metrics.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 rounded-2xl border border-white/10 bg-black/40 p-4">
+      {proof.items.map((item) => (
+        <div key={item.itemId} className="space-y-3 border-b border-white/10 pb-3 last:border-b-0 last:pb-0">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-base font-semibold text-white">{item.productTitle}</p>
+              {item.account?.handle ? (
+                <p className="text-sm text-white/60">
+                  @{item.account.handle} · {item.account.platform ?? "unknown platform"}
+                </p>
+              ) : (
+                <p className="text-sm text-white/60">No social account linked</p>
+              )}
+            </div>
+            {item.latest?.metrics?.followerCount || item.baseline?.metrics?.followerCount ? (
+              <div className="text-right text-sm text-white/80">
+                <p>Followers</p>
+                <p className="text-2xl font-semibold text-white">
+                  {Number(item.latest?.metrics?.followerCount ?? item.baseline?.metrics?.followerCount ?? 0).toLocaleString()}
+                </p>
+                {item.baseline?.metrics?.followerCount ? (
+                  <p className="text-xs text-white/50">
+                    Baseline {Number(item.baseline.metrics.followerCount).toLocaleString()}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <SnapshotCard label="Baseline" snapshot={item.baseline} />
+            <SnapshotCard label="Latest" snapshot={item.latest} />
+          </div>
+          {item.history.length ? (
+            <details className="rounded-lg border border-white/10 bg-black/30 p-3 text-sm text-white/60">
+              <summary className="cursor-pointer text-white">Snapshot history ({item.history.length})</summary>
+              <div className="mt-2 space-y-2">
+                {item.history.map((entry, index) => (
+                  <SnapshotCard key={`${item.itemId}-history-${index}`} label={`Snapshot ${index + 1}`} snapshot={entry} compact />
+                ))}
+              </div>
+            </details>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SnapshotCard({
+  label,
+  snapshot,
+  compact = false,
+}: {
+  label: string;
+  snapshot: DeliveryProofItem["latest"];
+  compact?: boolean;
+}) {
+  if (!snapshot) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-black/30 p-3 text-sm text-white/50">
+        <p className="text-xs uppercase tracking-[0.3em] text-white/40">{label}</p>
+        <p className="mt-2 text-white/60">Not captured.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/30 p-3 text-sm text-white/80">
+      <p className="text-xs uppercase tracking-[0.3em] text-white/40">{label}</p>
+      {snapshot.recordedAt ? (
+        <p className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">
+          {ORDER_DATE_TIME_FORMATTER.format(new Date(snapshot.recordedAt))}
+        </p>
+      ) : null}
+      <pre className={`mt-2 overflow-auto whitespace-pre-wrap text-xs text-white/70 ${compact ? "max-h-32" : "max-h-48"}`}>
+        {JSON.stringify(snapshot.metrics, null, 2)}
+      </pre>
+      {snapshot.warnings?.length ? (
+        <p className="mt-2 text-xs text-amber-200">Warnings: {snapshot.warnings.join(", ")}</p>
+      ) : null}
     </div>
   );
 }

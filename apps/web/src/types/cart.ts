@@ -5,6 +5,7 @@ import type {
   ProductSupportChannel,
   ServiceOverrideRule,
 } from "@/types/product";
+import type { StorefrontPlatformSelection } from "@/shared/storefront-state";
 
 export type CartOptionCalculatorPreview = {
   expression: string;
@@ -102,6 +103,7 @@ export type CartItem = {
   presetId?: string | null;
   presetLabel?: string | null;
   experience?: CartProductExperience;
+  platformContext?: StorefrontPlatformSelection | null;
 };
 
 export type CartSelectionSnapshot = {

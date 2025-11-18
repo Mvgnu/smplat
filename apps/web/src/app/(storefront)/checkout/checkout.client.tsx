@@ -19,7 +19,7 @@ import {
   queueCheckoutIntents,
   type CheckoutIntentDraft
 } from "@/lib/loyalty/intents";
-import type { PricingExperiment } from "@/types/pricing-experiments";
+import type { PricingExperiment, PricingExperimentVariant } from "@/types/pricing-experiments";
 import { selectPricingExperimentVariant } from "@/lib/pricing-experiments";
 import { logPricingExperimentEvents, type PricingExperimentEventInput } from "@/lib/pricing-experiment-events";
 const alertDescriptions: Record<string, string> = {
@@ -270,7 +270,8 @@ export function CheckoutPageClient({
         title: item.title,
         quantity: item.quantity,
         unitPrice: item.unitPrice,
-        totalPrice: item.unitPrice * item.quantity
+        totalPrice: item.unitPrice * item.quantity,
+        platformLabel: item.platformContext?.label ?? null
       })),
     [items]
   );
@@ -284,6 +285,7 @@ export function CheckoutPageClient({
       trustLabel: string;
       loyaltyValue: string;
       loyaltyReward: string;
+      platformLabel: string | null;
     }> = [];
     let projectedPoints = 0;
     const snapshot: Array<{
@@ -296,6 +298,14 @@ export function CheckoutPageClient({
       highlights?: string[];
       sla?: string | null;
       pointsTotal?: number;
+      platformContext?:
+        | {
+            id: string;
+            label: string;
+            handle?: string | null;
+            platformType?: string | null;
+          }
+        | null;
     }> = [];
 
     items.forEach((item) => {
@@ -313,7 +323,8 @@ export function CheckoutPageClient({
         trustValue: experience.trustSignal.value,
         trustLabel: experience.trustSignal.label,
         loyaltyValue: experience.loyaltyHint.value,
-        loyaltyReward: experience.loyaltyHint.reward
+        loyaltyReward: experience.loyaltyHint.reward,
+        platformLabel: item.platformContext?.label ?? null,
       });
       snapshot.push({
         productId: item.productId,
@@ -327,7 +338,15 @@ export function CheckoutPageClient({
         pointsTotal:
           experience.loyaltyHint.pointsEstimate != null
             ? experience.loyaltyHint.pointsEstimate * item.quantity
-            : undefined
+            : undefined,
+        platformContext: item.platformContext
+          ? {
+              id: item.platformContext.id,
+              label: item.platformContext.label,
+              handle: item.platformContext.handle ?? null,
+              platformType: item.platformContext.platformType ?? null,
+            }
+          : null,
       });
     });
 
@@ -340,67 +359,88 @@ export function CheckoutPageClient({
   const orderExperiences = orderExperienceSummary.entries;
   const projectedLoyaltyPoints = orderExperienceSummary.projectedPoints;
   const journeyCartSnapshot = orderExperienceSummary.snapshot;
-  const cartPricingExperiments = useMemo(() => {
-    const experimentsBySlug = new Map<string, PricingExperiment>();
+  const pricingExperimentLookup = useMemo(() => {
+    const map = new Map<string, PricingExperiment>();
     pricingExperiments.forEach((experiment) => {
       const key = experiment.targetProductSlug?.toLowerCase();
       if (key) {
-        experimentsBySlug.set(key, experiment);
+        map.set(key, experiment);
       }
     });
-    const seen = new Set<string>();
-    return items
-      .map((item) => {
-        const key = item.slug.toLowerCase();
-        const experiment = experimentsBySlug.get(key);
-        if (!experiment || seen.has(experiment.slug)) {
-          return null;
-        }
-        seen.add(experiment.slug);
-        return {
-          experiment,
-          productTitle: item.title,
-          slug: item.slug,
-          quantity: item.quantity,
-          lineTotalCents: Math.round(item.unitPrice * item.quantity * 100),
-        };
-      })
-      .filter(
-        (
-          entry,
-        ): entry is {
-          experiment: PricingExperiment;
-          productTitle: string;
-          slug: string;
-          quantity: number;
-          lineTotalCents: number;
-        } => Boolean(entry),
-      );
-  }, [items, pricingExperiments]);
+    return map;
+  }, [pricingExperiments]);
+
+  const cartPricingExperiments = useMemo(() => {
+    type AggregatedExperiment = {
+      experiment: PricingExperiment;
+      variant: PricingExperimentVariant;
+      productTitles: Set<string>;
+      productSlugs: Set<string>;
+      quantity: number;
+      lineTotalCents: number;
+    };
+
+    const aggregated = new Map<string, AggregatedExperiment>();
+    items.forEach((item) => {
+      const experiment = pricingExperimentLookup.get(item.slug.toLowerCase());
+      if (!experiment) {
+        return;
+      }
+      const variant = selectPricingExperimentVariant(experiment);
+      if (!variant) {
+        return;
+      }
+      const lineTotalCents = Math.round(item.unitPrice * item.quantity * 100);
+      const existing = aggregated.get(experiment.slug);
+      if (existing) {
+        existing.quantity += item.quantity;
+        existing.lineTotalCents += lineTotalCents;
+        existing.productTitles.add(item.title);
+        existing.productSlugs.add(item.slug);
+        return;
+      }
+      aggregated.set(experiment.slug, {
+        experiment,
+        variant,
+        quantity: item.quantity,
+        lineTotalCents,
+        productTitles: new Set([item.title]),
+        productSlugs: new Set([item.slug]),
+      });
+    });
+
+    return Array.from(aggregated.values()).map((entry) => ({
+      experiment: entry.experiment,
+      variant: entry.variant,
+      quantity: entry.quantity,
+      lineTotalCents: entry.lineTotalCents,
+      productTitles: Array.from(entry.productTitles),
+      productSlugs: Array.from(entry.productSlugs),
+    }));
+  }, [items, pricingExperimentLookup]);
 
   const pricingExperimentContext = useMemo(
     () =>
-      cartPricingExperiments.map(({ experiment, slug, lineTotalCents, quantity }) => {
-        const assignedVariant = selectPricingExperimentVariant(experiment);
-        return {
-          slug: experiment.slug,
-          status: experiment.status,
-          assignmentStrategy: experiment.assignmentStrategy,
-          targetProductSlug: experiment.targetProductSlug,
-          featureFlagKey: experiment.featureFlagKey,
-          sourceProductSlug: slug,
-          assignedVariantKey: assignedVariant?.key ?? null,
-          lineTotalCents,
-          quantity,
-          variants: experiment.variants.map((variant) => ({
-            key: variant.key,
-            isControl: variant.isControl,
-            adjustmentKind: variant.adjustmentKind,
-            priceDeltaCents: variant.priceDeltaCents,
-            priceMultiplier: variant.priceMultiplier,
-          })),
-        };
-      }),
+      cartPricingExperiments.map(({ experiment, variant, productSlugs, lineTotalCents, quantity }) => ({
+        slug: experiment.slug,
+        status: experiment.status,
+        assignmentStrategy: experiment.assignmentStrategy,
+        targetProductSlug: experiment.targetProductSlug,
+        featureFlagKey: experiment.featureFlagKey,
+        sourceProductSlugs: productSlugs,
+        assignedVariantKey: variant.key,
+        assignedVariantName: variant.name,
+        assignedVariantIsControl: variant.isControl,
+        lineTotalCents,
+        quantity,
+        variants: experiment.variants.map((entry) => ({
+          key: entry.key,
+          isControl: entry.isControl,
+          adjustmentKind: entry.adjustmentKind,
+          priceDeltaCents: entry.priceDeltaCents,
+          priceMultiplier: entry.priceMultiplier,
+        })),
+      })),
     [cartPricingExperiments]
   );
 
@@ -409,11 +449,7 @@ export function CheckoutPageClient({
       return;
     }
     const events: PricingExperimentEventInput[] = [];
-    cartPricingExperiments.forEach(({ experiment, lineTotalCents, quantity }) => {
-      const variant = selectPricingExperimentVariant(experiment);
-      if (!variant) {
-        return;
-      }
+    cartPricingExperiments.forEach(({ experiment, variant, lineTotalCents, quantity }) => {
       events.push({
         slug: experiment.slug,
         variantKey: variant.key,
@@ -769,7 +805,8 @@ export function CheckoutPageClient({
                 typeof item.loyaltyHint.pointsEstimate === "number" ? item.loyaltyHint.pointsEstimate : null
             }
           : null,
-        pointsTotal: typeof item.pointsTotal === "number" ? item.pointsTotal : null
+        pointsTotal: typeof item.pointsTotal === "number" ? item.pointsTotal : null,
+        platformContext: item.platformContext ?? null
       }));
 
       const journeyContext = {
@@ -836,9 +873,34 @@ export function CheckoutPageClient({
               presetId: item.presetId ?? null,
               presetLabel: item.presetLabel ?? null
             },
-            attributes: {
-              customFields: item.customFields
-            }
+            attributes: (() => {
+              const attributes: Record<string, unknown> = {
+                customFields: item.customFields
+              };
+              const experiment = pricingExperimentLookup.get(item.slug.toLowerCase());
+              const variant = experiment ? selectPricingExperimentVariant(experiment) : null;
+              if (experiment && variant) {
+                attributes.pricingExperiment = {
+                  slug: experiment.slug,
+                  name: experiment.name,
+                  variantKey: variant.key,
+                  variantName: variant.name,
+                  isControl: variant.isControl,
+                  assignmentStrategy: experiment.assignmentStrategy,
+                  status: experiment.status,
+                  featureFlagKey: experiment.featureFlagKey ?? null,
+                };
+              }
+              return attributes;
+            })(),
+            platform_context: item.platformContext
+              ? {
+                  id: item.platformContext.id,
+                  label: item.platformContext.label,
+                  handle: item.platformContext.handle ?? null,
+                  platformType: item.platformContext.platformType ?? null,
+                }
+              : null,
           }))
         },
         payment: {
@@ -1153,6 +1215,9 @@ export function CheckoutPageClient({
                 <p className="text-white/50">
                   Line total {formatCurrency(line.totalPrice, currency)}
                 </p>
+                {line.platformLabel ? (
+                  <p className="text-xs text-white/60">Platform: {line.platformLabel}</p>
+                ) : null}
               </div>
             ))}
           </div>
@@ -1164,23 +1229,34 @@ export function CheckoutPageClient({
                   Beta
                 </span>
               </div>
-              {cartPricingExperiments.map(({ experiment, productTitle }) => (
+              {cartPricingExperiments.map(({ experiment, variant, productTitles }) => (
                 <div key={experiment.slug} className="rounded-xl border border-white/10 bg-black/20 p-3 text-white/80">
                   <p className="text-sm font-semibold text-white">{experiment.name}</p>
                   <p className="text-xs text-white/60">
-                    Applied to {productTitle} · {experiment.assignmentStrategy}
+                    Applied to {productTitles.join(", ")} · {experiment.assignmentStrategy}
                   </p>
-                  <ul className="mt-2 space-y-1 text-xs text-white/70">
-                    {experiment.variants.map((variant) => (
-                      <li key={`${experiment.slug}-${variant.key}`} className="flex items-center justify-between">
-                        <span>
-                          {variant.name}
-                          {variant.isControl ? " · Control" : ""}
-                        </span>
-                        <span>{formatCheckoutExperimentAdjustment(variant, currency)}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-3 text-xs">
+                    <p className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">Active variant</p>
+                    <p className="text-sm font-semibold text-white">
+                      {variant.name}
+                      {variant.isControl ? " · Control" : " · Challenger"}
+                    </p>
+                    <p className="text-white/70">{formatCheckoutExperimentAdjustment(variant, currency)}</p>
+                  </div>
+                  <details className="mt-2 text-xs text-white/60">
+                    <summary className="cursor-pointer text-white/70">View compared variants</summary>
+                    <ul className="mt-2 space-y-1 text-xs text-white/70">
+                      {experiment.variants.map((entry) => (
+                        <li key={`${experiment.slug}-${entry.key}`} className="flex items-center justify-between">
+                          <span>
+                            {entry.name}
+                            {entry.isControl ? " · Control" : ""}
+                          </span>
+                          <span>{formatCheckoutExperimentAdjustment(entry, currency)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
                 </div>
               ))}
               <p className="text-[11px] text-white/60">
@@ -1200,6 +1276,9 @@ export function CheckoutPageClient({
                 {orderExperiences.map((entry) => (
                   <li key={entry.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
                     <p className="text-sm font-semibold text-white">{entry.title}</p>
+                    {entry.platformLabel ? (
+                      <p className="text-white/60">Platform: {entry.platformLabel}</p>
+                    ) : null}
                     <p className="text-white/60">
                       {entry.trustValue} · {entry.trustLabel}
                     </p>

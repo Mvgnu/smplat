@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -27,6 +28,9 @@ import {
   persistServerFeed
 } from "@/lib/loyalty/intents";
 import { LoyaltyNudgeRail } from "@/components/loyalty/nudge-rail";
+import { usePlatformSelection, useStorefrontStateActions } from "@/context/storefront-state";
+import { usePlatformRouteUpdater } from "@/hooks/usePlatformRouting";
+import { buildStorefrontQueryString } from "@/lib/storefront-query";
 
 const POINTS_DISPLAY = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const REFERRAL_REWARD_POINTS = 500;
@@ -134,6 +138,7 @@ type LoyaltyHubClientProps = {
   nudges: LoyaltyNudgeFeed;
   timeline: LoyaltyTimelineResult;
   csrfToken: string;
+  focusExperimentSlug?: string | null;
 };
 
 type RedemptionFormState = {
@@ -161,8 +166,10 @@ export function LoyaltyHubClient({
   nextActions: nextActionFeed,
   nudges: nudgeFeed,
   timeline,
-  csrfToken
+  csrfToken,
+  focusExperimentSlug
 }: LoyaltyHubClientProps) {
+  const router = useRouter();
   const [isRedeeming, startRedeem] = useTransition();
   const [state, setState] = useState<RedemptionFormState>(() => initialState(member));
   const [copiedCode, setCopiedCode] = useState(false);
@@ -175,6 +182,47 @@ export function LoyaltyHubClient({
     campaignSlug: "",
     checkoutOrderId: ""
   });
+  const [experimentDismissed, setExperimentDismissed] = useState(false);
+  const [experimentContextSlug, setExperimentContextSlug] = useState<string | null>(() => {
+    if (!focusExperimentSlug) {
+      return null;
+    }
+    return focusExperimentSlug.trim().toLowerCase();
+  });
+  const platformSelection = usePlatformSelection();
+  const { setPlatform } = useStorefrontStateActions();
+  const updateRoute = usePlatformRouteUpdater();
+  const platformBrowseHref =
+    platformSelection?.id && platformSelection.id.length > 0
+      ? `/products${buildStorefrontQueryString({ platform: platformSelection.id })}`
+      : "/products";
+  const clearPlatformContext = useCallback(() => {
+    setPlatform(null);
+    updateRoute(null);
+  }, [setPlatform, updateRoute]);
+
+  useEffect(() => {
+    setExperimentDismissed(false);
+  }, [focusExperimentSlug]);
+
+  useEffect(() => {
+    if (!focusExperimentSlug || experimentDismissed) {
+      return;
+    }
+    const normalized = focusExperimentSlug.trim().toLowerCase();
+    setExperimentContextSlug(normalized);
+    setTimelineFilters((previous) => ({
+      ...previous,
+      campaignSlug: normalized
+    }));
+  }, [focusExperimentSlug, experimentDismissed]);
+
+  const clearExperimentContext = useCallback(() => {
+    setExperimentContextSlug(null);
+    setExperimentDismissed(true);
+    setTimelineFilters((previous) => ({ ...previous, campaignSlug: "" }));
+    router.replace("/account/loyalty", { scroll: false });
+  }, [router]);
 
   const sortedRewards = useMemo(
     () => rewards.filter((reward) => reward.isActive).sort((a, b) => a.costPoints - b.costPoints),
@@ -406,6 +454,81 @@ export function LoyaltyHubClient({
           </div>
         </div>
       </section>
+
+      <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-white/50">Platform scope</p>
+            {platformSelection ? (
+              <>
+                <p className="text-lg font-semibold text-white">{platformSelection.label}</p>
+                <p className="text-sm text-white/70">
+                  Loyalty history, nudges, and reward hints prioritize this channel. Jump to the storefront to keep
+                  purchases aligned.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-lg font-semibold text-white">No channel selected</p>
+                <p className="text-sm text-white/70">
+                  Save a platform to sync campaign recommendations, cart context, and loyalty telemetry.
+                </p>
+              </>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-[0.25em] text-white/70">
+            {platformSelection ? (
+              <>
+                <Link
+                  href={platformBrowseHref}
+                  className="rounded-full border border-white/20 px-4 py-1 text-white/80 transition hover:border-white/50 hover:text-white"
+                >
+                  Browse {platformSelection.label}
+                </Link>
+                <button
+                  type="button"
+                  onClick={clearPlatformContext}
+                  className="rounded-full border border-white/20 px-4 py-1 text-white/80 transition hover:border-white/50 hover:text-white"
+                >
+                  Clear context
+                </button>
+              </>
+            ) : (
+              <Link
+                href="/products#platform"
+                className="rounded-full border border-white/20 px-4 py-1 text-white/80 transition hover:border-white/50 hover:text-white"
+              >
+                Choose platform
+              </Link>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {experimentContextSlug ? (
+        <section className="rounded-3xl border border-amber-400/40 bg-amber-500/10 p-6 text-sm text-white/80">
+          <p className="text-xs uppercase tracking-[0.3em] text-amber-200/70">Experiment context</p>
+          <p className="mt-2">
+            Filtering loyalty insights for <span className="font-semibold text-white">{focusExperimentSlug}</span>. The activity timeline is scoped to
+            matching campaign slugs so you can inspect nudges and ledger entries tied to this variant.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-3">
+            <Link
+              href={`/account/orders?experiment=${encodeURIComponent(focusExperimentSlug ?? experimentContextSlug ?? "")}`}
+              className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/80 transition hover:border-white/60 hover:text-white"
+            >
+              View related receipts
+            </Link>
+            <button
+              type="button"
+              onClick={clearExperimentContext}
+              className="inline-flex items-center justify-center rounded-full border border-transparent px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:text-white"
+            >
+              Clear experiment focus
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <LoyaltyNudgeRail
         title="Stay on track"

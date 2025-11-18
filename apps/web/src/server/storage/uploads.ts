@@ -46,15 +46,29 @@ export function isSignedUploadEnabled(): boolean {
   return Boolean(s3Client && assetBucket && assetPublicBaseUrl);
 }
 
+type SignedUploadOptions = {
+  prefix?: string;
+};
+
+const buildStoragePrefix = (prefix?: string): string => {
+  const value = (prefix ?? assetPrefix ?? "").trim();
+  if (!value) {
+    return "uploads";
+  }
+  return value.replace(/\/+$/, "");
+};
+
 export async function createSignedProductUpload(
   request: SignedUploadRequest,
+  options?: SignedUploadOptions,
 ): Promise<SignedUploadResponse> {
   if (!isSignedUploadEnabled() || !s3Client) {
     throw new Error("Signed uploads are not configured. Set ASSET_BUCKET and ASSET_PUBLIC_BASE_URL.");
   }
 
   const safeName = sanitizeFileName(request.fileName || "asset");
-  const storageKey = `${assetPrefix}/${new Date().toISOString().slice(0, 10)}/${randomUUID()}-${safeName}`;
+  const prefix = buildStoragePrefix(options?.prefix);
+  const storageKey = `${prefix}/${new Date().toISOString().slice(0, 10)}/${randomUUID()}-${safeName}`;
   const contentType = request.contentType && request.contentType.length > 0
     ? request.contentType
     : "application/octet-stream";

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 
 import { FaqAccordion } from "@/components/faq/accordion";
 import {
@@ -34,19 +35,26 @@ import type {
   CartOptionCalculatorPreview,
   CartOptionSelection,
   CartProductExperience,
+  CartSelectionSnapshot,
   CartSubscriptionSelection,
 } from "@/types/cart";
 import type { CatalogBundleRecommendation, CatalogExperimentResponse } from "@smplat/types";
 import type { PricingExperiment, PricingExperimentVariant } from "@/types/pricing-experiments";
 import { selectPricingExperimentVariant } from "@/lib/pricing-experiments";
 import { logPricingExperimentEvents } from "@/lib/pricing-experiment-events";
+import { buildStorefrontQueryString } from "@/lib/storefront-query";
 import {
   buildBundleExperimentOverlay,
   hasGuardrailBreaches,
 } from "../experiment-overlay";
 import type { MarketingContent } from "../marketing-content";
 import { ProductExperienceCard } from "@/components/storefront/product-experience-card";
-import type { StorefrontProduct } from "@/data/storefront-experience";
+import { storefrontExperience, type StorefrontProduct } from "@/data/storefront-experience";
+import { usePlatformSelection, useStorefrontStateActions } from "@/context/storefront-state";
+import { usePlatformRouteUpdater } from "@/hooks/usePlatformRouting";
+import { consumeQuickOrderSession } from "@/lib/quick-order-session";
+import { trackQuickOrderAbort, trackQuickOrderComplete } from "@/lib/telemetry/events";
+import type { QuickOrderTelemetryContext } from "@/types/quick-order";
 
 type ConfigSelection = {
   total: number;
@@ -323,6 +331,65 @@ function cloneSelection(selection: ConfigSelection): ConfiguratorSelection {
   };
 }
 
+const normalizeQuickOrderHandle = (handle: string | null | undefined): string | null => {
+  if (!handle || typeof handle !== "string") {
+    return null;
+  }
+  const trimmed = handle.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = trimmed.startsWith("@") ? trimmed : `@${trimmed.replace(/^@/, "")}`;
+  return normalized;
+};
+
+function buildQuickOrderConfiguratorSelection(
+  snapshot: CartSelectionSnapshot | null | undefined,
+  fields: ProductDetail["customFields"],
+  platformHandle: string | null,
+): ConfiguratorSelection {
+  const selectedOptions: Record<string, string[]> = {};
+  snapshot?.options?.forEach((option) => {
+    if (!option.groupId || !option.optionId) {
+      return;
+    }
+    selectedOptions[option.groupId] = [
+      ...(selectedOptions[option.groupId] ?? []),
+      option.optionId,
+    ];
+  });
+
+  const addOns = snapshot?.addOns?.map((addOn) => addOn.id).filter((id): id is string => typeof id === "string" && id.length > 0) ?? [];
+  const subscriptionPlanId = snapshot?.subscriptionPlan?.id ?? undefined;
+  const customFieldValues: Record<string, string> = {};
+
+  if (platformHandle) {
+    const loweredHandle = platformHandle.toLowerCase();
+    let matchedField = false;
+    fields.forEach((field) => {
+      const label = (field.label ?? "").toLowerCase();
+      const fieldId = field.id.toLowerCase();
+      const matchesHandle = label.includes("handle") || fieldId.includes("handle");
+      const matchesUsername = label.includes("username") || fieldId.includes("username") || loweredHandle.includes(fieldId);
+      if (matchesHandle || matchesUsername) {
+        customFieldValues[field.id] = platformHandle;
+        matchedField = true;
+      }
+    });
+    if (!matchedField && fields[0]) {
+      customFieldValues[fields[0].id] = platformHandle;
+    }
+  }
+
+  return {
+    selectedOptions,
+    addOns,
+    subscriptionPlanId,
+    customFieldValues,
+    presetId: snapshot?.presetId ?? null,
+  };
+}
+
 function buildPresetSelection(preset: ConfiguratorPreset): ConfiguratorSelection {
   return {
     selectedOptions: Object.fromEntries(
@@ -506,8 +573,19 @@ export function ProductDetailClient({
   const [errors, setErrors] = useState<string[]>([]);
   const [confirmation, setConfirmation] = useState<string | null>(null);
   const [configPreset, setConfigPreset] = useState<ConfiguratorSelection | undefined>(undefined);
+  const [quickOrderPrefill, setQuickOrderPrefill] = useState<{
+    sessionId: string;
+    platformLabel: string;
+    platformHandle: string | null;
+    productTitle: string;
+    appliedSelection: boolean;
+    context: QuickOrderTelemetryContext | null;
+  } | null>(null);
+  const [quickOrderPrefillError, setQuickOrderPrefillError] = useState<string | null>(null);
   const configuratorSectionRef = useRef<HTMLDivElement | null>(null);
   const lastConfiguratorPresetRef = useRef<string | null>(null);
+  const quickOrderSessionAppliedRef = useRef<string | null>(null);
+  const searchParams = useSearchParams();
 
   const addItem = useCartStore((state) => state.addItem);
   const cartTotal = useCartStore(cartTotalSelector);
@@ -539,6 +617,53 @@ export function ProductDetailClient({
     });
     return map;
   }, [configurationPresets]);
+  const platformSelection = usePlatformSelection();
+  const { setPlatform } = useStorefrontStateActions();
+  const updateRoute = usePlatformRouteUpdater();
+  const platformDirectory = useMemo(() => {
+    const map = new Map<string, (typeof storefrontExperience.platforms)[number]>();
+    storefrontExperience.platforms.forEach((platform) => {
+      map.set(platform.id, platform);
+    });
+    return map;
+  }, []);
+  const eligiblePlatforms = useMemo(
+    () =>
+      product.channelEligibility
+        .map((id) => {
+          const entry = platformDirectory.get(id);
+          if (!entry) {
+            return null;
+          }
+          return {
+            id: entry.id,
+            label: entry.name,
+            description: entry.tagline ?? entry.description ?? "Recommended platform",
+          };
+        })
+        .filter((entry): entry is { id: string; label: string; description: string } => entry !== null),
+    [platformDirectory, product.channelEligibility],
+  );
+  const isEligibleForSelection = platformSelection ? product.channelEligibility.includes(platformSelection.id) : null;
+  const productScopedBrowseHref =
+    platformSelection?.id && platformSelection.id.length > 0
+      ? `/products${buildStorefrontQueryString({ platform: platformSelection.id })}`
+      : "/products";
+  const handleScopePlatform = useCallback(
+    (platformId: string) => {
+      const platform = platformDirectory.get(platformId);
+      if (!platform) {
+        return;
+      }
+      setPlatform({
+        id: platform.id,
+        label: platform.name,
+        platformType: platform.tagline,
+      });
+      updateRoute(platform.id);
+    },
+    [platformDirectory, setPlatform, updateRoute],
+  );
 
   useEffect(() => {
     const currentPresetId = selection.presetId ?? null;
@@ -740,6 +865,77 @@ export function ProductDetailClient({
     [focusConfigurator]
   );
 
+  useEffect(() => {
+    if (!searchParams) {
+      return;
+    }
+    const sessionId = searchParams.get("quickOrderSessionId");
+    if (!sessionId || quickOrderSessionAppliedRef.current === sessionId) {
+      return;
+    }
+    quickOrderSessionAppliedRef.current = sessionId;
+    const snapshot = consumeQuickOrderSession(sessionId);
+    if (!snapshot) {
+      setQuickOrderPrefillError("Quick-order context expired. Relaunch the workflow from Account → Orders.");
+      void trackQuickOrderAbort({
+        sessionId,
+        productId: product.id,
+        productTitle: product.title,
+        reason: "session_expired",
+        stage: "pdp_prefill",
+      });
+      return;
+    }
+    if (snapshot.context.productId && snapshot.context.productId !== product.id) {
+      setQuickOrderPrefillError("Quick-order session referenced a different service. Relaunch the workflow to refresh selections.");
+      void trackQuickOrderAbort({
+        sessionId,
+        context: snapshot.context,
+        reason: "product_mismatch",
+        stage: "pdp_prefill",
+      });
+      return;
+    }
+
+    const normalizedHandle = normalizeQuickOrderHandle(snapshot.context.platformHandle);
+    if (snapshot.context.platformType || snapshot.context.platformLabel) {
+      const nextPlatform = {
+        id: snapshot.context.platformType ?? snapshot.context.platformContextId ?? product.slug,
+        label: snapshot.context.platformLabel ?? product.title,
+        handle: normalizedHandle,
+        platformType: snapshot.context.platformType ?? undefined,
+      };
+      setPlatform(nextPlatform);
+      if (snapshot.context.platformType) {
+        updateRoute(snapshot.context.platformType);
+      }
+    }
+
+    const nextSelection = buildQuickOrderConfiguratorSelection(
+      snapshot.context.selection,
+      product.customFields,
+      normalizedHandle,
+    );
+    const hasSelection =
+      Object.keys(nextSelection.selectedOptions).length > 0 ||
+      nextSelection.addOns.length > 0 ||
+      typeof nextSelection.subscriptionPlanId === "string" ||
+      Object.keys(nextSelection.customFieldValues).length > 0 ||
+      nextSelection.presetId !== null;
+    if (hasSelection) {
+      applyConfigurationSelection(nextSelection, "Applied quick-order blueprint.");
+    }
+    setQuickOrderPrefill({
+      sessionId,
+      platformLabel: snapshot.context.platformLabel ?? "Saved platform",
+      platformHandle: normalizedHandle,
+      productTitle: snapshot.context.productTitle,
+      appliedSelection: hasSelection,
+      context: snapshot.context,
+    });
+    setQuickOrderPrefillError(null);
+  }, [applyConfigurationSelection, product, searchParams, setPlatform, updateRoute]);
+
   const validateCustomFields = (): string[] => {
     const issues: string[] = [];
     customFields.forEach((field) => {
@@ -818,6 +1014,20 @@ export function ProductDetailClient({
     if (validationErrors.length > 0) {
       setErrors(validationErrors);
       setConfirmation(null);
+      if (quickOrderPrefill) {
+        void trackQuickOrderComplete({
+          context: quickOrderPrefill.context ?? undefined,
+          sessionId: quickOrderPrefill.sessionId,
+          productId: product.id,
+          productTitle: product.title,
+          outcome: "failure",
+          blueprintApplied: quickOrderPrefill.appliedSelection,
+          errorCode: "validation",
+          metadata: {
+            validationIssues: validationErrors.length,
+          },
+        });
+      }
       return;
     }
 
@@ -927,8 +1137,25 @@ export function ProductDetailClient({
       supportChannels: product.fulfillmentSummary?.support ?? [],
       presetId: selection.presetId ?? null,
       presetLabel,
-      experience: cartExperience
+      experience: cartExperience,
+      platformContext: platformSelection ?? null
     });
+
+    if (quickOrderPrefill) {
+      void trackQuickOrderComplete({
+        context: quickOrderPrefill.context ?? undefined,
+        sessionId: quickOrderPrefill.sessionId,
+        productId: product.id,
+        productTitle: product.title,
+        outcome: "success",
+        blueprintApplied: quickOrderPrefill.appliedSelection,
+        metadata: {
+          configuredOptions: selectedOptionDetails.length,
+          configuredAddOns: selectedAddOnDetails.length,
+          subscriptionSelected: selection.subscriptionPlanId ? 1 : 0,
+        },
+      });
+    }
 
     setConfirmation("Service configuration added to cart.");
     setErrors([]);
@@ -973,8 +1200,91 @@ export function ProductDetailClient({
             ) : null}
             <ProductExperienceCard product={storefrontProduct} />
           </div>
+          <div className="grid gap-4 rounded-3xl border border-white/10 bg-black/30 p-6 text-sm text-white/80 md:grid-cols-2">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/50">Platform context</p>
+              {platformSelection ? (
+                <>
+                  <p className="text-base text-white">
+                    Shopping for <span className="font-semibold">{platformSelection.label}</span>
+                  </p>
+                  <p className="text-white/70">
+                    {isEligibleForSelection
+                      ? "This product is fully configured for your saved channel."
+                      : "This product isn’t configured for your current channel. Pick a recommended platform below to pivot."}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-base text-white">No channel selected yet</p>
+                  <p className="text-white/70">
+                    Save a platform context to keep product filters, cart, and loyalty prompts aligned.
+                  </p>
+                </>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href={productScopedBrowseHref}
+                  className="inline-flex items-center justify-center rounded-full border border-white/20 px-4 py-1 text-[11px] font-semibold uppercase tracking-[0.25em] text-white/80 transition hover:border-white/50 hover:text-white"
+                >
+                  {platformSelection ? `Browse ${platformSelection.label} products` : "Browse catalog"}
+                </Link>
+              </div>
+            </div>
+            {eligiblePlatforms.length > 0 ? (
+              <div className="space-y-3">
+                <p className="text-xs uppercase tracking-[0.3em] text-white/50">Eligible platforms</p>
+                <div className="flex flex-wrap gap-2">
+                  {eligiblePlatforms.map((platform) => (
+                    <button
+                      key={platform.id}
+                      type="button"
+                      onClick={() => handleScopePlatform(platform.id)}
+                      className={`rounded-2xl border px-4 py-2 text-left transition ${
+                        platformSelection?.id === platform.id
+                          ? "border-white bg-white/10 text-white"
+                          : "border-white/15 bg-white/5 text-white/80 hover:border-white/40 hover:text-white"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">{platform.label}</p>
+                      <p className="text-xs text-white/60">{platform.description}</p>
+                      {platformSelection?.id !== platform.id ? (
+                        <span className="mt-1 inline-block text-[0.6rem] uppercase tracking-[0.3em] text-white/50">
+                          Set context
+                        </span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
+
+      {quickOrderPrefill ? (
+        <section className="space-y-2 rounded-3xl border border-emerald-400/40 bg-emerald-500/10 p-5 text-sm text-white/80">
+          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/80">Quick-order session</p>
+          <p>
+            Reusing your last configuration for <span className="font-semibold">{quickOrderPrefill.productTitle}</span>
+            {quickOrderPrefill.platformLabel ? ` · ${quickOrderPrefill.platformLabel}` : ""}. Review the selections below and
+            launch checkout when ready.
+          </p>
+          {quickOrderPrefill.platformHandle ? (
+            <p className="text-xs text-white/70">Linked handle {quickOrderPrefill.platformHandle}</p>
+          ) : null}
+          <p className="text-xs text-white/60">
+            {quickOrderPrefill.appliedSelection
+              ? "Blueprint presets have been applied in the configurator."
+              : "We could not restore blueprint options—dial in selections before adding to cart."}
+          </p>
+        </section>
+      ) : quickOrderPrefillError ? (
+        <section className="rounded-3xl border border-amber-400/40 bg-amber-500/10 p-5 text-sm text-amber-100">
+          <p className="text-xs uppercase tracking-[0.3em] text-amber-200/80">Quick-order session</p>
+          <p>{quickOrderPrefillError}</p>
+        </section>
+      ) : null}
 
       {mediaGallery.length > 0 ? (
         <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
@@ -1360,14 +1670,19 @@ export function ProductDetailClient({
                     </p>
                     <ul className="space-y-1 rounded-xl border border-white/10 bg-white/5 p-3 text-white">
                       {experiment.variants.map((variant) => (
-                        <li key={`${experiment.slug}-${variant.key}`} className="flex items-center justify-between text-xs">
-                          <span>
-                            {variant.name}
-                            {variant.isControl ? " · Control" : ""}
-                          </span>
-                          <span className="text-white/70">
+                        <li key={`${experiment.slug}-${variant.key}`} className="space-y-1 rounded-lg border border-white/10 bg-black/20 p-3 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                            <span className="font-semibold text-white">{variant.name}</span>
+                            <span className="rounded-full border border-white/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.3em] text-white/60">
+                              {variant.isControl ? "Baseline" : "Live test"}
+                            </span>
+                          </div>
+                          <p className="text-white/70">
                             {formatPricingExperimentAdjustment(variant, product.currency)}
-                          </span>
+                          </p>
+                          {variant.description ? (
+                            <p className="text-white/60">{variant.description}</p>
+                          ) : null}
                         </li>
                       ))}
                     </ul>

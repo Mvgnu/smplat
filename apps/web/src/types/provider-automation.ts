@@ -1,6 +1,7 @@
 export type ProviderAutomationRunStatus = {
   ranAt: string;
   summary: Record<string, unknown>;
+  metadata?: Record<string, unknown> | null;
 };
 
 export type ProviderAutomationStatus = {

@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.db.session import get_session
@@ -53,6 +53,24 @@ class TaskToggleRequest(BaseModel):
     )
 
 
+class PlatformContextPayload(BaseModel):
+    """Normalized platform context snapshot from checkout."""
+
+    id: str = Field(..., description="Storefront platform identifier or saved handle")
+    label: str = Field(..., description="Display label shown during checkout/success flows")
+    handle: str | None = Field(
+        default=None,
+        description="Optional user handle or URL used for routing automations",
+    )
+    platform_type: str | None = Field(
+        default=None,
+        alias="platformType",
+        description="Platform classification (instagram, tiktok, etc.)",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class JourneyIngestRequest(BaseModel):
     """Payload captured from checkout success to enrich journeys."""
 
@@ -60,12 +78,63 @@ class JourneyIngestRequest(BaseModel):
     offer: dict[str, Any] | None = Field(default=None, description="Offer metadata presented at checkout")
     addons: list[dict[str, Any]] | None = Field(default=None, description="Add-ons accepted during checkout")
     support: dict[str, Any] | None = Field(default=None, description="Support contact context")
+    platformContexts: list[PlatformContextPayload] | None = Field(
+        default=None,
+        description="Platform contexts attached to the order’s line items",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ReferralRequest(BaseModel):
     """Referral copy telemetry payload."""
 
     referral_code: str = Field(..., description="Referral code surfaced to the user")
+
+
+class PricingExperimentRecord(BaseModel):
+    """Priced experiment segmentation payload."""
+
+    slug: str = Field(..., description="Experiment slug")
+    variant_key: str = Field(..., alias="variantKey", description="Assigned variant key")
+    variant_name: str | None = Field(
+        default=None,
+        alias="variantName",
+        description="Human-readable variant name",
+    )
+    is_control: bool | None = Field(
+        default=None,
+        alias="isControl",
+        description="Whether the variant is a control arm",
+    )
+    assignment_strategy: str | None = Field(
+        default=None,
+        alias="assignmentStrategy",
+        description="Assignment strategy used to pick variants",
+    )
+    status: str | None = Field(
+        default=None,
+        description="Experiment status when the assignment occurred",
+    )
+    feature_flag_key: str | None = Field(
+        default=None,
+        alias="featureFlagKey",
+        description="Feature flag gating the storefront copy for this experiment",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class PricingExperimentsRequest(BaseModel):
+    """Batch of experiment segments to record."""
+
+    experiments: list[PricingExperimentRecord] = Field(
+        ...,
+        min_length=1,
+        description="Experiments assigned during checkout/success flows",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 @router.get(
@@ -177,5 +246,26 @@ async def record_referral(
 
     service = OnboardingService(db)
     await service.record_referral_copy(order_id, referral_code=request.referral_code)
+    await db.commit()
+    return {"status": "accepted"}
+
+
+@router.post(
+    "/pricing-experiments",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def record_pricing_experiments(
+    order_id: UUID,
+    request: PricingExperimentsRequest,
+    db=Depends(get_session),
+) -> dict[str, str]:
+    """Record pricing experiment segmentation details for analytics."""
+
+    service = OnboardingService(db)
+    await service.record_pricing_experiment_segment(
+        order_id,
+        experiments=[experiment.dict(by_alias=True) for experiment in request.experiments],
+    )
     await db.commit()
     return {"status": "accepted"}

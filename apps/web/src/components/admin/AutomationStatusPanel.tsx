@@ -5,6 +5,11 @@ import type {
   ProviderAutomationRunStatus,
   ProviderAutomationHistory,
 } from "@/types/provider-automation";
+import { collectAutoGuardrailActions } from "@/lib/automation-actions";
+import { AutoGuardrailActionChip } from "./AutoGuardrailActionChip";
+import { extractWorkflowTelemetrySummary } from "@/lib/workflow-telemetry";
+import { AutomationWorkflowTelemetry } from "./AutomationWorkflowTelemetry.client";
+import { QuickOrderWorkflowTelemetry } from "@/components/account/QuickOrderWorkflowTelemetry.client";
 
 type AutomationStatusPanelProps = {
   status: ProviderAutomationStatus | null;
@@ -36,6 +41,11 @@ export function AutomationStatusPanel({
   const loadAlertsDigest = Array.isArray(alertSummary["loadAlertsDigest"])
     ? (alertSummary["loadAlertsDigest"] as Record<string, unknown>[])
     : [];
+  const alertAutoActions =
+    collectAutoGuardrailActions(alertPrimary ?? history?.alerts?.[0] ?? null) ?? [];
+  const alertWorkflowTelemetry =
+    extractWorkflowTelemetrySummary(alertPrimary?.metadata ?? alertPrimary?.summary ?? null) ??
+    extractWorkflowTelemetrySummary(history?.alerts?.[0]?.metadata ?? history?.alerts?.[0]?.summary ?? null);
 
   const entries: Array<{
     label: string;
@@ -67,7 +77,7 @@ export function AutomationStatusPanel({
           <p className="text-sm text-white/60">Latest Celery runs recorded by replay + alert workers.</p>
         </div>
       </div>
-      {(backlogValue !== null || nextScheduledAt || alertDigest.length > 0 || loadAlertsDigest.length > 0) && (
+      {(backlogValue !== null || nextScheduledAt || alertDigest.length > 0 || loadAlertsDigest.length > 0 || alertAutoActions.length > 0) && (
         <div className="grid gap-3 md:grid-cols-2">
           {(backlogValue !== null || nextScheduledAt) && (
             <div className="rounded-xl border border-white/10 bg-black/40 p-3">
@@ -121,6 +131,19 @@ export function AutomationStatusPanel({
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+          {alertAutoActions.length > 0 && (
+            <div className="rounded-xl border border-white/10 bg-black/40 p-3">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/40">Auto guardrail actions</p>
+              <div className="mt-2 flex flex-wrap gap-2 text-[0.65rem] uppercase tracking-[0.2em] text-white/70">
+                {alertAutoActions.slice(0, 4).map((action, index) => (
+                  <AutoGuardrailActionChip
+                    key={action.followUpId ?? `${action.providerId}-${action.action}-${index}`}
+                    action={action}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -215,6 +238,8 @@ function AutomationStatusCard({
         key !== "alertsDigest" &&
         key !== "loadAlertsDigest" &&
         key !== "loadAlerts" &&
+        key !== "autoPausedProviders" &&
+        key !== "autoResumedProviders" &&
         key !== "scheduledBacklog" &&
         key !== "nextScheduledAt",
     )
@@ -226,6 +251,11 @@ function AutomationStatusCard({
   const nextScheduledAt =
     typeof summaryRecord["nextScheduledAt"] === "string"
       ? (summaryRecord["nextScheduledAt"] as string)
+      : null;
+  const workflowTelemetryFallback =
+    label === "Alert worker"
+      ? extractWorkflowTelemetrySummary(data?.metadata ?? data?.summary ?? null) ??
+        extractWorkflowTelemetrySummary(history?.[0]?.metadata ?? history?.[0]?.summary ?? null)
       : null;
   return (
     <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-3">
@@ -261,6 +291,9 @@ function AutomationStatusCard({
         ) : (
           <p className="text-xs text-white/50">No summary available.</p>
         )}
+        {label === "Alert worker" ? (
+          <AutomationWorkflowTelemetry initialTelemetry={workflowTelemetryFallback} className="bg-black/20" />
+        ) : null}
         {history && history.length ? (
           <div className="space-y-1 text-[0.65rem] text-white/60">
             <p className="uppercase tracking-[0.3em] text-white/30">Recent runs</p>

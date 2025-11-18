@@ -323,24 +323,29 @@ export const fetchHomepage = async (preview = false): Promise<PageDocument | nul
 export const getHomepage = withCache(fetchHomepage);
 
 export const getPageBySlug = withCache(async (slug: string, preview = false): Promise<PageDocument | null> => {
-  if (isPayload()) {
-    const env = payloadConfig.environment;
-    const data = await payloadGet<{ docs?: unknown[] }>({
-      path: "/api/pages",
-      query: {
-        "where[slug][equals]": slug,
-        "where[environment][equals]": env,
-        depth: 2,
-        limit: 1,
-        draft: preview ? "true" : undefined
-      }
-    });
-    const doc = normalizePayloadPage(data.docs?.[0]);
-    return parsePage(doc);
-  } else {
-    const client = getClient(preview);
-    const data = await client.fetch(pageBySlugQuery, { slug });
-    return parsePage(data);
+  try {
+    if (isPayload()) {
+      const env = payloadConfig.environment;
+      const data = await payloadGet<{ docs?: unknown[] }>({
+        path: "/api/pages",
+        query: {
+          "where[slug][equals]": slug,
+          "where[environment][equals]": env,
+          depth: 2,
+          limit: 1,
+          draft: preview ? "true" : undefined
+        }
+      });
+      const doc = normalizePayloadPage(data.docs?.[0]);
+      return parsePage(doc);
+    } else {
+      const client = getClient(preview);
+      const data = await client.fetch(pageBySlugQuery, { slug });
+      return parsePage(data);
+    }
+  } catch (error) {
+    console.warn(`Failed to fetch page ${slug}, using fallback data:`, error);
+    return null;
   }
 });
 
@@ -379,35 +384,40 @@ export const getBlogPosts = withCache(async (preview = false): Promise<BlogPostS
 });
 
 export const getBlogPostBySlug = withCache(async (slug: string, preview = false) => {
-  if (isPayload()) {
-    const env = payloadConfig.environment;
-    const data = await payloadGet<{ docs?: unknown[] }>({
-      path: "/api/blog-posts",
-      query: {
-        "where[slug][equals]": slug,
-        "where[environment][equals]": env,
-        depth: 2,
-        limit: 1,
-        draft: preview ? "true" : undefined
+  try {
+    if (isPayload()) {
+      const env = payloadConfig.environment;
+      const data = await payloadGet<{ docs?: unknown[] }>({
+        path: "/api/blog-posts",
+        query: {
+          "where[slug][equals]": slug,
+          "where[environment][equals]": env,
+          depth: 2,
+          limit: 1,
+          draft: preview ? "true" : undefined
+        }
+      });
+      const normalized = normalizeBlogDetail(data.docs?.[0]);
+      if (!normalized) {
+        return null;
       }
-    });
-    const normalized = normalizeBlogDetail(data.docs?.[0]);
-    if (!normalized) {
-      return null;
+      const parsed = blogPostDetailSchema.safeParse(normalized);
+      if (!parsed.success) {
+        console.warn("Failed to parse blog post", parsed.error.flatten());
+        return null;
+      }
+      return parsed.data;
     }
-    const parsed = blogPostDetailSchema.safeParse(normalized);
+    const client = getClient(preview);
+    const data = await client.fetch(blogPostBySlugQuery, { slug });
+    const parsed = blogPostDetailSchema.safeParse(data);
     if (!parsed.success) {
       console.warn("Failed to parse blog post", parsed.error.flatten());
       return null;
     }
     return parsed.data;
-  }
-  const client = getClient(preview);
-  const data = await client.fetch(blogPostBySlugQuery, { slug });
-  const parsed = blogPostDetailSchema.safeParse(data);
-  if (!parsed.success) {
-    console.warn("Failed to parse blog post", parsed.error.flatten());
+  } catch (error) {
+    console.warn(`Failed to fetch blog post ${slug}, returning fallback:`, error);
     return null;
   }
-  return parsed.data;
 });

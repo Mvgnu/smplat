@@ -12,10 +12,12 @@ import {
   summarizeProviderAutomationTelemetry,
   safePositiveNumber,
 } from "@/lib/provider-service-insights";
+import { GuardrailFollowUpTimeline } from "@/components/admin/GuardrailFollowUpTimeline";
 import { useFormState } from "react-dom";
 
 import type { FulfillmentProvider, FulfillmentProviderOrder, FulfillmentService } from "@/types/fulfillment";
 import type { ProviderAutomationStatus, ProviderAutomationHistory } from "@/types/provider-automation";
+import type { GuardrailFollowUpEntry } from "@/types/reporting";
 import { AutomationStatusPanel } from "@/components/admin/AutomationStatusPanel";
 import { ProviderOrderCard } from "./ProviderOrderCard";
 import { ActionButton, ActionMessage, DangerButton } from "./components";
@@ -33,6 +35,7 @@ import {
 type ProviderCatalogClientProps = {
   providers: FulfillmentProvider[];
   ordersByProvider: Record<string, FulfillmentProviderOrder[]>;
+  followUpsByProvider: Record<string, { entries: GuardrailFollowUpEntry[]; nextCursor: string | null }>;
   csrfToken: string;
   automationStatus: ProviderAutomationStatus | null;
   automationHistory: ProviderAutomationHistory | null;
@@ -73,6 +76,7 @@ const stringifyEndpointConfig = (provider: FulfillmentProvider, key: EndpointKey
 export function ProviderCatalogClient({
   providers,
   ordersByProvider,
+  followUpsByProvider,
   csrfToken,
   automationStatus,
   automationHistory,
@@ -116,6 +120,7 @@ export function ProviderCatalogClient({
                 key={provider.id}
                 provider={provider}
                 orders={ordersByProvider[provider.id] ?? []}
+                followUps={followUpsByProvider[provider.id] ?? { entries: [], nextCursor: null }}
                 csrfToken={csrfToken}
               />
             ))}
@@ -215,10 +220,12 @@ function ProviderPanel({
   provider,
   csrfToken,
   orders,
+  followUps,
 }: {
   provider: FulfillmentProvider;
   csrfToken: string;
   orders: FulfillmentProviderOrder[];
+  followUps: { entries: GuardrailFollowUpEntry[]; nextCursor: string | null };
 }) {
   const [updateState, updateAction] = useFormState(updateProviderAction, initialActionState);
   const [deleteState, deleteAction] = useFormState(deleteProviderAction, initialActionState);
@@ -255,6 +262,14 @@ function ProviderPanel({
       <ProviderWalletPanel provider={provider} csrfToken={csrfToken} />
 
       <ProviderOrdersSection providerId={provider.id} orders={orders} csrfToken={csrfToken} />
+      <GuardrailFollowUpTimeline
+        providerId={provider.id}
+        title="Guardrail follow-ups"
+        initialEntries={followUps.entries}
+        initialNextCursor={followUps.nextCursor}
+        emptyState={`No guardrail follow-ups have been logged for ${provider.id}.`}
+        defaultOpen={followUps.entries.length > 0}
+      />
 
       <section className="space-y-4">
         <h4 className="text-sm font-semibold uppercase tracking-[0.3em] text-white/50">Provider settings</h4>
@@ -534,6 +549,12 @@ function ProviderOrdersSection({
     </section>
   );
 }
+
+type ProviderFollowUpTimelineProps = {
+  providerId: string;
+  entries: GuardrailFollowUpEntry[];
+};
+
 
 function ProviderAutomationTelemetryPanel({ telemetry }: { telemetry: ProviderAutomationTelemetry }) {
   const overrideTotal = countRuleOverrides(telemetry.ruleOverridesByService);

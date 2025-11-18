@@ -609,6 +609,8 @@ const hydrateAddOnDrafts = (addOns?: ProductAddOn[]): AddOnDraft[] => {
         | null;
       const pricing = metadata?.pricing;
       const mode = pricing?.mode ?? "flat";
+      const serviceOverrideConfig =
+        pricing && pricing.mode === "serviceOverride" ? pricing : undefined;
       return {
         key: metadata?.editorKey ?? addOn.id ?? generateKey("addon"),
         label: addOn.label ?? "",
@@ -618,16 +620,16 @@ const hydrateAddOnDrafts = (addOns?: ProductAddOn[]): AddOnDraft[] => {
         pricing: {
           mode,
           amount: numberToString(pricing?.amount),
-          serviceId: pricing?.serviceId ?? "",
-          providerId: pricing?.providerId ?? "",
-          costAmount: numberToString(pricing?.costAmount),
-          costCurrency: pricing?.costCurrency ?? "",
-          marginTarget: numberToString(pricing?.marginTarget),
-          payloadTemplate: stringifyJson(pricing?.payloadTemplate ?? null),
-          fulfillmentMode: pricing?.fulfillmentMode ?? "immediate",
-          dripPerDay: numberToString(pricing?.dripPerDay),
-          previewQuantity: numberToString(pricing?.previewQuantity),
-          rules: hydrateServiceRuleDrafts(pricing?.rules)
+          serviceId: serviceOverrideConfig?.serviceId ?? "",
+          providerId: serviceOverrideConfig?.providerId ?? "",
+          costAmount: numberToString(serviceOverrideConfig?.costAmount),
+          costCurrency: serviceOverrideConfig?.costCurrency ?? "",
+          marginTarget: numberToString(serviceOverrideConfig?.marginTarget),
+          payloadTemplate: stringifyJson(serviceOverrideConfig?.payloadTemplate ?? null),
+          fulfillmentMode: serviceOverrideConfig?.fulfillmentMode ?? "immediate",
+          dripPerDay: numberToString(serviceOverrideConfig?.dripPerDay),
+          previewQuantity: numberToString(serviceOverrideConfig?.previewQuantity),
+          rules: hydrateServiceRuleDrafts(serviceOverrideConfig?.rules)
         }
       };
     });
@@ -2092,7 +2094,7 @@ export function ProductsClient({
     );
   };
 
-  const serializeVisibilityDraft = (
+  const serializeVisibilityDraft = useCallback((
     visibility: CustomFieldVisibilityDraft
   ): ProductCustomFieldMetadata["conditionalVisibility"] | null => {
     if (visibility.conditions.length === 0) {
@@ -2149,7 +2151,7 @@ export function ProductsClient({
           conditions: mapped
         }
       : null;
-  };
+  }, []);
 
   const handleRemoveCustomField = (fieldKey: string) => {
     setCustomFields((previous) => previous.filter((field) => field.key !== fieldKey));
@@ -2232,13 +2234,16 @@ export function ProductsClient({
     }
   };
 
-  const parseCommaSeparatedList = (value: string): string[] =>
-    value
-      .split(/[,\\n]+/)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
+  const parseCommaSeparatedList = useCallback(
+    (value: string): string[] =>
+      value
+        .split(/[,\\n]+/)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    []
+  );
 
-  const mapRuleDraftsToMetadata = (addOnKey: string, drafts: ServiceRuleDraft[]): ServiceOverrideRule[] => {
+  const mapRuleDraftsToMetadata = useCallback((addOnKey: string, drafts: ServiceRuleDraft[]): ServiceOverrideRule[] => {
     const rules: ServiceOverrideRule[] = [];
     drafts.forEach((rule, index) => {
       const channels = parseCommaSeparatedList(rule.channels);
@@ -2312,7 +2317,7 @@ export function ProductsClient({
       });
     });
     return rules;
-  };
+  }, [parseCommaSeparatedList]);
 
   const buildOptionMetadata = (option: OptionDraft): ProductOptionMetadata => {
     const metadata: ProductOptionMetadata = {
@@ -2494,7 +2499,7 @@ export function ProductsClient({
     }
 
     return { metadata: null, fallbackPriceDelta: fallback };
-  }, []);
+  }, [mapRuleDraftsToMetadata]);
 
   const collectValidationErrors = (params: {
     slug: string;

@@ -4,14 +4,25 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from datetime import datetime
+from typing import Any, Iterable, Mapping, Sequence
+from urllib.parse import quote_plus, urljoin
 
 import httpx
 from loguru import logger
 
 from smplat_api.core.settings import Settings
+from smplat_api.db.session import async_session
 from smplat_api.schemas.fulfillment_provider import ProviderAutomationSnapshotResponse
+from smplat_api.services.analytics.experiment_analytics import (
+    ExperimentAnalyticsService,
+    ExperimentConversionDigest,
+)
 from smplat_api.services.notifications.backend import EmailBackend, SMTPEmailBackend
+from smplat_api.services.providers.platform_context_cache import (
+    ProviderPlatformContextCacheService,
+    ProviderPlatformContextRecord,
+)
 
 
 @dataclass(slots=True)
@@ -118,6 +129,17 @@ class ProviderLoadAlert:
         return payload
 
 
+@dataclass(slots=True)
+class ExperimentConversionDigest:
+    slug: str
+    order_currency: str | None
+    order_total: float
+    order_count: int
+    journey_count: int
+    loyalty_points: int
+    last_activity: datetime | None
+
+
 class ProviderAutomationAlertEvaluator:
     """Reduces automation telemetry into actionable alerts."""
 
@@ -207,19 +229,24 @@ class ProviderAutomationAlertNotifier:
         self,
         alerts: Sequence[ProviderAutomationAlert],
         load_alerts: Sequence[ProviderLoadAlert] | None = None,
+        auto_summary: Mapping[str, Any] | None = None,
+        workflow_summary: Mapping[str, Any] | None = None,
     ) -> None:
         load_alerts = load_alerts or []
-        if not alerts and not load_alerts:
+        auto_actions = self._extract_auto_actions(auto_summary)
+        if not alerts and not load_alerts and not auto_actions:
             return
         await asyncio.gather(
-            self._notify_email(alerts, load_alerts),
-            self._notify_slack(alerts, load_alerts),
+            self._notify_email(alerts, load_alerts, auto_actions, workflow_summary),
+            self._notify_slack(alerts, load_alerts, auto_actions, workflow_summary),
         )
 
     async def _notify_email(
         self,
         alerts: Sequence[ProviderAutomationAlert],
         load_alerts: Sequence[ProviderLoadAlert],
+        auto_actions: Sequence[dict[str, Any]],
+        workflow_summary: Mapping[str, Any] | None,
     ) -> None:
         recipients = self._settings.provider_automation_alert_email_recipients
         backend = self._email_backend
@@ -285,6 +312,28 @@ class ProviderAutomationAlertNotifier:
                         lines.append(f"    • {link}")
                 lines.append("")
 
+        if auto_actions:
+            lines.append("Automation guardrail actions taken automatically:")
+            lines.append("")
+            for action in auto_actions:
+                scope = f"{action['provider_name']} ({action['provider_id']})"
+                label = "Paused" if action["action"] == "pause" else "Resumed"
+                reason_label = ", ".join(action["reasons"]) if action["reasons"] else action.get("notes")
+                if reason_label:
+                    lines.append(f"- {label}: {scope} — {reason_label}")
+                else:
+                    lines.append(f"- {label}: {scope}")
+                link = self._build_provider_admin_url(action["provider_id"])
+                if link:
+                    lines.append(f"  Dashboard: {link}")
+            lines.append("")
+        workflow_lines = self._format_workflow_summary(workflow_summary)
+        if workflow_lines:
+            lines.append("Guardrail workflow telemetry snapshot:")
+            for entry in workflow_lines:
+                lines.append(f"- {entry}")
+            lines.append("")
+
         if not lines:
             return
         lines.append("Investigate these providers before rerunning automated fulfillments.")
@@ -304,17 +353,40 @@ class ProviderAutomationAlertNotifier:
         self,
         alerts: Sequence[ProviderAutomationAlert],
         load_alerts: Sequence[ProviderLoadAlert],
+        auto_actions: Sequence[dict[str, Any]],
+        workflow_summary: Mapping[str, Any] | None,
     ) -> None:
         webhook = self._settings.provider_automation_alert_slack_webhook_url
         if not webhook:
             return
 
+        platform_contexts, conversion_snapshot_payload = await asyncio.gather(
+            self._fetch_platform_contexts(alerts),
+            self._fetch_conversion_snapshot(limit=3),
+        )
+        conversion_snapshot, conversion_cursor = conversion_snapshot_payload
         text_lines: list[str] = []
         if alerts:
             text_lines.append(":warning: Provider automation alerts detected")
             for alert in alerts:
                 reasons = ", ".join(alert.reasons) or "Unknown breach"
                 text_lines.append(f"• {alert.provider_name} ({alert.provider_id}) — {reasons}")
+                contexts = platform_contexts.get(alert.provider_id)
+                if contexts:
+                    text_lines.append(f"    contexts: {', '.join(contexts)}")
+        if auto_actions:
+            text_lines.append(":robot_face: Guardrail playbook actions")
+            for action in auto_actions:
+                provider = f"{action['provider_name']} ({action['provider_id']})"
+                verb = "Auto-pause" if action["action"] == "pause" else "Auto-resume"
+                reasons = ", ".join(action["reasons"]) if action["reasons"] else action.get("notes")
+                line = f"• {verb} — {provider}"
+                if reasons:
+                    line += f" — {reasons}"
+                text_lines.append(line)
+                link = self._build_provider_admin_url(action["provider_id"])
+                if link:
+                    text_lines.append(f"    <{link}|Open automation tab>")
         if load_alerts:
             text_lines.append(":bar_chart: Provider cohort pressure detected")
             for alert in load_alerts:
@@ -333,6 +405,20 @@ class ProviderAutomationAlertNotifier:
                     link_tokens.append(f"<{alert.orders_url}|Orders>")
                 if link_tokens:
                     text_lines.append("    " + " · ".join(link_tokens))
+        workflow_lines = self._format_workflow_summary(workflow_summary)
+        if workflow_lines:
+            text_lines.append(":clipboard: Workflow telemetry snapshot")
+            for entry in workflow_lines:
+                text_lines.append(f"    {entry}")
+        if conversion_snapshot:
+            text_lines.append(":moneybag: Experiment conversion impact")
+            for metric in conversion_snapshot:
+                text_lines.append("    " + self._format_conversion_line(metric))
+            conversion_link = self._build_conversion_link(conversion_cursor)
+            if conversion_link:
+                label = "Historical conversions" if conversion_cursor else "Live conversions"
+                cursor_hint = f" (cursor {conversion_cursor})" if conversion_cursor else ""
+                text_lines.append(f"    {label}: <{conversion_link}|Open dashboard>{cursor_hint}")
         if not text_lines:
             return
         payload: dict[str, str] = {"text": "\n".join(text_lines)}
@@ -354,6 +440,151 @@ class ProviderAutomationAlertNotifier:
         finally:
             if close_client:
                 await client.aclose()
+
+    def _extract_auto_actions(self, summary: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+        if not summary:
+            return []
+        actions: list[dict[str, Any]] = []
+        actions.extend(self._normalize_auto_action_list(summary.get("autoPausedProviders"), "pause"))
+        actions.extend(self._normalize_auto_action_list(summary.get("autoResumedProviders"), "resume"))
+        return actions
+
+    def _normalize_auto_action_list(
+        self,
+        payload: Any,
+        action: str,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(payload, Iterable) or isinstance(payload, (str, bytes)):
+            return []
+        normalized: list[dict[str, Any]] = []
+        for entry in payload:
+            if not isinstance(entry, Mapping):
+                continue
+            provider_id_raw = entry.get("providerId")
+            provider_id = str(provider_id_raw).strip() if provider_id_raw else ""
+            if not provider_id:
+                continue
+            provider_name_raw = entry.get("providerName") or provider_id
+            provider_name = str(provider_name_raw).strip() or provider_id
+            reasons_raw = entry.get("reasons")
+            reasons = [str(reason).strip() for reason in reasons_raw if str(reason).strip()] if isinstance(reasons_raw, Iterable) and not isinstance(reasons_raw, (str, bytes)) else []
+            notes = entry.get("notes")
+            normalized.append(
+                {
+                    "provider_id": provider_id,
+                    "provider_name": provider_name,
+                    "action": action,
+                    "reasons": reasons,
+                    "notes": notes if isinstance(notes, str) and notes.strip() else None,
+                }
+            )
+        return normalized
+
+    def _build_provider_admin_url(self, provider_id: str) -> str | None:
+        base = (self._settings.frontend_url or "").strip()
+        if not base:
+            return None
+        url = urljoin(base if base.endswith("/") else f"{base}/", f"admin/fulfillment/providers/{provider_id}?tab=automation")
+        return url
+
+    async def _fetch_platform_contexts(
+        self,
+        alerts: Sequence[ProviderAutomationAlert],
+    ) -> dict[str, list[str]]:
+        provider_ids = list({alert.provider_id for alert in alerts})
+        if not provider_ids:
+            return {}
+        try:
+            async with async_session() as session:  # type: ignore[arg-type]
+                service = ProviderPlatformContextCacheService(session)
+                mapping = await service.fetch_contexts_for_providers(provider_ids, limit_per_provider=3)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to load cached platform contexts for alerts", error=str(exc))
+            return {}
+        formatted: dict[str, list[str]] = {}
+        for provider_id, entries in mapping.items():
+            labels = [self._format_platform_context(entry) for entry in entries if entry]
+            if labels:
+                formatted[provider_id] = labels
+        return formatted
+
+    async def _fetch_conversion_snapshot(self, limit: int = 3) -> tuple[list[ExperimentConversionDigest], str | None]:
+        try:
+            async with async_session() as session:  # type: ignore[arg-type]
+                service = ExperimentAnalyticsService(session)
+                snapshot = await service.fetch_conversion_snapshot(limit=limit)
+                return snapshot.metrics, snapshot.cursor
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to load experiment conversion metrics for Slack digest", error=str(exc))
+            return [], None
+
+    @staticmethod
+    def _format_currency_value(amount: float, currency: str | None) -> str:
+        if amount <= 0:
+            return "no revenue yet"
+        code = currency or "USD"
+        return f"{code} {amount:,.0f}"
+
+    @staticmethod
+    def _format_number(value: int) -> str:
+        return f"{value:,}" if value else "0"
+
+    def _format_conversion_line(self, metric: ExperimentConversionDigest) -> str:
+        revenue = self._format_currency_value(metric.order_total, metric.order_currency)
+        loyalty = self._format_number(metric.loyalty_points)
+        last_seen = metric.last_activity.strftime("%b %d") if metric.last_activity else "n/a"
+        return (
+            f"{metric.slug}: {revenue} · "
+            f"{metric.order_count} orders / {metric.journey_count} journeys · "
+            f"{loyalty} pts · last {last_seen}"
+        )
+
+    def _build_conversion_link(self, cursor: str | None) -> str | None:
+        base = (self._settings.frontend_url or "").strip()
+        if not base:
+            return None
+        base = base.rstrip("/")
+        if cursor:
+            return f"{base}/admin/reports?conversionCursor={quote_plus(cursor)}#experiment-analytics"
+        return f"{base}/admin/reports#experiment-analytics"
+
+    @staticmethod
+    def _format_platform_context(entry: ProviderPlatformContextRecord) -> string:
+        details: list[str] = []
+        if entry.handle and entry.handle not in entry.label:
+            details.append(entry.handle)
+        if entry.platform_type:
+            details.append(entry.platform_type)
+        if details:
+            return f"{entry.label} ({', '.join(details)})"
+        return entry.label
+
+    def _format_workflow_summary(self, summary: Mapping[str, Any] | None) -> list[str]:
+        if not summary or not isinstance(summary, Mapping):
+            return []
+        total_events = summary.get("totalEvents")
+        attachment_totals = summary.get("attachmentTotals")
+        action_counts = summary.get("actionCounts")
+        lines: list[str] = []
+        if isinstance(total_events, int):
+            lines.append(f"Actions captured: {total_events}")
+        if isinstance(attachment_totals, Mapping):
+            uploads = attachment_totals.get("upload") or 0
+            removals = attachment_totals.get("remove") or 0
+            copies = attachment_totals.get("copy") or 0
+            tags = attachment_totals.get("tag") or 0
+            lines.append(f"Attachments — upload {uploads}, remove {removals}, copy {copies}, tag {tags}")
+        if isinstance(action_counts, Sequence) and action_counts:
+            top_entry = action_counts[0]
+            if isinstance(top_entry, Mapping):
+                action = top_entry.get("action")
+                count = top_entry.get("count")
+                if action and count is not None:
+                    lines.append(f"Top action: {action} ({count})")
+        last_capture = summary.get("lastCapturedAt")
+        if isinstance(last_capture, str) and last_capture:
+            lines.append(f"Last captured: {last_capture}")
+        return lines
 
     @staticmethod
     def _build_email_backend(settings: Settings) -> EmailBackend | None:

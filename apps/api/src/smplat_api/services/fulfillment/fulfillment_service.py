@@ -27,6 +27,9 @@ from smplat_api.services.fulfillment.provider_endpoints import (
 from smplat_api.services.notifications import NotificationService
 from smplat_api.domain.fulfillment import get_provider, get_service, provider_registry
 from .instagram_service import InstagramService
+from smplat_api.services.providers.platform_context_cache import (
+    ProviderPlatformContextCacheService,
+)
 
 
 class FulfillmentService:
@@ -47,6 +50,7 @@ class FulfillmentService:
         self.db = db_session
         self.instagram_service = InstagramService(db_session)
         self.notification_service = notification_service or NotificationService(db_session)
+        self._platform_context_cache = ProviderPlatformContextCacheService(db_session)
         self._http_client = http_client
        
     async def process_order_fulfillment(self, order_id: UUID) -> bool:
@@ -411,6 +415,7 @@ class FulfillmentService:
                 payload=payload,
             )
             self.db.add(record)
+            await self._cache_platform_context(descriptor.provider_id, order_item.platform_context)
 
     def _extract_service_overrides(self, order_item: OrderItem) -> List[Dict[str, Any]]:
         """Return normalized service override metadata from order item selections."""
@@ -944,3 +949,14 @@ class FulfillmentService:
             "failed": failed_tasks,
             "in_progress": in_progress_tasks,
         }
+    async def _cache_platform_context(self, provider_id: str, platform_context: Mapping[str, Any] | None) -> None:
+        if not provider_id:
+            return
+        try:
+            await self._platform_context_cache.record_context(provider_id, platform_context)
+        except Exception as error:  # pragma: no cover - defensive logging
+            logger.warning(
+                "Failed to cache provider platform context",
+                provider_id=provider_id,
+                error=str(error),
+            )

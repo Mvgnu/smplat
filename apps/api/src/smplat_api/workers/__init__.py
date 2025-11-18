@@ -6,6 +6,7 @@ from .hosted_session_recovery import HostedSessionRecoveryWorker
 from .journey_runtime import JourneyRuntimeWorker
 from .provider_automation import ProviderOrderReplayWorker
 from .provider_automation_alerts import ProviderAutomationAlertWorker
+from .receipt_storage_probe import ReceiptStorageProbeWorker
 
 __all__ = [
     "BillingLedgerReconciliationWorker",
@@ -14,4 +15,5 @@ __all__ = [
     "JourneyRuntimeWorker",
     "ProviderOrderReplayWorker",
     "ProviderAutomationAlertWorker",
+    "ReceiptStorageProbeWorker",
 ]

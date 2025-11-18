@@ -23,6 +23,11 @@ from smplat_api.services.fulfillment import (
     ProviderAutomationRunTypeEnum,
 )
 from smplat_api.services.fulfillment.automation_status_service import AutomationStatusService
+from smplat_api.services.orders.state_machine import (
+    OrderStateActorTypeEnum,
+    OrderStateEventTypeEnum,
+    OrderStateMachine,
+)
 from smplat_api.workers.provider_automation import AutomationFactory, ProviderOrderReplayWorker, SessionFactory
 
 
@@ -97,6 +102,25 @@ async def replay_single_order(
             rule_ids=rule_ids,
             rule_labels=rule_labels,
         )
+        if provider_order.order_id:
+            machine = OrderStateMachine(session)
+            metadata = ProviderAutomationService.build_timeline_metadata(
+                provider_order,
+                entry=entry,
+                extra={"trigger": "cli_replay"},
+            )
+            try:
+                await machine.record_event(
+                    order_id=provider_order.order_id,
+                    event_type=OrderStateEventTypeEnum.REPLAY_EXECUTED,
+                    actor_type=OrderStateActorTypeEnum.AUTOMATION,
+                    actor_id=str(provider_order.id),
+                    actor_label=None,
+                    notes="Automation replay executed via CLI",
+                    metadata=metadata,
+                )
+            except Exception:
+                logger.exception("Failed to record CLI replay timeline event", order_id=str(provider_order.order_id))
         return entry
 
 

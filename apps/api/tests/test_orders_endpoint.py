@@ -18,6 +18,11 @@ from smplat_api.models.fulfillment import (
     FulfillmentTaskStatusEnum,
     FulfillmentTaskTypeEnum,
 )
+from smplat_api.models.social_account import (
+    CustomerSocialAccount,
+    SocialAccountVerificationStatus,
+    SocialPlatformEnum,
+)
 
 
 @pytest.mark.asyncio
@@ -51,6 +56,12 @@ async def test_create_order_happy_path(app_with_db):
                     "total_price": 299.0,
                     "selected_options": {"tier": "pro"},
                     "attributes": {"campaign": "launch"},
+                    "platform_context": {
+                        "id": "instagram::@brand",
+                        "label": "Instagram",
+                        "handle": "@brand",
+                        "platformType": "instagram",
+                    },
                 }
             ],
             "currency": "EUR",
@@ -70,6 +81,7 @@ async def test_create_order_happy_path(app_with_db):
         assert body["order_number"].startswith("SM0000")
         assert len(body["items"]) == 1
         assert body["currency"] == "EUR"
+        assert body["items"][0]["platform_context"]["label"] == "Instagram"
 
         async with session_factory() as session:
             stored_orders = (
@@ -77,6 +89,7 @@ async def test_create_order_happy_path(app_with_db):
             ).scalars().all()
             assert len(stored_orders) == 1
             assert stored_orders[0].items[0].product_id == product.id
+            assert stored_orders[0].items[0].platform_context["handle"] == "@brand"
     finally:
         settings.checkout_api_key = previous_key
 
@@ -157,37 +170,219 @@ async def test_create_order_missing_product_returns_404(app_with_db):
 @pytest.mark.asyncio
 async def test_update_order_status(app_with_db):
     app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "secret-key"
 
-    async with session_factory() as session:
-        order = Order(
-            order_number="SM900001",
-            subtotal=Decimal("25.00"),
-            tax=Decimal("0"),
-            total=Decimal("25.00"),
-            currency=CurrencyEnum.EUR,
-            status=OrderStatusEnum.PENDING,
-            source=OrderSourceEnum.CHECKOUT,
-        )
-        session.add(order)
-        await session.commit()
-        await session.refresh(order)
-        order_id = order.id
+    try:
+        async with session_factory() as session:
+            order = Order(
+                order_number="SM900001",
+                subtotal=Decimal("25.00"),
+                tax=Decimal("0"),
+                total=Decimal("25.00"),
+                currency=CurrencyEnum.EUR,
+                status=OrderStatusEnum.PENDING,
+                source=OrderSourceEnum.CHECKOUT,
+            )
+            session.add(order)
+            await session.commit()
+            await session.refresh(order)
+            order_id = order.id
 
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.patch(
-            f"/api/v1/orders/{order_id}/status",
-            json={"status": "completed", "notes": "Delivered"},
-        )
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.patch(
+                f"/api/v1/orders/{order_id}/status",
+                json={"status": "completed", "notes": "Delivered", "actorType": "admin"},
+                headers={"X-API-Key": "secret-key"},
+            )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "completed"
-    assert body["notes"] == "Delivered"
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "completed"
+        assert body["notes"] == "Delivered"
 
-    async with session_factory() as session:
-        stored = await session.get(Order, order_id)
-        assert stored.status == OrderStatusEnum.COMPLETED
-        assert stored.notes == "Delivered"
+        async with session_factory() as session:
+            stored = await session.get(Order, order_id)
+            assert stored.status == OrderStatusEnum.COMPLETED
+            assert stored.notes == "Delivered"
+    finally:
+        settings.checkout_api_key = previous_key
+
+
+@pytest.mark.asyncio
+async def test_order_state_events_endpoint(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "timeline-key"
+
+    try:
+        async with session_factory() as session:
+            order = Order(
+                order_number="SM900099",
+                subtotal=Decimal("45.00"),
+                tax=Decimal("0"),
+                total=Decimal("45.00"),
+                currency=CurrencyEnum.EUR,
+                status=OrderStatusEnum.PENDING,
+                source=OrderSourceEnum.CHECKOUT,
+            )
+            session.add(order)
+            await session.commit()
+            await session.refresh(order)
+            order_id = order.id
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            await client.patch(
+                f"/api/v1/orders/{order_id}/status",
+                json={"status": "processing", "notes": "Started", "actorType": "operator"},
+                headers={"X-API-Key": "timeline-key"},
+            )
+            events_response = await client.get(
+                f"/api/v1/orders/{order_id}/state-events",
+                headers={"X-API-Key": "timeline-key"},
+            )
+
+        assert events_response.status_code == 200
+        body = events_response.json()
+        assert len(body) >= 1
+        assert body[0]["eventType"] == "state_change"
+        assert body[0]["fromStatus"] == "pending"
+        assert body[0]["toStatus"] == "processing"
+    finally:
+        settings.checkout_api_key = previous_key
+
+
+@pytest.mark.asyncio
+async def test_order_delivery_proof_endpoint(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "proof-key"
+
+    try:
+        async with session_factory() as session:
+            account = CustomerSocialAccount(
+                platform=SocialPlatformEnum.INSTAGRAM,
+                handle="brand",
+                verification_status=SocialAccountVerificationStatus.VERIFIED,
+                baseline_metrics={"metrics": {"followerCount": 1200}, "source": "scraper"},
+                delivery_snapshots={
+                    "latest": {"metrics": {"followerCount": 1500}, "source": "scraper"},
+                    "history": [
+                        {"metrics": {"followerCount": 1300}, "source": "scraper"},
+                    ],
+                },
+            )
+            session.add(account)
+            await session.flush()
+
+            order = Order(
+                order_number="SM900888",
+                subtotal=Decimal("99.00"),
+                tax=Decimal("0"),
+                total=Decimal("99.00"),
+                currency=CurrencyEnum.EUR,
+                status=OrderStatusEnum.PROCESSING,
+                source=OrderSourceEnum.CHECKOUT,
+            )
+            session.add(order)
+            await session.flush()
+            order_item = OrderItem(
+                order_id=order.id,
+                product_title="Instagram Growth",
+                quantity=1,
+                unit_price=Decimal("99.00"),
+                total_price=Decimal("99.00"),
+                customer_social_account_id=account.id,
+            )
+            session.add(order_item)
+            await session.commit()
+
+        order_id = str(order.id)
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get(
+                f"/api/v1/orders/{order_id}/delivery-proof",
+                headers={"X-API-Key": "proof-key"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["orderId"] == order_id
+        assert len(body["items"]) == 1
+        item = body["items"][0]
+        assert item["account"]["handle"] == "brand"
+        assert item["latest"]["metrics"]["followerCount"] == 1500
+        assert len(item["history"]) == 1
+    finally:
+        settings.checkout_api_key = previous_key
+
+
+@pytest.mark.asyncio
+async def test_delivery_proof_metrics_endpoint(app_with_db):
+    app, session_factory = app_with_db
+    previous_key = settings.checkout_api_key
+    settings.checkout_api_key = "metrics-key"
+
+    try:
+        async with session_factory() as session:
+            product = Product(
+                slug="instagram-growth",
+                title="Instagram Growth Campaign",
+                description="Service",
+                category="instagram",
+                base_price=Decimal("299.00"),
+                currency=CurrencyEnum.EUR,
+                status=ProductStatusEnum.ACTIVE,
+            )
+            session.add(product)
+            await session.flush()
+            order = Order(
+                order_number="SM700999",
+                subtotal=Decimal("299.00"),
+                tax=Decimal("0"),
+                total=Decimal("299.00"),
+                currency=CurrencyEnum.EUR,
+                status=OrderStatusEnum.COMPLETED,
+                source=OrderSourceEnum.CHECKOUT,
+            )
+            item = OrderItem(
+                order=order,
+                product_id=product.id,
+                product_title=product.title,
+                quantity=1,
+                unit_price=Decimal("299.00"),
+                total_price=Decimal("299.00"),
+                platform_context={"platform": "instagram"},
+                baseline_metrics={"metrics": {"followerCount": 1200}},
+                delivery_snapshots={
+                    "latest": {
+                        "metrics": {"followerCount": 1550},
+                        "recordedAt": "2025-01-10T12:00:00Z",
+                    }
+                },
+            )
+            session.add_all([order, item])
+            await session.commit()
+
+        async with AsyncClient(app=app, base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/orders/delivery-proof/metrics",
+                headers={"X-API-Key": "metrics-key"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["products"], "Expected aggregate payload"
+        product_entry = body["products"][0]
+        assert product_entry["productId"] == str(product.id)
+        assert product_entry["sampleSize"] == 1
+        assert product_entry["platforms"] == ["instagram"]
+        metric = product_entry["metrics"][0]
+        assert metric["metricKey"] == "followerCount"
+        assert metric["deltaAverage"] == pytest.approx(350.0)
+        assert metric["formattedDelta"].startswith("+")
+    finally:
+        settings.checkout_api_key = previous_key
 
 
 async def _seed_orders(session_factory):

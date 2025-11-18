@@ -10,6 +10,8 @@ import "server-only";
 import { z } from "zod";
 
 import { isPayload, payloadConfig, payloadGet } from "./client";
+import { fetchDeliveryProofAggregates } from "@/server/metrics/delivery-proof-aggregates";
+import type { DeliveryProofMetricAggregate, DeliveryProofProductAggregate } from "@/types/delivery-proof";
 
 const apiBaseUrl =
   process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -136,6 +138,8 @@ export type CheckoutBundleOffer = {
   savings?: string;
 };
 
+export type CheckoutDeliveryProofInsight = DeliveryProofProductAggregate;
+
 export type CheckoutTrustExperience = {
   slug: string;
   guaranteeHeadline: string;
@@ -146,6 +150,7 @@ export type CheckoutTrustExperience = {
   testimonials: CheckoutTestimonial[];
   bundleOffers: CheckoutBundleOffer[];
   deliveryTimeline: CheckoutDeliveryTimeline;
+  deliveryProofInsights: CheckoutDeliveryProofInsight[];
 };
 
 const metricBindingSchema = z
@@ -307,6 +312,17 @@ const fallbackExperience: CheckoutTrustExperience = {
       value: "+3.8k",
       fallbackValue: "+3.8k",
       caption: "Across 42 SMB campaigns",
+      metric: {
+        metricId: "delivery_proof/instagram-growth/followerCount",
+        source: "delivery_proof",
+        verificationState: "preview",
+        freshnessWindowMinutes: 90 * 24 * 60,
+        provenanceNote: "Awaiting delivery proof aggregation.",
+        metadata: {
+          stat: "deltaAverage",
+          productSlug: "instagram-growth",
+        },
+      },
     },
     {
       id: "retention",
@@ -401,6 +417,7 @@ const fallbackExperience: CheckoutTrustExperience = {
       fallbackCopy: "Projected clearance horizon across all fulfillment pods."
     },
   },
+  deliveryProofInsights: [],
 };
 
 type TrustMetricResolution = {
@@ -640,6 +657,13 @@ const cloneExperience = (experience: CheckoutTrustExperience): CheckoutTrustExpe
         }
       : undefined,
   },
+  deliveryProofInsights: experience.deliveryProofInsights
+    ? experience.deliveryProofInsights.map((insight) => ({
+        ...insight,
+        platforms: [...insight.platforms],
+        metrics: insight.metrics.map((metric) => ({ ...metric })),
+      }))
+    : [],
 });
 
 const createMetricVerification = (
@@ -823,6 +847,9 @@ const buildMetricRequests = (
     if (!metric?.metricId) {
       return;
     }
+    if (metric.metricId.startsWith("delivery_proof/")) {
+      return;
+    }
 
     const list = registry.get(metric.metricId) ?? [];
     list.push(metric);
@@ -985,6 +1012,119 @@ const fetchTrustMetrics = async (
   }
 };
 
+const DELIVERY_PROOF_PREFIX = "delivery_proof/";
+
+type DeliveryProofMetricIndexEntry = {
+  metric: DeliveryProofMetricAggregate;
+  product: DeliveryProofProductAggregate;
+};
+
+const selectAggregateStat = (
+  aggregate: DeliveryProofMetricAggregate,
+  stat: string,
+): { formatted: string | null; raw: number | null } => {
+  switch (stat) {
+    case "latestAverage":
+      return {
+        formatted: aggregate.formattedLatest ?? null,
+        raw: aggregate.latestAverage ?? null,
+      };
+    case "deltaPercent":
+      return {
+        formatted: aggregate.formattedPercent ?? null,
+        raw: aggregate.deltaPercent ?? null,
+      };
+    case "baselineAverage":
+      return {
+        formatted: aggregate.baselineAverage?.toFixed(0) ?? null,
+        raw: aggregate.baselineAverage ?? null,
+      };
+    case "deltaAverage":
+    default:
+      return {
+        formatted: aggregate.formattedDelta ?? null,
+        raw: aggregate.deltaAverage ?? null,
+      };
+  }
+};
+
+const formatDeliveryProofNote = (
+  entry: DeliveryProofMetricIndexEntry,
+  windowDays: number,
+): string | null => {
+  const notes: string[] = [];
+  if (entry.metric.sampleSize) {
+    notes.push(`${entry.metric.sampleSize} deliveries verified in last ${windowDays}d`);
+  }
+  if (entry.product.lastSnapshotAt) {
+    const lastDate = new Date(entry.product.lastSnapshotAt);
+    if (!Number.isNaN(lastDate.getTime())) {
+      notes.push(`Last snapshot ${lastDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`);
+    }
+  }
+  return notes.length ? notes.join(" • ") : null;
+};
+
+const mergeDeliveryProofInsights = async (
+  experience: CheckoutTrustExperience,
+): Promise<void> => {
+  const aggregates = await fetchDeliveryProofAggregates();
+  if (!aggregates) {
+    experience.deliveryProofInsights = [];
+    return;
+  }
+
+  experience.deliveryProofInsights = aggregates.products;
+
+  if (!aggregates.products.length) {
+    return;
+  }
+
+  const metricIndex = new Map<string, DeliveryProofMetricIndexEntry>();
+  aggregates.products.forEach((product) => {
+    product.metrics.forEach((metric) => {
+      metricIndex.set(metric.metricId, { metric, product });
+    });
+  });
+
+  experience.performanceSnapshots = experience.performanceSnapshots.map((snapshot) => {
+    const metric = snapshot.metric;
+    if (!metric?.metricId || !metric.metricId.startsWith(DELIVERY_PROOF_PREFIX)) {
+      return snapshot;
+    }
+    const record = metricIndex.get(metric.metricId);
+    if (!record) {
+      return snapshot;
+    }
+    const stat = typeof metric.metadata?.stat === "string" ? metric.metadata.stat : "deltaAverage";
+    const resolved = selectAggregateStat(record.metric, stat);
+    if (!resolved.formatted) {
+      return snapshot;
+    }
+    snapshot.value = resolved.formatted;
+    metric.formattedValue = resolved.formatted;
+    metric.rawValue = resolved.raw;
+    metric.verificationState = "fresh";
+    metric.previewState = null;
+    metric.sampleSize = record.metric.sampleSize;
+    metric.source = "delivery_proof";
+    const provenanceNote = formatDeliveryProofNote(record, aggregates.windowDays);
+    if (provenanceNote) {
+      metric.provenanceNote = provenanceNote;
+    }
+    const metadata = {
+      ...(metric.metadata ?? {}),
+      productSlug: record.product.productSlug,
+      productId: record.product.productId,
+      deliveryProofMetricKey: record.metric.metricKey,
+      deliveryProofSampleSize: record.metric.sampleSize,
+      deliveryProofLastSnapshotAt: record.product.lastSnapshotAt,
+    };
+    metric.metadata = metadata;
+    return snapshot;
+  });
+};
+
 const resolveExperienceMetrics = async (experience: CheckoutTrustExperience): Promise<void> => {
   const { requests, registry } = buildMetricRequests(experience);
   if (requests.length === 0) {
@@ -1066,6 +1206,7 @@ const mergeWithFallback = (
       metric: experience?.deliveryTimeline?.metric ?? fallbackExperience.deliveryTimeline.metric,
       resolved: experience?.deliveryTimeline?.resolved,
     },
+    deliveryProofInsights: experience?.deliveryProofInsights ?? fallbackExperience.deliveryProofInsights,
   });
 };
 
@@ -1090,6 +1231,7 @@ export const getCheckoutTrustExperience = cache(async (): Promise<CheckoutTrustE
     const combined = mergeWithFallback(experience);
 
     await resolveExperienceMetrics(combined);
+    await mergeDeliveryProofInsights(combined);
 
     combined.assurances = combined.assurances.map((assurance) => ({
       ...assurance,

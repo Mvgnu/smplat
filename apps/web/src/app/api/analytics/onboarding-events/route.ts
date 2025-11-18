@@ -4,6 +4,8 @@ import {
   ensureOnboardingJourney,
   toggleOnboardingTask,
   recordOnboardingReferral,
+  recordJourneyPricingExperiments,
+  type JourneyPricingExperimentSegment,
 } from "@/server/onboarding/journeys";
 
 type ChecklistUpdatePayload = {
@@ -69,6 +71,49 @@ export async function POST(request: Request) {
 
       await recordOnboardingReferral(orderId, referralCode);
       return NextResponse.json({ status: "ok" });
+    }
+
+    if (eventType === "pricing_experiment_segment") {
+      const orderId = typeof body.orderId === "string" ? body.orderId : undefined;
+      const experimentsInput = Array.isArray(body.experiments) ? body.experiments : [];
+      if (!orderId || experimentsInput.length === 0) {
+        return NextResponse.json(
+          { error: "orderId and experiments are required" },
+          { status: 400 },
+        );
+      }
+
+      const normalized = experimentsInput
+        .map((experiment): JourneyPricingExperimentSegment | null => {
+          if (
+            typeof experiment?.slug !== "string" ||
+            typeof experiment?.variantKey !== "string"
+          ) {
+            return null;
+          }
+          return {
+            slug: experiment.slug,
+            variantKey: experiment.variantKey,
+            variantName:
+              typeof experiment.variantName === "string" ? experiment.variantName : null,
+            isControl: typeof experiment.isControl === "boolean" ? experiment.isControl : undefined,
+            assignmentStrategy:
+              typeof experiment.assignmentStrategy === "string"
+                ? experiment.assignmentStrategy
+                : null,
+          };
+        })
+        .filter((segment): segment is JourneyPricingExperimentSegment => Boolean(segment));
+
+      if (normalized.length === 0) {
+        return NextResponse.json(
+          { error: "At least one valid experiment is required" },
+          { status: 400 },
+        );
+      }
+
+      await recordJourneyPricingExperiments(orderId, normalized);
+      return NextResponse.json({ status: "accepted" });
     }
 
     return NextResponse.json({ error: `Unsupported eventType: ${eventType}` }, { status: 400 });

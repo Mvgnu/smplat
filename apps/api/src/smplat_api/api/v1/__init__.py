@@ -30,6 +30,7 @@ from .endpoints import (
     reporting,
     security,
     journey_components,
+    metrics,
 )
 
 router = APIRouter()
@@ -62,3 +63,4 @@ router.include_router(security.router)
 router.include_router(analytics.router)
 router.include_router(reporting.router)
 router.include_router(journey_components.router)
+router.include_router(metrics.router)

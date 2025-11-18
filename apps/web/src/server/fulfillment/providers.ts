@@ -590,7 +590,7 @@ export async function fetchProviderOrdersForOrder(orderId: string, limit = 100):
 export async function triggerProviderOrderRefill(
   providerId: string,
   providerOrderId: string,
-  input: { amount?: number | null },
+  input: { amount?: number | null; note?: string },
 ): Promise<FulfillmentProviderOrderRefill> {
   const response = await fetch(
     `${apiBaseUrl}/api/v1/fulfillment/providers/${providerId}/orders/${providerOrderId}/refill`,

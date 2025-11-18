@@ -19,7 +19,7 @@ import {
   normalizeCustomFieldMetadata as sharedNormalizeCustomFieldMetadata,
   serializeCustomFieldMetadata as sharedSerializeCustomFieldMetadata,
 } from "@/lib/product-metadata";
-import type { ProductCustomFieldMetadata } from "@/types/product";
+import type { CustomFieldVisibilityCondition, ProductCustomFieldMetadata } from "@/types/product";
 import type { CustomFieldDraft, CustomFieldVisibilityDraft } from "@/app/(admin)/admin/products/types";
 import { initialActionState, updateProductConfigurationAction } from "./actions";
 import type { ProductDetail } from "@/server/catalog/products";
@@ -188,7 +188,7 @@ function serializeVisibilityDraft(
   }
 
   const conditions = visibility.conditions
-    .map((condition) => {
+    .map<CustomFieldVisibilityCondition | null>((condition) => {
       if (condition.kind === "option") {
         const group = optionGroups.find((entry) => (entry.id ?? entry.key) === condition.groupKey);
         if (!group) {
@@ -236,7 +236,7 @@ function serializeVisibilityDraft(
       }
       return null;
     })
-    .filter((entry): entry is NonNullable<typeof entry> => entry != null);
+    .filter((entry): entry is CustomFieldVisibilityCondition => entry != null);
 
   if (conditions.length === 0) {
     return null;
@@ -588,7 +588,7 @@ function mapFieldsToConfigurator(
       helpText: field.helpText || undefined,
       required: field.required,
       validation: (() => {
-        const validation: ConfiguratorCustomField["validation"] = {};
+        const validation: Record<string, unknown> = {};
         const minLength = Number(field.validation.minLength);
         if (field.validation.minLength.trim().length > 0 && Number.isFinite(minLength) && minLength >= 0) {
           validation.minLength = minLength;
@@ -629,7 +629,7 @@ function mapFieldsToConfigurator(
         if (allowedValues.length > 0) {
           validation.allowedValues = allowedValues;
         }
-        return Object.keys(validation).length > 0 ? validation : undefined;
+        return Object.keys(validation).length > 0 ? (validation as ConfiguratorCustomField["validation"]) : undefined;
       })(),
       passthrough: field.exposeInFulfillment ? { fulfillment: true } : undefined,
       defaultValue: field.defaultValue.trim().length > 0 ? field.defaultValue.trim() : undefined,

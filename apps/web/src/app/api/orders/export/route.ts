@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 
 import { buildOrderReceiptPayload } from "@/lib/orders/receipt-exports";
 import { requireRole } from "@/server/auth/policies";
+import { fetchDeliveryProofAggregates } from "@/server/metrics/delivery-proof-aggregates";
 import { fetchAdminOrders } from "@/server/orders/admin-orders";
+import { fetchOrderDeliveryProof } from "@/server/orders/delivery-proof";
 
 const MAX_LIMIT = 250;
 const DEFAULT_LIMIT = 100;
@@ -25,7 +27,24 @@ export async function GET(request: Request) {
 
   try {
     const orders = await fetchAdminOrders(limit);
-    const payload = orders.map((order) => buildOrderReceiptPayload(order));
+    const productIds = Array.from(
+      new Set(
+        orders
+          .flatMap((order) => order.items.map((item) => item.productId))
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
+      )
+    );
+
+    const deliveryProofsPromise = Promise.all(orders.map((order) => fetchOrderDeliveryProof(order.id)));
+    const aggregatesPromise = productIds.length ? fetchDeliveryProofAggregates(productIds) : Promise.resolve(null);
+    const [deliveryProofs, aggregates] = await Promise.all([deliveryProofsPromise, aggregatesPromise]);
+
+    const payload = orders.map((order, index) =>
+      buildOrderReceiptPayload(order, {
+        deliveryProof: deliveryProofs[index],
+        deliveryProofAggregates: aggregates,
+      })
+    );
     const body = JSON.stringify(payload, null, 2);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 

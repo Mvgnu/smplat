@@ -92,6 +92,12 @@
 - **Provider telemetry parity**: The public orders API now hydrates each payload with `providerOrders`, so storefront dashboards and downstream automations can see refill/replay history without going through operator-only surfaces.
 - **Admin + storefront telemetry surfaces (NEW)**: `/admin/orders` and `/account/orders` now render the embedded `providerOrders` arrays directly. Both screens summarize replays/refills, expose provider-order cards, and rely on the shared DTO normalizer, so automation parity is guaranteed across operator and customer experiences.
 
+## Status Update · Pricing Experiments
+- **Automatic storefront telemetry**: PDPs now log exposures the first time a visitor sees an active experiment (deduped per session) and checkout posts conversion/revenue events via `/api/catalog/pricing-experiments/{slug}/events`. This keeps FastAPI metrics in sync without manual admin updates.
+- **Variant-aware payloads**: Checkout snapshots the assigned variant per cart line inside `journeyContext.pricingExperiments` and mirrors the same structure under each order item’s `attributes.pricingExperiment`. Success pages and account history read those tags to display “Dynamic pricing lab” badges and to emit analytics events keyed by `{slug, variantKey, assignmentStrategy}`.
+- **Docs + runbook alignment**: `docs/storefront-loyalty-context.md` captures the expanded pricing experiment contract, `docs/storefront-platform-roadmap.md` highlights the analytics segmentation flow, and the new `docs/runbooks/feature-flags.md` runbook explains how to seed `NEXT_PUBLIC_FEATURE_FLAGS` per environment so ops can toggle experiments confidently.
+- **Operator visibility**: `/admin/onboarding` now consumes the same pricing experiment events, rendering “Active variant” cards on each journey so concierges can triage experiments (and filter stalled journeys) without jumping into other dashboards.
+
 ### Outstanding Scope Snapshot
 
 - **Provider execution loop**: ensure each product configuration can target different API providers and payloads, persist run artifacts, trigger refills, and expose delivery telemetry in both the admin experience (aggregate/order views) and storefront order history.

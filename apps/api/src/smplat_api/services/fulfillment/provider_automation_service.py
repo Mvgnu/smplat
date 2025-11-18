@@ -381,6 +381,50 @@ class ProviderAutomationService:
         }
 
     @staticmethod
+    def build_timeline_metadata(
+        provider_order: FulfillmentProviderOrder,
+        *,
+        entry: Mapping[str, Any] | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Normalize automation payloads for order timeline metadata."""
+
+        metadata: dict[str, Any] = {
+            "providerId": provider_order.provider_id,
+            "providerName": provider_order.provider_name,
+            "providerOrderId": str(getattr(provider_order, "id", None)) if getattr(provider_order, "id", None) else None,
+            "orderId": str(getattr(provider_order, "order_id", None)) if getattr(provider_order, "order_id", None) else None,
+            "orderItemId": str(getattr(provider_order, "order_item_id", None))
+            if getattr(provider_order, "order_item_id", None)
+            else None,
+            "serviceId": provider_order.service_id,
+            "serviceAction": provider_order.service_action,
+        }
+        if entry:
+            entry_id = entry.get("id")
+            if entry_id:
+                metadata["timelineEntryId"] = entry_id
+            for key in (
+                "status",
+                "performedAt",
+                "scheduledFor",
+                "requestedAmount",
+                "amount",
+                "currency",
+                "response",
+                "ruleIds",
+                "ruleMetadata",
+            ):
+                value = entry.get(key)
+                if value is not None:
+                    metadata[key] = value
+        if extra:
+            for key, value in extra.items():
+                if value is not None:
+                    metadata[key] = value
+        return {key: value for key, value in metadata.items() if value is not None}
+
+    @staticmethod
     def _resolve_provider_order_id(payload: Mapping[str, Any]) -> str | None:
         candidates = [
             payload.get("providerOrderId"),

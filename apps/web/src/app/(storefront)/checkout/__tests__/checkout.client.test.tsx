@@ -289,6 +289,20 @@ describe("CheckoutPageClient loyalty projection", () => {
         revenueCents: 200000,
       },
     ]);
+
+    const checkoutCall = fetchMock.mock.calls.find(([url]) => url === "/api/checkout");
+    expect(checkoutCall).toBeTruthy();
+    const checkoutPayload = JSON.parse(checkoutCall![1].body as string);
+    expect(checkoutPayload.order.items[0].attributes.pricingExperiment).toEqual({
+      slug: "spring-offer",
+      name: "Spring offer",
+      variantKey: "variant-a",
+      variantName: "Variant A",
+      isControl: false,
+      assignmentStrategy: "sequential",
+      status: "running",
+      featureFlagKey: null,
+    });
   });
 });
 

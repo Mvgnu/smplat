@@ -52,7 +52,8 @@ function isSameConfiguration(existing: CartItem, incoming: Omit<CartItem, "id" |
     normalizeOptions(existing.selectedOptions) === normalizeOptions(incoming.selectedOptions) &&
     normalizeAddOns(existing.addOns) === normalizeAddOns(incoming.addOns) &&
     normalizeCustomFields(existing.customFields) === normalizeCustomFields(incoming.customFields) &&
-    JSON.stringify(existing.subscriptionPlan ?? null) === JSON.stringify(incoming.subscriptionPlan ?? null)
+    JSON.stringify(existing.subscriptionPlan ?? null) === JSON.stringify(incoming.subscriptionPlan ?? null) &&
+    (existing.platformContext?.id ?? null) === (incoming.platformContext?.id ?? null)
   );
 }
 
@@ -73,6 +74,7 @@ export const useCartStore = create<CartState>()(
               presetId: existingItem.presetId ?? item.presetId ?? null,
               presetLabel: existingItem.presetLabel ?? item.presetLabel ?? null,
               experience: existingItem.experience ?? item.experience ?? undefined,
+              platformContext: existingItem.platformContext ?? item.platformContext ?? null,
             };
             return { items: updatedItems };
           }
@@ -84,6 +86,7 @@ export const useCartStore = create<CartState>()(
             presetId: item.presetId ?? null,
             presetLabel: item.presetLabel ?? null,
             experience: item.experience ?? undefined,
+            platformContext: item.platformContext ?? null,
           };
 
           return { items: [...state.items, newItem] };

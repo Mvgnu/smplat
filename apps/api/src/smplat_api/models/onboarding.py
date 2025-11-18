@@ -66,6 +66,7 @@ class OnboardingEventType(str, Enum):
     TASK_STATUS_CHANGED = "task_status_changed"
     ARTIFACT_RECEIVED = "artifact_received"
     REFERRAL_COPIED = "referral_copied"
+    PRICING_EXPERIMENT_SEGMENT = "pricing_experiment_segment"
 
 
 class OnboardingJourney(Base):

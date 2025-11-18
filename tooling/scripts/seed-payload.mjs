@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import dotenv from 'dotenv';
-import lexicalMarketingState from '../../apps/web/src/server/cms/__fixtures__/payload-lexical-marketing.json' assert { type: 'json' };
+import lexicalMarketingState from '../../apps/web/src/server/cms/__fixtures__/payload-lexical-marketing.json' with { type: 'json' };
 
 // Load env from root and app envs
-for (const path of ['.env', 'apps/web/.env', 'apps-cms-payload/.env']) {
+for (const path of ['.env', 'apps/web/.env', 'apps/cms-payload/.env']) {
   dotenv.config({ path, override: false });
 }
 
@@ -66,9 +66,10 @@ async function upsert(collection, whereKey, whereValue, doc) {
   if (existing) {
     const { id } = existing;
     const updated = await http('PATCH', `/api/${collection}/${id}`, doc);
-    return updated;
+    return updated?.doc ?? updated;
   }
-  return await http('POST', `/api/${collection}`, doc);
+  const created = await http('POST', `/api/${collection}`, doc);
+  return created?.doc ?? created;
 }
 
 // Seed data (mirrors tooling/scripts/seed-sanity.mjs with minor adjustments)
@@ -182,5 +183,3 @@ seedAll().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-
-

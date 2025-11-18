@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Literal
 
-from fastapi import APIRouter, Request
+import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from smplat_api.core.settings import settings
+from smplat_api.db.session import get_session
+from smplat_api.models.receipt_storage_probe import ReceiptStorageProbeTelemetry
 from smplat_api.observability.scheduler import get_catalog_scheduler_store
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 router = APIRouter()
 
 
 class ComponentStatus(BaseModel):
-    status: Literal["ready", "starting", "disabled", "error"]
+    status: Literal["ready", "starting", "disabled", "error", "degraded"]
     detail: str | None = Field(default=None, description="Human readable status detail")
     last_error_at: str | None = Field(default=None, description="ISO timestamp of most recent error")
+    last_success_at: str | None = Field(default=None, description="ISO timestamp of most recent success")
 
 
 class ReadinessPayload(BaseModel):
@@ -35,7 +43,10 @@ async def service_health_alias() -> dict[str, str]:
 
 
 @router.get("/readyz", summary="Service readiness", response_model=ReadinessPayload)
-async def service_readiness(request: Request) -> ReadinessPayload:
+async def service_readiness(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> ReadinessPayload:
     components: Dict[str, ComponentStatus] = {}
     status: Literal["ready", "degraded", "error"] = "ready"
 
@@ -68,14 +79,14 @@ async def service_readiness(request: Request) -> ReadinessPayload:
     if settings.weekly_digest_enabled and digest_scheduler is not None:
         running = bool(getattr(digest_scheduler, "is_running", False))
         scheduler_status: Literal["ready", "starting", "disabled", "error"] = "ready" if running else "starting"
-        detail = None if running else "Weekly digest scheduler not running"
+        detail = None if running else "Weekly digest scheduler not running (conversion snapshot unavailable)"
         if not running:
             status = "degraded" if status != "error" else status
         components["weekly_digest"] = ComponentStatus(status=scheduler_status, detail=detail)
     else:
         components["weekly_digest"] = ComponentStatus(
             status="disabled",
-            detail="Weekly digest scheduler disabled via settings",
+            detail="Weekly digest scheduler disabled via settings (conversion metrics fallback to empty rows)",
         )
 
     recovery_worker = getattr(request.app.state, "hosted_recovery_worker", None)
@@ -152,11 +163,156 @@ async def service_readiness(request: Request) -> ReadinessPayload:
             detail="Catalog scheduler disabled via settings",
         )
 
+    receipt_storage_status = await _evaluate_receipt_storage_component(session=session)
+    components["receipt_storage"] = receipt_storage_status
+    if receipt_storage_status.status == "error":
+        status = "error"
+    elif receipt_storage_status.status == "degraded" and status == "ready":
+        status = "degraded"
+
     return ReadinessPayload(status=status, components=components)
 
 
 @router.get("/health/readyz", include_in_schema=False)
-async def service_readiness_alias(request: Request) -> ReadinessPayload:
+async def service_readiness_alias(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> ReadinessPayload:
     """Backward-compatible alias for readiness checks under /health."""
 
-    return await service_readiness(request)
+    return await service_readiness(request, session)
+
+
+async def _evaluate_receipt_storage_component(session: AsyncSession | None = None) -> ComponentStatus:
+    bucket = (settings.receipt_storage_bucket or "").strip()
+    public_base = (settings.receipt_storage_public_base_url or "").strip()
+    if not bucket:
+        return ComponentStatus(
+            status="disabled",
+            detail="Receipt storage bucket not configured",
+        )
+    if not public_base:
+        return ComponentStatus(
+            status="error",
+            detail="Receipt storage public base URL missing",
+            last_error_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    client = _build_receipt_s3_client()
+    if client is None:
+        return ComponentStatus(
+            status="error",
+            detail="Receipt storage client could not be initialized",
+            last_error_at=datetime.now(timezone.utc).isoformat(),
+        )
+    try:
+        client.head_bucket(Bucket=bucket)
+    except ClientError as error:
+        code = error.response.get("Error", {}).get("Code")
+        detail = f"Bucket check failed ({code or 'unknown error'})"
+        return ComponentStatus(
+            status="error",
+            detail=detail,
+            last_error_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except BotoCoreError as error:
+        return ComponentStatus(
+            status="error",
+            detail=f"Receipt storage unreachable ({error})",
+            last_error_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as error:  # pragma: no cover - defensive guard
+        return ComponentStatus(
+            status="error",
+            detail=f"Receipt storage unexpected error ({error})",
+            last_error_at=datetime.now(timezone.utc).isoformat(),
+        )
+    telemetry = await _fetch_receipt_storage_probe(session)
+    detail = f"Bucket {bucket} reachable"
+    status: Literal["ready", "starting", "disabled", "error", "degraded"] = "ready"
+    last_error_at: str | None = None
+    last_success_at: str | None = None
+    if telemetry is None:
+        detail = f"{detail} (probe telemetry unavailable)"
+    else:
+        last_error_at = _isoformat(telemetry.last_error_at)
+        last_success_at = _isoformat(telemetry.last_success_at)
+        if telemetry.last_detail:
+            detail = telemetry.last_detail
+        if _probe_failure_active(telemetry):
+            status = "error"
+            detail = telemetry.last_error_message or "Receipt storage probe failure"
+        elif telemetry.last_success_at is None:
+            status = "degraded"
+            detail = "Receipt storage probe has not completed successfully yet"
+        elif _probe_stale(telemetry.last_success_at):
+            status = "degraded"
+            detail = (
+                f"Last successful probe at {telemetry.last_success_at.isoformat()} "
+                f"(>{settings.receipt_storage_probe_max_stale_hours}h ago)"
+            )
+    return ComponentStatus(
+        status=status,
+        detail=detail,
+        last_error_at=last_error_at,
+        last_success_at=last_success_at,
+    )
+
+
+def _build_receipt_s3_client():
+    try:
+        config = None
+        if settings.receipt_storage_force_path_style:
+            config = Config(s3={"addressing_style": "path"})
+        return boto3.client(
+            "s3",
+            region_name=settings.receipt_storage_region,
+            endpoint_url=settings.receipt_storage_endpoint or None,
+            config=config,
+        )
+    except Exception:  # pragma: no cover - boto client creation rarely fails
+        return None
+
+
+async def _fetch_receipt_storage_probe(session: AsyncSession | None) -> ReceiptStorageProbeTelemetry | None:
+    if session is None:
+        return None
+    try:
+        telemetry = await session.get(ReceiptStorageProbeTelemetry, "receipt_storage")
+    except Exception:  # pragma: no cover - defensive guard if session closed
+        return None
+    return telemetry
+
+
+def _probe_failure_active(telemetry: ReceiptStorageProbeTelemetry) -> bool:
+    if telemetry.last_error_at is None:
+        return False
+    if telemetry.last_success_at is None:
+        return True
+    error_at = _ensure_aware(telemetry.last_error_at)
+    success_at = _ensure_aware(telemetry.last_success_at)
+    return error_at >= success_at
+
+
+def _probe_stale(last_success_at: datetime | None) -> bool:
+    if last_success_at is None:
+        return True
+    success_at = _ensure_aware(last_success_at)
+    max_age = settings.receipt_storage_probe_max_stale_hours
+    if max_age <= 0:
+        return False
+    delta = datetime.now(timezone.utc) - success_at
+    return delta > timedelta(hours=max_age)
+
+
+def _isoformat(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    aware = _ensure_aware(value)
+    return aware.isoformat()
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

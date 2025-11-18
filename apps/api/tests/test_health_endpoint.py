@@ -1,12 +1,10 @@
 import pytest
 from httpx import AsyncClient
 
-from smplat_api.app import create_app
-
 
 @pytest.mark.asyncio
-async def test_readyz_reports_component_statuses() -> None:
-    app = create_app()
+async def test_readyz_reports_component_statuses(app_with_db) -> None:
+    app, _ = app_with_db
 
     async with AsyncClient(app=app, base_url="http://test") as client:
         response = await client.get("/api/v1/health/readyz")
@@ -19,3 +17,6 @@ async def test_readyz_reports_component_statuses() -> None:
     assert "catalog_scheduler" in components
     assert "weekly_digest" in components
     assert "hosted_session_recovery" in components
+    receipt_component = components["receipt_storage"]
+    assert receipt_component["status"] in {"disabled", "ready", "error", "starting", "degraded"}
+    assert "last_success_at" in receipt_component

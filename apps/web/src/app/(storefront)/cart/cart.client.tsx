@@ -6,6 +6,8 @@ import { formatAppliedAddOnLabel } from "@/lib/product-pricing";
 import { cartTotalSelector, useCartStore } from "@/store/cart";
 import { ProductExperienceCard } from "@/components/storefront/product-experience-card";
 import { getStorefrontProductExperience } from "@/data/storefront-experience";
+import { usePlatformSelection } from "@/context/storefront-state";
+import { buildStorefrontQueryString } from "@/lib/storefront-query";
 
 function formatCurrency(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
@@ -22,6 +24,11 @@ export function CartPageClient() {
   const removeItem = useCartStore((state) => state.removeItem);
   const clear = useCartStore((state) => state.clear);
   const total = useCartStore(cartTotalSelector);
+  const platformSelection = usePlatformSelection();
+  const browseHref =
+    platformSelection?.id && platformSelection.id.length > 0
+      ? `/products${buildStorefrontQueryString({ platform: platformSelection.id })}`
+      : "/products";
 
   if (items.length === 0) {
     return (
@@ -31,11 +38,11 @@ export function CartPageClient() {
           <p className="mt-4 text-white/70">Browse our services and configure a package to get started.</p>
           <div className="mt-8">
             <Link
-              href="/products"
+              href={browseHref}
               className="inline-flex items-center rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-white/90"
               data-testid="explore-services"
             >
-              Explore services
+              {platformSelection ? `Browse ${platformSelection.label}` : "Explore services"}
             </Link>
           </div>
         </section>
@@ -52,6 +59,33 @@ export function CartPageClient() {
         <p className="text-sm text-white/60">
           Fine-tune quantities, requirements, and proceed to checkout to confirm payment.
         </p>
+        <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
+          {platformSelection ? (
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <p>
+                Platform context:{" "}
+                <span className="font-semibold text-white">{platformSelection.label}</span>. Cart totals reflect presets
+                saved for this channel.
+              </p>
+              <Link
+                href={browseHref}
+                className="inline-flex items-center justify-center rounded-full border border-white/20 px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/80 transition hover:border-white/50 hover:text-white"
+              >
+                Add more {platformSelection.label} services
+              </Link>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p>Save a platform in the nav to keep cart, checkout, and loyalty nudges in sync.</p>
+              <Link
+                href="/products#platform"
+                className="inline-flex items-center justify-center rounded-full border border-white/20 px-4 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white/80 transition hover:border-white/50 hover:text-white"
+              >
+                Set platform context
+              </Link>
+            </div>
+          )}
+        </div>
       </header>
 
       <div className="space-y-6">
@@ -69,6 +103,11 @@ export function CartPageClient() {
                 <h2 className="text-xl font-semibold text-white">{item.title}</h2>
                 <p className="text-sm text-white/60">Base price {formatCurrency(item.basePrice, item.currency)}</p>
                 <p className="text-sm text-white/60">Configuration total {formatCurrency(item.unitPrice, item.currency)}</p>
+                {item.platformContext ? (
+                  <p className="text-xs text-white/60">
+                    Platform: <span className="font-semibold">{item.platformContext.label}</span>
+                  </p>
+                ) : null}
               </div>
               <div className="flex items-center gap-3">
                 <div className="inline-flex items-center rounded-full border border-white/15">

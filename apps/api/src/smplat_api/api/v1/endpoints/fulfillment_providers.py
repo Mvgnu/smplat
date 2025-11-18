@@ -3,7 +3,10 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from loguru import logger
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from smplat_api.db.session import get_session
 from smplat_api.models.fulfillment import (
     FulfillmentProviderHealthStatusEnum,
@@ -41,8 +44,22 @@ from smplat_api.services.fulfillment.automation_status_service import Automation
 from smplat_api.tasks.provider_replay import run_scheduled_replays
 from smplat_api.tasks.provider_alerts import run_provider_alerts
 from smplat_api.services.fulfillment.provider_endpoints import ProviderEndpointError
+from smplat_api.services.providers.platform_context_cache import ProviderPlatformContextCacheService
+from smplat_api.services.orders.state_machine import OrderStateMachine, OrderStateEventTypeEnum, OrderStateActorTypeEnum
 
 router = APIRouter(prefix="/fulfillment/providers", tags=["Fulfillment Providers"])
+
+
+class ProviderPlatformContextPayload(BaseModel):
+    id: str
+    label: str
+    handle: str | None = None
+    platform_type: str | None = Field(default=None, alias="platformType")
+
+
+class ProviderPlatformContextResponse(BaseModel):
+    provider_id: str = Field(alias="providerId")
+    contexts: list[ProviderPlatformContextPayload] = Field(default_factory=list)
 
 
 def _serialize_service_metadata(metadata: ProviderServiceMetadata | dict[str, Any] | None) -> dict[str, Any] | None:
@@ -73,6 +90,14 @@ async def get_provider_automation_run_service(
     return ProviderAutomationRunService(session)
 
 
+async def get_provider_platform_context_cache_service(
+    session=Depends(get_session),
+) -> ProviderPlatformContextCacheService:
+    return ProviderPlatformContextCacheService(session)
+
+
+
+
 @router.get(
     "/",
     summary="List fulfillment providers",
@@ -83,6 +108,38 @@ async def list_providers(
 ) -> list[FulfillmentProviderResponse]:
     providers = await service.list_providers()
     return [FulfillmentProviderResponse.model_validate(provider) for provider in providers]
+
+
+@router.get(
+    "/platform-contexts",
+    summary="List cached platform contexts for providers",
+    response_model=list[ProviderPlatformContextResponse],
+)
+async def list_provider_platform_contexts(
+    provider_ids: list[str] = Query(..., alias="providerId"),
+    limit: int = Query(3, ge=1, le=10),
+    cache_service: ProviderPlatformContextCacheService = Depends(get_provider_platform_context_cache_service),
+) -> list[ProviderPlatformContextResponse]:
+    normalized_ids = [provider_id for provider_id in provider_ids if provider_id]
+    mapping = await cache_service.fetch_contexts_for_providers(normalized_ids, limit_per_provider=limit)
+    response: list[ProviderPlatformContextResponse] = []
+    for provider_id in normalized_ids:
+        rows = mapping.get(provider_id, [])
+        response.append(
+            ProviderPlatformContextResponse(
+                providerId=provider_id,
+                contexts=[
+                    ProviderPlatformContextPayload(
+                        id=record.platform_id,
+                        label=record.label,
+                        handle=record.handle,
+                        platformType=record.platform_type,
+                    )
+                    for record in rows
+                ],
+            )
+        )
+    return response
 
 
 @router.get(
@@ -303,19 +360,40 @@ async def trigger_provider_refill(
     payload: FulfillmentProviderOrderRefillRequest,
     catalog: ProviderCatalogService = Depends(get_provider_catalog_service),
     automation: ProviderAutomationService = Depends(get_provider_automation_service),
+    session: AsyncSession = Depends(get_session),
 ) -> FulfillmentProviderOrderRefillEntry:
     provider = await catalog.get_provider(provider_id)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-    order = await automation.get_provider_order(provider_id, provider_order_id)
-    if not order:
+    provider_order = await automation.get_provider_order(provider_id, provider_order_id)
+    if not provider_order:
         raise HTTPException(status_code=404, detail="Provider order not found")
     try:
-        entry = await automation.trigger_refill(order, amount=payload.amount)
+        entry = await automation.trigger_refill(provider_order, amount=payload.amount)
     except ProviderEndpointError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if provider_order.order_id:
+        machine = OrderStateMachine(session)
+        try:
+            await machine.record_event(
+                order_id=provider_order.order_id,
+                event_type=OrderStateEventTypeEnum.REFILL_COMPLETED,
+                actor_type=OrderStateActorTypeEnum.OPERATOR,
+                actor_id=str(provider_order_id),
+                actor_label=payload.actorLabel,
+                notes=payload.note,
+                metadata=ProviderAutomationService.build_timeline_metadata(
+                    provider_order,
+                    entry=entry,
+                    extra={"providerId": provider_id},
+                ),
+            )
+        except Exception:
+            # do not fail the proxy call when audit logging experiences transient errors
+            logger.exception("Failed to record refill timeline event", order_id=str(provider_order.order_id))
     return FulfillmentProviderOrderRefillEntry.model_validate(entry)
 
 
@@ -344,32 +422,72 @@ async def replay_provider_order(
     payload: FulfillmentProviderOrderReplayRequest,
     catalog: ProviderCatalogService = Depends(get_provider_catalog_service),
     automation: ProviderAutomationService = Depends(get_provider_automation_service),
+    session: AsyncSession = Depends(get_session),
 ) -> FulfillmentProviderOrderReplayEntry:
     provider = await catalog.get_provider(provider_id)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider not found")
-    order = await automation.get_provider_order(provider_id, provider_order_id)
-    if not order:
+    provider_order = await automation.get_provider_order(provider_id, provider_order_id)
+    if not provider_order:
         raise HTTPException(status_code=404, detail="Provider order not found")
+
+    entry: Mapping[str, Any] | None = None
+    event_type = None
+    event_notes: str | None = None
     try:
         if payload.run_at and payload.schedule_only:
             entry = await automation.schedule_provider_order_replay(
-                order,
+                provider_order,
                 run_at=payload.run_at,
                 amount=payload.amount,
             )
+            event_type = OrderStateEventTypeEnum.REPLAY_SCHEDULED
+            scheduled_for = entry.get("scheduledFor") or payload.run_at.isoformat()
+            event_notes = f"Replay scheduled for {scheduled_for}"
         elif payload.run_at and payload.run_at > datetime.now(timezone.utc):
             entry = await automation.schedule_provider_order_replay(
-                order,
+                provider_order,
                 run_at=payload.run_at,
                 amount=payload.amount,
             )
+            event_type = OrderStateEventTypeEnum.REPLAY_SCHEDULED
+            scheduled_for = entry.get("scheduledFor") or payload.run_at.isoformat()
+            event_notes = f"Replay scheduled for {scheduled_for}"
         else:
-            entry = await automation.replay_provider_order(order, amount=payload.amount)
+            entry = await automation.replay_provider_order(provider_order, amount=payload.amount)
+            event_type = OrderStateEventTypeEnum.REPLAY_EXECUTED
+            event_notes = None
     except ProviderEndpointError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if provider_order.order_id and event_type and entry is not None:
+        metadata = ProviderAutomationService.build_timeline_metadata(
+            provider_order,
+            entry=entry,
+            extra={
+                "providerId": provider_id,
+                "trigger": "admin_replay",
+            },
+        )
+        machine = OrderStateMachine(session)
+        try:
+            await machine.record_event(
+                order_id=provider_order.order_id,
+                event_type=event_type,
+                actor_type=OrderStateActorTypeEnum.OPERATOR,
+                actor_id=str(provider_order_id),
+                actor_label=None,
+                notes=event_notes,
+                metadata=metadata,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record replay timeline event",
+                order_id=str(provider_order.order_id),
+                event_type=event_type.value,
+            )
     return FulfillmentProviderOrderReplayEntry.model_validate(entry)
 
 

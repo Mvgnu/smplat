@@ -28,6 +28,14 @@ Each document provides repeatable, end-to-end procedures for responding to event
 - Operators can orient themselves using [`admin-console.md`](./admin-console.md).
 - Details navigation patterns, module responsibilities, access controls, and support handoffs.
 
+## Guardrail / Automation Exports
+
+- [`guardrail-followups-export.md`](./guardrail-followups-export.md) explains how to schedule `tooling/scripts/export_guardrail_followups.py`, configure the GitHub Actions workflow, and land Snowflake COPY jobs so provider follow-up timelines stay in sync across Slack, analytics, and dashboards.
+
+## Catalog QA Escalations
+
+- [`catalog-qa-escalations.md`](./catalog-qa-escalations.md) provides Slack-ready macros for merchandising incidents. Every snippet now mandates the conversion deeplink (live vs. historical cursor) plus provider follow-up references, ensuring escalations outside guardrail runbooks still cite the correct slice.
+
 ## Incident Response
 
 - Use [`incident-response.md`](./incident-response.md) to coordinate detection, mitigation, and

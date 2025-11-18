@@ -32,6 +32,7 @@ export const updateOrderStatusAction = serverTelemetry.wrapServerAction(
 
     const orderId = formData.get("orderId");
     const status = formData.get("status");
+    const notes = formData.get("notes");
 
     if (typeof orderId !== "string" || typeof status !== "string") {
       return { success: false, error: "Invalid form submission." };
@@ -41,7 +42,9 @@ export const updateOrderStatusAction = serverTelemetry.wrapServerAction(
       return { success: false, error: "Unsupported status value." };
     }
 
-    const didUpdate = await updateAdminOrderStatus(orderId, status);
+    const didUpdate = await updateAdminOrderStatus(orderId, status, {
+      notes: typeof notes === "string" ? notes : undefined,
+    });
 
     if (!didUpdate) {
       return { success: false, error: "Failed to update order status. Try again shortly." };

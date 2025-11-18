@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.models.fulfillment import (
@@ -15,6 +16,7 @@ from smplat_api.models.fulfillment import (
     FulfillmentProviderStatusEnum,
 )
 from smplat_api.models.order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum
+from smplat_api.models.order_state_event import OrderStateEvent, OrderStateEventTypeEnum
 from smplat_api.services.fulfillment import ProviderAutomationService
 from smplat_api.workers.provider_automation import ProviderOrderReplayWorker
 
@@ -113,12 +115,12 @@ async def _bootstrap_provider_order(session_factory):
         session.add_all([provider, order, provider_order])
         await session.commit()
         await session.refresh(provider_order)
-        return provider_order.id
+        return provider_order.id, order.id
 
 
 @pytest.mark.asyncio
 async def test_worker_executes_due_scheduled_replays(session_factory):
-    provider_order_id = await _bootstrap_provider_order(session_factory)
+    provider_order_id, order_id = await _bootstrap_provider_order(session_factory)
     scheduled_time = datetime.now(timezone.utc) - timedelta(minutes=5)
     run_clock = scheduled_time + timedelta(minutes=1)
     performed_at = run_clock.isoformat()
@@ -169,10 +171,17 @@ async def test_worker_executes_due_scheduled_replays(session_factory):
         assert scheduled_entry["ruleIds"] == ["rule-worker"]
         assert scheduled_entry["ruleMetadata"]["rule-worker"]["conditions"][0]["kind"] == "channel"
 
+        result = await session.execute(select(OrderStateEvent).where(OrderStateEvent.order_id == order_id))
+        events = result.scalars().all()
+        assert any(event.event_type == OrderStateEventTypeEnum.REPLAY_EXECUTED for event in events)
+        automation_event = events[0]
+        assert automation_event.metadata_json.get("trigger") == "scheduled_replay"
+        assert automation_event.metadata_json.get("status") == "executed"
+
 
 @pytest.mark.asyncio
 async def test_worker_records_failures_and_marks_schedule_entry(session_factory):
-    provider_order_id = await _bootstrap_provider_order(session_factory)
+    provider_order_id, order_id = await _bootstrap_provider_order(session_factory)
     scheduled_time = datetime.now(timezone.utc) - timedelta(minutes=5)
     now = scheduled_time + timedelta(minutes=1)
 
@@ -218,6 +227,14 @@ async def test_worker_records_failures_and_marks_schedule_entry(session_factory)
         scheduled_entry = payload["scheduledReplays"][0]
         assert scheduled_entry["status"] == "failed"
         assert scheduled_entry["performedAt"] == now.isoformat()
+
+        result = await session.execute(select(OrderStateEvent).where(OrderStateEvent.order_id == order_id))
+        events = result.scalars().all()
+        assert any(event.metadata_json.get("status") == "failed" for event in events)
+        assert any(
+            event.event_type == OrderStateEventTypeEnum.REPLAY_EXECUTED and event.metadata_json.get("error")
+            for event in events
+        )
         assert scheduled_entry["response"]["error"] == "provider_endpoint_failed"
         assert scheduled_entry["ruleIds"] == ["rule-worker"]
         assert scheduled_entry["ruleMetadata"]["rule-worker"]["conditions"][0]["kind"] == "channel"

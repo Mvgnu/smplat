@@ -31,6 +31,11 @@ from .billing_reconciliation import (  # noqa: F401
     ProcessorStatementTransactionType,
 )
 from .customer_profile import CurrencyEnum, CustomerProfile  # noqa: F401
+from .social_account import (  # noqa: F401
+    CustomerSocialAccount,
+    SocialPlatformEnum,
+    SocialAccountVerificationStatus,
+)
 from .fulfillment import (  # noqa: F401
     CampaignActivity,
     FulfillmentProvider,
@@ -55,6 +60,11 @@ from .invoice import Invoice, InvoiceLineItem, InvoiceStatusEnum  # noqa: F401
 from .metric_cache import FulfillmentMetricCache  # noqa: F401
 from .notification import Notification, NotificationChannelEnum, NotificationStatusEnum  # noqa: F401
 from .order import Order, OrderItem, OrderSourceEnum, OrderStatusEnum  # noqa: F401
+from .order_state_event import (  # noqa: F401
+    OrderStateEvent,
+    OrderStateEventTypeEnum,
+    OrderStateActorTypeEnum,
+)
 from .onboarding import (  # noqa: F401
     OnboardingArtifact,
     OnboardingEvent,
@@ -81,6 +91,9 @@ from .provider_automation_run import (  # noqa: F401
     ProviderAutomationRun,
     ProviderAutomationRunTypeEnum,
 )
+from .provider_guardrail_followup import ProviderGuardrailFollowUp  # noqa: F401
+from .provider_guardrail_status import ProviderGuardrailStatus  # noqa: F401
+from .provider_platform_context import ProviderPlatformContextCache  # noqa: F401
 from .loyalty import (  # noqa: F401
     LoyaltyAnalyticsSnapshot,
     LoyaltyGuardrailAuditAction,
@@ -128,3 +141,4 @@ from .pricing_experiments import (  # noqa: F401
     PricingExperimentStatus,
     PricingExperimentVariant,
 )
+from .receipt_storage_probe import ReceiptStorageProbeTelemetry  # noqa: F401

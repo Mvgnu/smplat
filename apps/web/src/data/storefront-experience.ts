@@ -108,74 +108,74 @@ export type StorefrontExperience = {
 
 export const storefrontExperience: StorefrontExperience = {
   hero: {
-    eyebrow: "Platform-aware storefront",
-    headline: "Shop, buy, and operate growth drops with platform telemetry built in.",
+    eyebrow: "Social growth storefront",
+    headline: "Order Instagram, TikTok, and YouTube growth drops with real proof.",
     subheadline:
-      "Pair curated products with saved Instagram, TikTok, and YouTube profiles. Every checkout carries trust metrics, fulfillment insights, and reward nudges so customers know exactly what they’re buying.",
+      "Pick a ready-made campaign, attach your saved handle, and track fulfillment through receipts, screenshots, and workflow telemetry. No pitches or guesswork — just transparent delivery backed by live metrics.",
     primaryCta: {
-      label: "Browse the catalog",
-      href: "#products"
+      label: "Shop campaigns",
+      href: "/products"
     },
     secondaryCta: {
-      label: "Book a platform review",
-      href: "#contact"
+      label: "Preview trust signals",
+      href: "/trust-preview"
     },
     highlights: [
       {
-        id: "delivery",
-        label: "Median delivery",
-        value: "5.2 days",
-        description: "Verified journey telemetry across the last 90 days."
+        id: "orders",
+        label: "Orders fulfilled",
+        value: "2,400+",
+        description: "Completed drops since January with verified receipts."
       },
       {
-        id: "retention",
-        label: "Retention uplift",
-        value: "+32%",
-        description: "Average account retention uplift after two drops."
+        id: "lift",
+        label: "Avg follower lift",
+        value: "+3.1%",
+        description: "Measured from baseline snapshots per platform."
       },
       {
-        id: "rewards",
-        label: "Rewards redeemed",
-        value: "1,800+",
-        description: "Bonus audits, refills, and referral boosts in FY25."
+        id: "repeat",
+        label: "Repeat buyers",
+        value: "67%",
+        description: "Customers who booked a second drop in the last quarter."
       }
     ]
   },
   trustMetrics: [
     {
-      id: "confidence",
-      label: "Checkout confidence score",
-      value: "98.2%",
-      description: "Orders ran without exception holds last quarter.",
-      trendLabel: "vs. last quarter",
-      trendValue: "+2.1%",
+      id: "proof",
+      label: "Proof-of-delivery coverage",
+      value: "99.1%",
+      description: "Orders shipped with receipts, screenshots, and guardrail notes.",
+      trendLabel: "last 60 days",
+      trendValue: "+1.4%",
       trendDirection: "up"
     },
     {
-      id: "delivery-window",
+      id: "fulfillment",
       label: "Avg fulfillment window",
-      value: "4.6 days",
-      description: "Weighted across provider mixes per platform.",
+      value: "4.4 days",
+      description: "Weighted across Instagram, TikTok, and YouTube mixes.",
       trendLabel: "SLA variance",
-      trendValue: "-0.8 days",
+      trendValue: "-0.6 days",
       trendDirection: "up"
     },
     {
-      id: "journey-health",
-      label: "Journey health rating",
-      value: "A-",
-      description: "Telemetry-backed provider + platform coverage.",
-      trendLabel: "incident free runs",
-      trendValue: "43",
-      trendDirection: "flat"
+      id: "lift-metric",
+      label: "Median follower lift",
+      value: "+2.8%",
+      description: "Calibrated from post-delivery baselines per order.",
+      trendLabel: "vs. prior month",
+      trendValue: "+0.4%",
+      trendDirection: "up"
     },
     {
-      id: "reward-impact",
-      label: "Reward impact",
-      value: "18%",
-      description: "Average savings from loyalty and intents nudges.",
+      id: "loyalty",
+      label: "Loyalty value unlocked",
+      value: "22%",
+      description: "Average savings from repeat-order rewards and refill credits.",
       trendLabel: "quarterly redemption rate",
-      trendValue: "+4.3%",
+      trendValue: "+5.1%",
       trendDirection: "up"
     }
   ],

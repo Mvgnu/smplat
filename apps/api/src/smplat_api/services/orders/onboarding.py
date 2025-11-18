@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Sequence
 from uuid import UUID
@@ -57,6 +58,8 @@ class OnboardingJourneyFilters:
     referral_only: bool = False
     search: str | None = None
     limit: int = 50
+    experiment_slug: str | None = None
+    experiment_variant: str | None = None
 
 
 @dataclass(slots=True)
@@ -77,6 +80,28 @@ class OnboardingJourneySummary:
     completed_tasks: int
     overdue_tasks: int
     awaiting_artifacts: int
+    pricing_experiments: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(slots=True)
+class OnboardingPricingExperimentEventRow:
+    """Flattened pricing experiment event suitable for reporting exports."""
+
+    event_id: UUID
+    journey_id: UUID
+    order_id: UUID
+    order_number: str | None
+    slug: str
+    variant_key: str
+    variant_name: str | None
+    is_control: bool | None
+    assignment_strategy: str | None
+    status: str | None
+    feature_flag_key: str | None
+    recorded_at: datetime
+    order_total: Decimal | None
+    order_currency: str | None
+    loyalty_projection_points: int | None
 
 
 @dataclass(slots=True)
@@ -158,16 +183,15 @@ class OnboardingService:
             context=context,
         )
         self.db.add(journey)
-        await self.db.flush()
 
         for task in DEFAULT_TASKS:
-            self.db.add(
+            journey.tasks.append(
                 OnboardingTask(
-                    journey_id=journey.id,
                     slug=task["slug"],
                     title=task["title"],
                     description=task.get("description"),
                     sort_order=task.get("sort_order", 0),
+                    status=OnboardingTaskStatus.PENDING,
                 )
             )
 
@@ -192,9 +216,10 @@ class OnboardingService:
         stmt = (
             select(OnboardingJourney)
             .options(
-                selectinload(OnboardingJourney.tasks),
-                selectinload(OnboardingJourney.artifacts),
-                selectinload(OnboardingJourney.interactions),
+            selectinload(OnboardingJourney.tasks),
+            selectinload(OnboardingJourney.artifacts),
+            selectinload(OnboardingJourney.interactions),
+            selectinload(OnboardingJourney.events),
             )
             .where(OnboardingJourney.order_id == order_id)
         )
@@ -210,6 +235,7 @@ class OnboardingService:
                 selectinload(OnboardingJourney.tasks),
                 selectinload(OnboardingJourney.artifacts),
                 selectinload(OnboardingJourney.interactions),
+                selectinload(OnboardingJourney.events),
             )
             .where(OnboardingJourney.id == journey_id)
         )
@@ -230,6 +256,7 @@ class OnboardingService:
                 selectinload(OnboardingJourney.tasks),
                 selectinload(OnboardingJourney.artifacts),
                 selectinload(OnboardingJourney.interactions),
+                selectinload(OnboardingJourney.events),
             )
             .order_by(OnboardingJourney.started_at.desc())
         )
@@ -249,14 +276,43 @@ class OnboardingService:
         result = await self.db.execute(stmt)
         journeys: Sequence[OnboardingJourney] = result.scalars().all()
 
-        order_ids = {journey.order_id for journey in journeys}
+        slug_filter = (filters.experiment_slug or "").strip().lower() if filters.experiment_slug else None
+        variant_filter = (
+            (filters.experiment_variant or "").strip().lower() if filters.experiment_variant else None
+        )
+
+        filtered: list[tuple[OnboardingJourney, list[dict[str, Any]]]] = []
+        for journey in journeys:
+            segments = self.build_pricing_experiment_segments(journey)
+            if slug_filter or variant_filter:
+                matches = False
+                for segment in segments:
+                    slug_value = str(segment.get("slug") or "").lower()
+                    variant_value = str(segment.get("variant_key") or "").lower()
+                    slug_ok = slug_filter is None or slug_value == slug_filter
+                    variant_ok = variant_filter is None or variant_value == variant_filter
+                    if slug_ok and variant_ok:
+                        matches = True
+                        break
+                if not matches:
+                    continue
+            filtered.append((journey, segments))
+
+        order_ids = {journey.order_id for journey, _ in filtered}
         orders: dict[UUID, Order] = {}
         if order_ids:
             order_stmt = select(Order).where(Order.id.in_(order_ids))
             order_result = await self.db.execute(order_stmt)
             orders = {order.id: order for order in order_result.scalars().all()}
 
-        return [self.build_summary(journey, orders.get(journey.order_id)) for journey in journeys]
+        return [
+            self.build_summary(
+                journey,
+                orders.get(journey.order_id),
+                pricing_experiments=tuple(segments),
+            )
+            for journey, segments in filtered
+        ]
 
     async def compute_aggregates(self) -> OnboardingJourneyAggregates:
         """Return aggregate journey counts for operator dashboards."""
@@ -343,6 +399,159 @@ class OnboardingService:
             metadata={"referral_code": referral_code},
         )
         await self.db.flush()
+        logger.info(
+            "Recorded onboarding referral copy",
+            order_id=str(order_id),
+            journey_id=str(journey.id),
+            referral_code=referral_code,
+        )
+
+    async def record_pricing_experiment_segment(
+        self,
+        order_id: UUID,
+        *,
+        experiments: Sequence[dict[str, Any]],
+    ) -> None:
+        """Record pricing experiment segmentation for analytics + loyalty telemetry."""
+
+        normalized: list[dict[str, Any]] = []
+        for experiment in experiments:
+            normalized_entry = self._normalize_pricing_experiment_entry(experiment)
+            if normalized_entry:
+                normalized.append(normalized_entry)
+
+        if not normalized:
+            return
+
+        journey = await self.ensure_journey(order_id)
+        await self._record_event(
+            journey,
+            event_type=OnboardingEventType.PRICING_EXPERIMENT_SEGMENT,
+            metadata={"experiments": normalized},
+        )
+        await self.db.flush()
+        logger.info(
+            "Recorded pricing experiment segments",
+            order_id=str(order_id),
+            journey_id=str(journey.id),
+            experiments=len(normalized),
+        )
+
+    def build_pricing_experiment_segments(self, journey: OnboardingJourney) -> list[dict[str, Any]]:
+        """Summarize pricing experiment segments from journey events."""
+
+        if not journey.events:
+            return []
+
+        segments: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for event in sorted(
+            journey.events,
+            key=lambda candidate: candidate.occurred_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        ):
+            event_type = (
+                event.event_type.value
+                if isinstance(event.event_type, OnboardingEventType)
+                else str(event.event_type)
+            )
+            if event_type != OnboardingEventType.PRICING_EXPERIMENT_SEGMENT.value:
+                continue
+            experiments = (event.metadata_json or {}).get("experiments")
+            if not isinstance(experiments, list):
+                continue
+            for entry in experiments:
+                if not isinstance(entry, dict):
+                    continue
+                slug = entry.get("slug")
+                variant_key = entry.get("variant_key") or entry.get("variantKey")
+                if not isinstance(slug, str) or not isinstance(variant_key, str):
+                    continue
+                dedupe_key = (slug, variant_key)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                segments.append(
+                    {
+                        "slug": slug,
+                        "variant_key": variant_key,
+                        "variant_name": entry.get("variant_name") or entry.get("variantName"),
+                        "is_control": entry.get("is_control")
+                        if isinstance(entry.get("is_control"), bool)
+                        else entry.get("isControl"),
+                        "assignment_strategy": entry.get("assignment_strategy")
+                        or entry.get("assignmentStrategy"),
+                        "status": entry.get("status"),
+                        "feature_flag_key": entry.get("feature_flag_key")
+                        or entry.get("featureFlagKey"),
+                        "recorded_at": event.occurred_at,
+                    }
+                )
+        return segments
+
+    async def export_pricing_experiment_events(
+        self,
+        *,
+        limit: int = 500,
+        cursor: datetime | None = None,
+    ) -> list[OnboardingPricingExperimentEventRow]:
+        """Return flattened pricing experiment events for reporting + exports."""
+        # TODO(snowflake-ingest): Pipe these normalized rows into the warehouse export so
+        # ExperimentAnalyticsService metrics hit the Snowflake dashboards described in
+        # docs/storefront-platform-roadmap.md.
+
+        stmt = (
+            select(OnboardingEvent)
+            .options(selectinload(OnboardingEvent.journey))
+            .where(OnboardingEvent.event_type == OnboardingEventType.PRICING_EXPERIMENT_SEGMENT)
+            .order_by(OnboardingEvent.occurred_at.desc())
+        )
+
+        if cursor:
+            stmt = stmt.where(OnboardingEvent.occurred_at < cursor)
+
+        stmt = stmt.limit(limit)
+        result = await self.db.execute(stmt)
+        events: Sequence[OnboardingEvent] = result.scalars().all()
+
+        order_ids = {event.order_id for event in events}
+        orders: dict[UUID, Order] = {}
+        if order_ids:
+            order_stmt = select(Order).where(Order.id.in_(order_ids))
+            order_result = await self.db.execute(order_stmt)
+            orders = {order.id: order for order in order_result.scalars().all()}
+
+        rows: list[OnboardingPricingExperimentEventRow] = []
+        for event in events:
+            experiments = (event.metadata_json or {}).get("experiments")
+            if not isinstance(experiments, list):
+                continue
+            for entry in experiments:
+                normalized = self._normalize_pricing_experiment_entry(entry)
+                if not normalized:
+                    continue
+                recorded_at = event.occurred_at or datetime.now(timezone.utc)
+                order = orders.get(event.order_id)
+                rows.append(
+                    OnboardingPricingExperimentEventRow(
+                        event_id=event.id,
+                        journey_id=event.journey_id,
+                        order_id=event.order_id,
+                        order_number=order.order_number if order else None,
+                        slug=normalized["slug"],
+                        variant_key=normalized["variant_key"],
+                        variant_name=normalized.get("variant_name"),
+                        is_control=normalized.get("is_control"),
+                        assignment_strategy=normalized.get("assignment_strategy"),
+                        status=normalized.get("status"),
+                        feature_flag_key=normalized.get("feature_flag_key"),
+                        recorded_at=recorded_at,
+                        order_total=order.total if order else None,
+                        order_currency=order.currency.value if order and order.currency else None,
+                        loyalty_projection_points=order.loyalty_projection_points if order else None,
+                    )
+                )
+        return rows
 
     async def ingest_success_payload(
         self,
@@ -357,6 +566,7 @@ class OnboardingService:
             "offer": checkout_payload.get("offer"),
             "addons": checkout_payload.get("addons"),
             "support": checkout_payload.get("support"),
+            "platform_contexts": checkout_payload.get("platformContexts"),
         }
         journey = await self.ensure_journey(order_id, referral_code=referral_code, context=context)
         await self.db.flush()
@@ -421,10 +631,49 @@ class OnboardingService:
             event_type=event_type,
             status_before=status_before,
             status_after=status_after,
-            metadata=metadata,
+            metadata_json=metadata,
         )
         self.db.add(event)
         await self.db.flush()
+
+    def _normalize_pricing_experiment_entry(
+        self, experiment: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Normalize heterogeneous experiment payloads into snake_case fields."""
+
+        if not isinstance(experiment, dict):
+            return None
+
+        slug = experiment.get("slug")
+        if not isinstance(slug, str) or not slug.strip():
+            return None
+
+        variant_key = experiment.get("variant_key") or experiment.get("variantKey")
+        if not isinstance(variant_key, str) or not variant_key.strip():
+            return None
+
+        variant_name = experiment.get("variant_name") or experiment.get("variantName")
+        is_control = experiment.get("is_control")
+        if not isinstance(is_control, bool):
+            is_control = experiment.get("isControl") if isinstance(experiment.get("isControl"), bool) else None
+        assignment_strategy = experiment.get("assignment_strategy") or experiment.get("assignmentStrategy")
+        status_value = experiment.get("status")
+        if not isinstance(status_value, str):
+            status_value = None
+
+        feature_flag_key = experiment.get("feature_flag_key") or experiment.get("featureFlagKey")
+        if feature_flag_key is not None and not isinstance(feature_flag_key, str):
+            feature_flag_key = None
+
+        return {
+            "slug": slug,
+            "variant_key": variant_key,
+            "variant_name": variant_name,
+            "is_control": is_control,
+            "assignment_strategy": assignment_strategy,
+            "status": status_value,
+            "feature_flag_key": feature_flag_key,
+        }
 
     async def _log_interaction(
         self,
@@ -451,7 +700,13 @@ class OnboardingService:
         self.db.add(interaction)
         await self.db.flush()
 
-    def build_summary(self, journey: OnboardingJourney, order: Order | None) -> OnboardingJourneySummary:
+    def build_summary(
+        self,
+        journey: OnboardingJourney,
+        order: Order | None,
+        *,
+        pricing_experiments: Sequence[dict[str, Any]] | None = None,
+    ) -> OnboardingJourneySummary:
         """Derive operator summary payload from journey context."""
 
         now = datetime.now(timezone.utc)
@@ -468,12 +723,19 @@ class OnboardingService:
             if artifact.required and not artifact.received_at
         )
 
+        def normalize(dt: datetime | None) -> datetime | None:
+            if dt is None:
+                return None
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
         last_interaction_at = None
         if journey.interactions:
-            last_interaction_at = max((interaction.created_at for interaction in journey.interactions), default=None)
+            last_interaction_at = normalize(
+                max((interaction.created_at for interaction in journey.interactions), default=None)
+            )
 
         updated_at = journey.updated_at or journey.started_at
-        reference_point = last_interaction_at or updated_at or journey.started_at
+        reference_point = last_interaction_at or normalize(updated_at) or normalize(journey.started_at)
         risk_level = "low"
         if journey.status == OnboardingJourneyStatus.STALLED:
             risk_level = "high"
@@ -485,6 +747,7 @@ class OnboardingService:
                 risk_level = "medium"
 
         progress_percentage = float(journey.progress_percentage or 0)
+        experiments = tuple(pricing_experiments or self.build_pricing_experiment_segments(journey))
 
         return OnboardingJourneySummary(
             journey_id=journey.id,
@@ -501,6 +764,7 @@ class OnboardingService:
             completed_tasks=completed_tasks,
             overdue_tasks=overdue_tasks,
             awaiting_artifacts=awaiting_artifacts,
+            pricing_experiments=experiments,
         )
 
     async def compute_nudge_opportunities(

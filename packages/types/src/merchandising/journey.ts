@@ -179,6 +179,7 @@ export type ProductJourneyComponent = {
   metadata?: Record<string, unknown> | null;
   createdAt?: Date;
   updatedAt?: Date;
+  component?: JourneyComponentDefinition | null;
 };
 
 export type ProductJourneyComponentApi = {
@@ -192,6 +193,7 @@ export type ProductJourneyComponentApi = {
   metadata_json?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
+  component?: JourneyComponentDefinition | JourneyComponentDefinitionApi | null;
 };
 
 export function normalizeProductJourneyComponent(
@@ -208,6 +210,11 @@ export function normalizeProductJourneyComponent(
     metadata: payload.metadata_json ?? null,
     createdAt: payload.created_at ? new Date(payload.created_at) : undefined,
     updatedAt: payload.updated_at ? new Date(payload.updated_at) : undefined,
+    component: payload.component
+      ? "input_schema" in payload.component
+        ? normalizeJourneyComponentDefinition(payload.component as JourneyComponentDefinitionApi)
+        : (payload.component as JourneyComponentDefinition)
+      : null,
   };
 }
 

@@ -1,9 +1,12 @@
 import type { Block } from "payload";
+import { lexicalEditor } from "@payloadcms/richtext-lexical";
 
 /**
  * Custom Component Library Blocks
  * Modern minimalist design system with light theme
  */
+
+const inlineLexicalEditor = lexicalEditor();
 
 // ============================================================================
 // HERO COMPONENTS
@@ -84,6 +87,7 @@ export const heroSplitBlock: Block = {
     {
       name: "bodyText",
       type: "richText",
+      editor: inlineLexicalEditor,
       admin: {
         description: "Optional supporting text"
       }
@@ -252,6 +256,7 @@ export const textImageTextBlock: Block = {
     {
       name: "bodyText",
       type: "richText",
+      editor: inlineLexicalEditor,
       required: true
     },
     {

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { buildOrderReceiptPayload } from "@/lib/orders/receipt-exports";
-import { fetchAdminOrder } from "@/server/orders/admin-orders";
+import { loadOrderReceipt } from "@/lib/orders/receipt-service";
 
 export async function GET(
   _request: Request,
@@ -14,12 +13,11 @@ export async function GET(
   }
 
   try {
-    const order = await fetchAdminOrder(orderId);
-    if (!order) {
+    const summary = await loadOrderReceipt(orderId);
+    if (!summary) {
       return NextResponse.json({ error: "Order not found." }, { status: 404 });
     }
 
-    const summary = buildOrderReceiptPayload(order);
     return NextResponse.json(summary, { status: 200 });
   } catch (error) {
     console.warn("Failed to load order summary", orderId, error);

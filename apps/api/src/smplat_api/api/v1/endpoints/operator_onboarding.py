@@ -8,15 +8,18 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.db.session import get_session
-from smplat_api.models import Order
+from smplat_api.models import Order, OrderItem
+from smplat_api.models.fulfillment import FulfillmentProviderOrder
 from smplat_api.models.onboarding import (
     OnboardingActorType,
     OnboardingInteractionChannel,
     OnboardingJourneyStatus,
 )
+from smplat_api.models.provider_guardrail_status import ProviderGuardrailStatus
 from smplat_api.services.notifications import NotificationService
 from smplat_api.services.orders.onboarding import (
     OnboardingJourneyAggregates,
@@ -46,6 +49,10 @@ class OperatorJourneySummaryPayload(BaseModel):
     completed_tasks: int = Field(..., alias="completedTasks")
     overdue_tasks: int = Field(..., alias="overdueTasks")
     awaiting_artifacts: int = Field(..., alias="awaitingArtifacts")
+    pricing_experiments: list[OperatorPricingExperimentPayload] = Field(
+        default_factory=list,
+        alias="pricingExperiments",
+    )
 
     @classmethod
     def from_summary(cls, summary: OnboardingJourneySummary) -> "OperatorJourneySummaryPayload":
@@ -64,6 +71,19 @@ class OperatorJourneySummaryPayload(BaseModel):
             completedTasks=summary.completed_tasks,
             overdueTasks=summary.overdue_tasks,
             awaitingArtifacts=summary.awaiting_artifacts,
+            pricingExperiments=[
+                OperatorPricingExperimentPayload(
+                    slug=segment.get("slug", ""),
+                    variantKey=segment.get("variant_key", ""),
+                    variantName=segment.get("variant_name"),
+                    isControl=segment.get("is_control"),
+                    assignmentStrategy=segment.get("assignment_strategy"),
+                    status=segment.get("status"),
+                    featureFlagKey=segment.get("feature_flag_key") or segment.get("featureFlagKey"),
+                    recordedAt=segment.get("recorded_at"),
+                )
+                for segment in summary.pricing_experiments
+            ],
         )
 
 
@@ -121,6 +141,19 @@ class OperatorInteractionPayload(BaseModel):
     details: str | None
     created_at: datetime = Field(..., alias="createdAt")
     metadata: dict[str, Any] | None
+
+
+class OperatorPricingExperimentPayload(BaseModel):
+    """Pricing experiment segment attributed to a journey."""
+
+    slug: str
+    variant_key: str = Field(..., alias="variantKey")
+    variant_name: str | None = Field(None, alias="variantName")
+    is_control: bool | None = Field(None, alias="isControl")
+    assignment_strategy: str | None = Field(None, alias="assignmentStrategy")
+    status: str | None = None
+    feature_flag_key: str | None = Field(None, alias="featureFlagKey")
+    recorded_at: datetime | None = Field(None, alias="recordedAt")
 
 
 class OperatorNudgeOpportunityPayload(BaseModel):
@@ -184,6 +217,66 @@ class JourneyDetailPayload(BaseModel):
     nudge_opportunities: list[OperatorNudgeOpportunityPayload] = Field(
         ..., alias="nudgeOpportunities"
     )
+    pricing_experiments: list[OperatorPricingExperimentPayload] = Field(
+        default_factory=list,
+        alias="pricingExperiments",
+    )
+    provider_automation: list[ProviderAutomationReferencePayload] = Field(
+        default_factory=list,
+        alias="providerAutomation",
+    )
+
+
+class ProviderAutomationReferencePayload(BaseModel):
+    """Provider automation references tied to a journey."""
+
+    provider_id: str = Field(..., alias="providerId")
+    provider_name: str | None = Field(default=None, alias="providerName")
+    order_items: list[ProviderAutomationOrderItemReferencePayload] = Field(
+        default_factory=list,
+        alias="orderItems",
+    )
+    guardrail_status: ProviderGuardrailStatusPayload | None = Field(
+        default=None,
+        alias="guardrailStatus",
+    )
+
+
+class ProviderAutomationOrderItemReferencePayload(BaseModel):
+    """Order item references associated with provider automation events."""
+
+    order_item_id: UUID = Field(..., alias="orderItemId")
+    order_item_label: str | None = Field(default=None, alias="orderItemLabel")
+
+
+class ProviderGuardrailStatusPayload(BaseModel):
+    """Latest guardrail follow-up posture for a provider."""
+
+    provider_id: str = Field(..., alias="providerId")
+    provider_name: str | None = Field(default=None, alias="providerName")
+    is_paused: bool = Field(..., alias="isPaused")
+    last_action: str | None = Field(default=None, alias="lastAction")
+    updated_at: datetime = Field(..., alias="updatedAt")
+    last_follow_up_id: UUID | None = Field(default=None, alias="lastFollowUpId")
+
+
+def _build_provider_guardrail_status_payload(
+    status: ProviderGuardrailStatus | None,
+) -> ProviderGuardrailStatusPayload | None:
+    if status is None:
+        return None
+    return ProviderGuardrailStatusPayload(
+        providerId=status.provider_id,
+        providerName=status.provider_name,
+        isPaused=status.is_paused,
+        lastAction=status.last_action,
+        updatedAt=status.updated_at,
+        lastFollowUpId=status.last_follow_up_id,
+    )
+
+
+JourneyDetailPayload.model_rebuild()
+ProviderAutomationReferencePayload.model_rebuild()
 
 
 class ManualNudgeRequest(BaseModel):
@@ -207,6 +300,8 @@ async def list_operator_journeys(
     stalled_only: bool = Query(False, alias="stalled"),
     referral_only: bool = Query(False, alias="referrals"),
     search: str | None = None,
+    experiment_slug: str | None = Query(default=None, alias="experimentSlug"),
+    experiment_variant: str | None = Query(default=None, alias="experimentVariant"),
     limit: int = Query(50, ge=1, le=200),
     db=Depends(get_session),
 ) -> JourneySummariesResponse:
@@ -219,6 +314,8 @@ async def list_operator_journeys(
         stalled_only=stalled_only,
         referral_only=referral_only,
         search=search,
+        experiment_slug=experiment_slug,
+        experiment_variant=experiment_variant,
         limit=limit,
     )
     summaries = await service.list_journey_summaries(filters=filters)
@@ -292,6 +389,85 @@ async def fetch_operator_journey_detail(
         )
     ][:50]
 
+    pricing_experiments = [
+        OperatorPricingExperimentPayload(
+            slug=segment["slug"],
+            variantKey=segment["variant_key"],
+            variantName=segment.get("variant_name"),
+            isControl=segment.get("is_control"),
+            assignmentStrategy=segment.get("assignment_strategy"),
+            status=segment.get("status"),
+            featureFlagKey=segment.get("feature_flag_key") or segment.get("featureFlagKey"),
+            recordedAt=segment.get("recorded_at"),
+        )
+        for segment in service.build_pricing_experiment_segments(journey)
+    ]
+
+    provider_stmt = (
+        select(
+            FulfillmentProviderOrder.provider_id,
+            FulfillmentProviderOrder.provider_name,
+            FulfillmentProviderOrder.order_item_id,
+        )
+        .where(FulfillmentProviderOrder.order_id == journey.order_id)
+        .order_by(FulfillmentProviderOrder.created_at.desc())
+    )
+    provider_result = await db.execute(provider_stmt)
+    provider_refs: dict[str, dict[str, Any]] = {}
+    order_item_ids: set[UUID] = set()
+    for provider_id, provider_name, order_item_id in provider_result.all():
+        if not provider_id:
+            continue
+        entry = provider_refs.get(provider_id)
+        if entry is None:
+            entry = {
+                "provider_id": provider_id,
+                "provider_name": provider_name,
+                "order_item_ids": [],
+                "order_item_seen": set(),
+            }
+            provider_refs[provider_id] = entry
+        elif provider_name and not entry["provider_name"]:
+            entry["provider_name"] = provider_name
+
+        if order_item_id and order_item_id not in entry["order_item_seen"]:
+            entry["order_item_ids"].append(order_item_id)
+            entry["order_item_seen"].add(order_item_id)
+            order_item_ids.add(order_item_id)
+
+    order_item_labels: dict[UUID, str | None] = {}
+    if order_item_ids:
+        item_stmt = select(OrderItem.id, OrderItem.product_title).where(OrderItem.id.in_(order_item_ids))
+        item_result = await db.execute(item_stmt)
+        order_item_labels = {item_id: label for item_id, label in item_result.all()}
+
+    provider_statuses: dict[str, ProviderGuardrailStatus] = {}
+    if provider_refs:
+        status_stmt = select(ProviderGuardrailStatus).where(
+            ProviderGuardrailStatus.provider_id.in_(tuple(provider_refs.keys()))
+        )
+        status_result = await db.execute(status_stmt)
+        provider_statuses = {status.provider_id: status for status in status_result.scalars().all()}
+
+    provider_payloads: list[ProviderAutomationReferencePayload] = []
+    for entry in provider_refs.values():
+        provider_payloads.append(
+            ProviderAutomationReferencePayload(
+                providerId=entry["provider_id"],
+                providerName=entry["provider_name"],
+                orderItems=[
+                    ProviderAutomationOrderItemReferencePayload(
+                        orderItemId=item_id,
+                        orderItemLabel=order_item_labels.get(item_id),
+                    )
+                    for item_id in entry["order_item_ids"]
+                ],
+                guardrailStatus=_build_provider_guardrail_status_payload(
+                    provider_statuses.get(entry["provider_id"])
+                ),
+            )
+        )
+
     return JourneyDetailPayload(
         journeyId=journey.id,
         orderId=journey.order_id,
@@ -309,6 +485,8 @@ async def fetch_operator_journey_detail(
             OperatorNudgeOpportunityPayload.from_opportunity(opportunity)
             for opportunity in opportunities
         ],
+        pricingExperiments=pricing_experiments,
+        providerAutomation=provider_payloads,
     )
 
 

@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { CheckCircle2, Gift, Sparkles } from "lucide-react";
+import { CheckCircle2, Gift, Sparkles, Users } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 import type {
@@ -18,7 +18,16 @@ import {
   consumeSuccessIntents,
   persistServerFeed
 } from "@/lib/loyalty/intents";
+import {
+  buildDeliveryProofInsights,
+  extractMetricNumber,
+  formatFollowerValue,
+  formatRelativeTimestamp,
+  formatSignedNumber,
+  type DeliveryProofInsight,
+} from "@/lib/delivery-proof-insights";
 import { formatAppliedAddOnLabel } from "@/lib/product-pricing";
+import { isPricingExperimentCopyEnabled } from "@/lib/pricing-experiments";
 import { LoyaltyNudgeRail } from "@/components/loyalty/nudge-rail";
 import { CheckoutRecoveryBanner } from "@/components/checkout/recovery-banner";
 import { CopyReceiptLinkButton } from "@/components/orders/copy-receipt-link-button";
@@ -30,6 +39,11 @@ import type {
   CartSelectionSnapshot,
   CartSubscriptionSelection,
 } from "@/types/cart";
+import { usePlatformSelection } from "@/context/storefront-state";
+import { buildStorefrontQueryString } from "@/lib/storefront-query";
+import { formatPlatformContextLabel } from "@/lib/platform-context";
+import type { DeliveryProofAggregateResponse, OrderDeliveryProof } from "@/types/delivery-proof";
+import type { ProviderAutomationTelemetry } from "@/lib/provider-service-insights";
 
 type RemoteOnboardingTask = {
   id: string;
@@ -47,13 +61,35 @@ type OnboardingJourneyResponse = {
   tasks: RemoteOnboardingTask[];
 };
 
+type PricingExperimentAttribute = {
+  slug: string;
+  name?: string | null;
+  variantKey: string;
+  variantName?: string | null;
+  isControl?: boolean;
+  assignmentStrategy?: string | null;
+  status?: string | null;
+  featureFlagKey?: string | null;
+};
+
 type CheckoutOrderItem = {
   id: string;
+  productId: string | null;
   productTitle: string;
   quantity: number;
   unitPrice: number;
   totalPrice: number;
   selectedOptions: CartSelectionSnapshot | null;
+  attributes?: {
+    customFields?: Record<string, unknown>;
+    pricingExperiment?: PricingExperimentAttribute | null;
+  } | null;
+  platformContext?: {
+    id: string;
+    label: string;
+    handle?: string | null;
+    platformType?: string | null;
+  } | null;
 };
 
 type CheckoutOrderSummary = {
@@ -66,7 +102,46 @@ type CheckoutOrderSummary = {
   notes: string | null;
   loyaltyProjectionPoints: number | null;
   items: CheckoutOrderItem[];
+  pricingExperiments: PricingExperimentAttribute[];
+  deliveryProof: OrderDeliveryProof | null;
+  deliveryProofAggregates: DeliveryProofAggregateResponse | null;
+  receiptStorageKey: string | null;
+  receiptStorageUrl: string | null;
+  receiptStorageUploadedAt: string | null;
+  providerTelemetry: ProviderAutomationTelemetry | null;
 };
+
+type PricingExperimentSegment = {
+  slug: string;
+  name: string;
+  variantKey: string;
+  variantName: string;
+  isControl: boolean;
+  assignmentStrategy: string | null;
+  status: string | null;
+  featureFlagKey: string | null;
+};
+
+const toPricingExperimentSegment = (
+  entry: PricingExperimentAttribute | null | undefined
+): PricingExperimentSegment | null => {
+  if (!entry?.slug || !entry.variantKey) {
+    return null;
+  }
+  return {
+    slug: entry.slug,
+    name: entry.name ?? entry.slug,
+    variantKey: entry.variantKey,
+    variantName: entry.variantName ?? entry.variantKey,
+    isControl: Boolean(entry.isControl),
+    assignmentStrategy: entry.assignmentStrategy ?? null,
+    status: entry.status ?? null,
+    featureFlagKey: entry.featureFlagKey ?? null,
+  };
+};
+
+const buildLoyaltyExperimentHref = (slug: string): string =>
+  `/account/loyalty?experiment=${encodeURIComponent(slug)}`;
 
 type OnboardingTask = {
   id: string;
@@ -123,6 +198,11 @@ export default function CheckoutSuccessPage() {
     "idle" | "loading" | "ready" | "error"
   >("idle");
   const [orchestrationError, setOrchestrationError] = useState<string | null>(null);
+  const platformSelection = usePlatformSelection();
+  const platformBrowseHref =
+    platformSelection?.id && platformSelection.id.length > 0
+      ? `/products${buildStorefrontQueryString({ platform: platformSelection.id })}`
+      : "/products";
   const loyaltyBannerPoints = useMemo(() => {
     if (normalizedProjectedPoints != null) {
       return normalizedProjectedPoints;
@@ -159,10 +239,81 @@ export default function CheckoutSuccessPage() {
       return null;
     }
   }, [orderSummary]);
+  const pdfReceiptHref = useMemo(() => {
+    if (!orderSummary) {
+      return null;
+    }
+    if (orderSummary.receiptStorageUrl) {
+      return orderSummary.receiptStorageUrl;
+    }
+    return `/api/orders/${orderSummary.id}/receipt`;
+  }, [orderSummary]);
 
   const completedCount = tasks.filter((task) => task.completed).length;
   const checklistProgress = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
   const hasCheckoutIntents = checkoutIntents.length > 0;
+  const pricingExperimentSegments = useMemo(() => {
+    if (!orderSummary) {
+      return [];
+    }
+    const segments = new Map<string, PricingExperimentSegment>();
+    (orderSummary.pricingExperiments ?? []).forEach((entry) => {
+      const segment = toPricingExperimentSegment(entry);
+      if (segment) {
+        segments.set(segment.slug, segment);
+      }
+    });
+    orderSummary.items.forEach((item) => {
+      const segment = toPricingExperimentSegment(item.attributes?.pricingExperiment);
+      if (segment && !segments.has(segment.slug)) {
+        segments.set(segment.slug, segment);
+      }
+    });
+    return Array.from(segments.values());
+  }, [orderSummary]);
+
+  const visiblePricingExperimentSegments = useMemo(
+    () =>
+      pricingExperimentSegments.filter((segment) =>
+        isPricingExperimentCopyEnabled(segment.status, segment.featureFlagKey)
+      ),
+    [pricingExperimentSegments]
+  );
+
+  const orderPlatformContexts = useMemo(() => {
+    if (!orderSummary?.items?.length) {
+      return [];
+    }
+    const entries = new Map<string, NonNullable<CheckoutOrderItem["platformContext"]>>();
+    orderSummary.items.forEach((item) => {
+      const context = item.platformContext;
+      if (context?.id && !entries.has(context.id)) {
+        entries.set(context.id, context);
+      }
+    });
+    return Array.from(entries.values());
+  }, [orderSummary]);
+
+  const deliveryProofInsights = useMemo(() => {
+    if (!orderSummary) {
+      return [];
+    }
+    return buildDeliveryProofInsights(
+      orderSummary.items.map((item) => ({
+        id: item.id,
+        productId: item.productId ?? null,
+        productTitle: item.productTitle,
+        platformContext: item.platformContext ?? null,
+      })),
+      {
+        proof: orderSummary.deliveryProof,
+        aggregates: orderSummary.deliveryProofAggregates,
+      }
+    );
+  }, [orderSummary]);
+
+  const lastJourneySyncSignature = useRef<string | null>(null);
+
 
   const fetchJourney = useCallback(async () => {
     if (!orderId) {
@@ -416,6 +567,38 @@ export default function CheckoutSuccessPage() {
   }, [orderId]);
 
   useEffect(() => {
+    if (!orderId || pricingExperimentSegments.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    const persistSegments = async () => {
+      try {
+        await recordOnboardingEvent("pricing_experiment_segment", {
+          experiments: pricingExperimentSegments.map((segment) => ({
+            slug: segment.slug,
+            variantKey: segment.variantKey,
+            variantName: segment.variantName,
+            isControl: segment.isControl,
+            assignmentStrategy: segment.assignmentStrategy,
+            status: segment.status,
+            featureFlagKey: segment.featureFlagKey,
+          })),
+        });
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Failed to record pricing experiment segmentation event", error);
+        }
+      }
+    };
+
+    void persistSegments();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId, pricingExperimentSegments, recordOnboardingEvent]);
+
+  useEffect(() => {
     let cancelled = false;
     const loadServerFeed = async () => {
       try {
@@ -531,8 +714,24 @@ export default function CheckoutSuccessPage() {
     if (!orderId) {
       return;
     }
-    void recordOnboardingEvent("journey_started").then(() => fetchJourney()).catch(() => fetchJourney());
-  }, [orderId, recordOnboardingEvent, fetchJourney]);
+    const payload: Record<string, unknown> = {};
+    if (orderPlatformContexts.length > 0) {
+      payload.platformContexts = orderPlatformContexts.map((context) => ({
+        id: context.id,
+        label: context.label,
+        handle: context.handle ?? null,
+        platformType: context.platformType ?? null,
+      }));
+    }
+    const signature = `${orderId}:${JSON.stringify(payload.platformContexts ?? [])}`;
+    if (lastJourneySyncSignature.current === signature) {
+      return;
+    }
+    lastJourneySyncSignature.current = signature;
+    void recordOnboardingEvent("journey_started", payload)
+      .then(() => fetchJourney())
+      .catch(() => fetchJourney());
+  }, [orderId, orderPlatformContexts, recordOnboardingEvent, fetchJourney]);
 
   useEffect(() => {
     if (!referralCopied) {
@@ -569,6 +768,36 @@ export default function CheckoutSuccessPage() {
         )}
       </section>
 
+      <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-sm text-white/70 backdrop-blur">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-white/50">Platform scope</p>
+            {platformSelection ? (
+              <>
+                <p className="text-base font-semibold text-white">Focused on {platformSelection.label}</p>
+                <p>
+                  We&apos;ll keep future recommendations and loyalty nudges aligned with this channel. Explore additional
+                  services without losing your context.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-base font-semibold text-white">No channel selected</p>
+                <p>Save a platform to keep storefront, checkout, and loyalty timelines in sync.</p>
+              </>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-[0.25em] text-white/70">
+            <Link
+              href={platformBrowseHref}
+              className="rounded-full border border-white/20 px-4 py-1 text-white/80 transition hover:border-white/50 hover:text-white"
+            >
+              {platformSelection ? `Browse ${platformSelection.label}` : "Browse catalog"}
+            </Link>
+          </div>
+        </div>
+      </section>
+
       {orderSummaryState !== "idle" ? (
         <section className="space-y-4 rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
           <header className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -595,6 +824,14 @@ export default function CheckoutSuccessPage() {
                   className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/60 hover:text-white"
                 >
                   Download JSON
+                </a>
+              ) : null}
+              {pdfReceiptHref ? (
+                <a
+                  href={pdfReceiptHref}
+                  className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/60 hover:text-white"
+                >
+                  Download PDF
                 </a>
               ) : null}
             </div>
@@ -624,6 +861,7 @@ export default function CheckoutSuccessPage() {
                     Boolean(blueprint?.options?.length) ||
                     Boolean(blueprint?.addOns?.length) ||
                     Boolean(blueprint?.subscriptionPlan);
+                  const experimentMeta = toPricingExperimentSegment(item.attributes?.pricingExperiment);
 
                   return (
                     <article key={item.id} className="space-y-3 rounded-2xl border border-white/10 bg-black/30 p-4">
@@ -638,6 +876,20 @@ export default function CheckoutSuccessPage() {
                           {formatCurrency(item.totalPrice, orderSummary.currency)}
                         </span>
                       </div>
+                      {item.platformContext ? (
+                        <div className="flex flex-wrap gap-2 text-[0.65rem] uppercase tracking-[0.2em] text-white/50">
+                          <span className="inline-flex items-center gap-2 rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-sky-100">
+                            <Users className="h-3 w-3" aria-hidden="true" />
+                            {formatPlatformContextLabel(item.platformContext)}
+                          </span>
+                        </div>
+                      ) : null}
+                      {experimentMeta ? (
+                        <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-300/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-amber-100">
+                          <Sparkles className="h-3 w-3" aria-hidden="true" />
+                          {experimentMeta.name} · {experimentMeta.variantName}
+                        </div>
+                      ) : null}
 
                       {blueprint?.options?.length ? (
                         <div className="space-y-2">
@@ -777,6 +1029,63 @@ export default function CheckoutSuccessPage() {
           ) : (
             <p className="text-sm text-white/60">No items were recorded for this order.</p>
           )}
+        </section>
+      ) : null}
+
+      {orderSummaryState === "ready" && orderSummary && deliveryProofInsights.length > 0 ? (
+        <OrderDeliveryProofInsights
+          insights={deliveryProofInsights}
+          generatedAt={orderSummary.deliveryProof?.generatedAt ?? null}
+          windowDays={orderSummary.deliveryProofAggregates?.windowDays ?? null}
+        />
+      ) : null}
+
+      {visiblePricingExperimentSegments.length > 0 ? (
+        <section className="rounded-3xl border border-emerald-400/30 bg-emerald-500/5 p-6 text-sm text-white/80">
+          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/80">Pricing experiment insights</p>
+          <p className="mt-2 text-white/70">
+            These cart lines ran through the dynamic pricing lab. Because the experiment is actively surfaced (status +
+            feature flag), we pin the assigned variant so loyalty dashboards, emails, and concierge scripts stay aligned.
+          </p>
+          <ul className="mt-4 space-y-3">
+            {visiblePricingExperimentSegments.map((segment) => (
+              <li key={segment.slug} className="space-y-2 rounded-2xl border border-white/10 bg-black/20 p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-base font-semibold text-white">{segment.name}</p>
+                    <p className="text-xs text-white/60">
+                      {segment.isControl ? "Control cohort" : "Challenger cohort"}
+                      {segment.status ? ` · ${segment.status}` : ""}
+                      {segment.featureFlagKey ? ` · Flag ${segment.featureFlagKey}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex flex-col items-start gap-1 text-left sm:items-end sm:text-right">
+                    <span
+                      className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.3em] text-amber-100"
+                      title={segment.assignmentStrategy ?? undefined}
+                    >
+                      <Sparkles className="h-3 w-3" aria-hidden="true" />
+                      Triggered by {segment.variantName}
+                    </span>
+                    <Link
+                      href={buildLoyaltyExperimentHref(segment.slug)}
+                      className="text-xs font-semibold text-emerald-300 hover:underline"
+                    >
+                      Review loyalty context
+                    </Link>
+                  </div>
+                </div>
+                {segment.assignmentStrategy ? (
+                  <p className="text-xs text-white/60">Assignment strategy: {segment.assignmentStrategy}</p>
+                ) : null}
+                <p className="text-xs text-white/60">
+                  Loyalty receipts and concierge scripts call out{" "}
+                  <span className="font-semibold text-white">{segment.variantName}</span> so future nudges stay aligned
+                  with this experiment.
+                </p>
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
 
@@ -1008,5 +1317,137 @@ export default function CheckoutSuccessPage() {
         </p>
       </section>
     </main>
+  );
+}
+
+type DeliveryProofInsightsProps = {
+  insights: DeliveryProofInsight[];
+  generatedAt: string | null;
+  windowDays: number | null;
+};
+
+function OrderDeliveryProofInsights({ insights, generatedAt, windowDays }: DeliveryProofInsightsProps) {
+  if (!insights.length) {
+    return null;
+  }
+
+  const refreshedText = formatRelativeTimestamp(generatedAt);
+
+  return (
+    <section className="rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/10 via-sky-500/5 to-emerald-500/10 p-6 text-sm text-white/80 backdrop-blur">
+      <div className="flex flex-col gap-2">
+        <p className="text-xs uppercase tracking-[0.3em] text-white/40">Delivery proof insights</p>
+        <p className="text-white/70">
+          Linked social accounts capture before/after follower lift. Receipts now mirror the same metrics ops use so
+          everyone sees trustworthy numbers.
+        </p>
+        {refreshedText ? (
+          <p className="text-xs text-white/50">Snapshots refreshed {refreshedText}.</p>
+        ) : null}
+      </div>
+      <div className="mt-4 space-y-4">
+        {insights.map((insight) => (
+          <DeliveryProofInsightCard key={insight.item.id} insight={insight} windowDays={windowDays} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DeliveryProofInsightCard({
+  insight,
+  windowDays,
+}: {
+  insight: DeliveryProofInsight;
+  windowDays: number | null;
+}) {
+  const baselineFollowers = extractMetricNumber(insight.proof?.baseline, "followerCount");
+  const latestFollowers = extractMetricNumber(insight.proof?.latest, "followerCount");
+  const deltaFollowers =
+    baselineFollowers != null && latestFollowers != null ? latestFollowers - baselineFollowers : null;
+
+  const baselineCaptured = formatRelativeTimestamp(insight.proof?.baseline?.recordedAt ?? null);
+  const latestCaptured = formatRelativeTimestamp(insight.proof?.latest?.recordedAt ?? null);
+
+  const fallbackMetric = insight.aggregate?.metrics.find((metric) => metric.metricKey === "followerCount");
+  const fallbackDeltaText =
+    fallbackMetric?.formattedDelta ??
+    (typeof fallbackMetric?.deltaAverage === "number" ? formatSignedNumber(fallbackMetric.deltaAverage) : null);
+  const fallbackPercentText = fallbackMetric?.formattedPercent ?? null;
+  const fallbackLatestText =
+    fallbackMetric?.formattedLatest ??
+    (typeof fallbackMetric?.latestAverage === "number" ? formatFollowerValue(fallbackMetric.latestAverage) : null);
+
+  const sampleTextParts: string[] = [];
+  if (insight.aggregate?.sampleSize) {
+    sampleTextParts.push(`n=${insight.aggregate.sampleSize}`);
+  }
+  if (windowDays && windowDays > 0) {
+    sampleTextParts.push(`${windowDays}-day window`);
+  }
+  const sampleText = sampleTextParts.length ? sampleTextParts.join(" · ") : null;
+
+  return (
+    <article className="space-y-3 rounded-2xl border border-white/15 bg-black/30 p-4 text-sm text-white/80">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-base font-semibold text-white">{insight.item.productTitle}</p>
+          <p className="text-xs text-white/60">
+            {insight.proof?.account?.handle
+              ? `@${insight.proof.account.handle} · ${insight.proof.account.platform ?? "Unknown platform"}`
+              : insight.item.platformContext?.handle
+                ? `Awaiting link for @${insight.item.platformContext.handle}`
+                : "No linked account yet"}
+          </p>
+        </div>
+        {latestCaptured ? (
+          <p className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">Latest capture {latestCaptured}</p>
+        ) : null}
+      </div>
+
+      {insight.proof ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-xl border border-white/10 bg-black/40 p-3">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/40">Baseline</p>
+            <p className="text-2xl font-semibold text-white">{formatFollowerValue(baselineFollowers)}</p>
+            {baselineCaptured ? (
+              <p className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">Captured {baselineCaptured}</p>
+            ) : null}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/40 p-3">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/40">Latest</p>
+            <p className="text-2xl font-semibold text-white">{formatFollowerValue(latestFollowers)}</p>
+            {latestCaptured ? (
+              <p className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">Captured {latestCaptured}</p>
+            ) : null}
+            {insight.proof.latest?.warnings?.length ? (
+              <p className="mt-1 text-xs text-amber-200">Warnings: {insight.proof.latest.warnings.join(", ")}</p>
+            ) : null}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/40">Delta</p>
+            <p className="text-2xl font-semibold text-white">{formatSignedNumber(deltaFollowers)}</p>
+            <p className="text-[0.65rem] uppercase tracking-[0.3em] text-white/40">Follower lift</p>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-3 text-sm text-white/60">
+          Automation is lining up the first delivery snapshot for this account. We’ll email you once the before/after
+          metrics land in receipts.
+        </div>
+      )}
+
+      {insight.aggregate ? (
+        <p className="text-xs text-white/60">
+          {insight.proof
+            ? "Benchmark"
+            : "While automation records your live snapshot, similar campaigns show"}{" "}
+          {fallbackDeltaText ?? "steady movement"}
+          {fallbackPercentText ? ` (${fallbackPercentText})` : ""} follower change
+          {fallbackLatestText ? ` with latest avg ${fallbackLatestText}` : ""}.{" "}
+          {sampleText ? `Sample ${sampleText}.` : null}
+        </p>
+      ) : null}
+    </article>
   );
 }

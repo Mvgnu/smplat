@@ -206,6 +206,7 @@ function mergeMarketingContent(fallback: MarketingContent, page: PageDocument | 
 function integrateTrustSignals(
   marketing: MarketingContent,
   trust: CheckoutTrustExperience | null | undefined,
+  productSlug?: string,
 ): MarketingContent {
   if (!trust) {
     return marketing;
@@ -219,6 +220,13 @@ function integrateTrustSignals(
     }
 
     const metric = snapshot.metric as CheckoutMetricVerification | undefined;
+    const metricSlug = metric?.metadata?.productSlug;
+    if (productSlug && metricSlug) {
+      const slugs = Array.isArray(metricSlug) ? metricSlug : [metricSlug];
+      if (!slugs.includes(productSlug)) {
+        return;
+      }
+    }
     const resolvedValue =
       metric?.formattedValue ?? snapshot.value ?? snapshot.fallbackValue ?? null;
     if (!resolvedValue) {
@@ -326,7 +334,11 @@ export async function generateMetadata(
   const page = await getPageBySlug(cmsSlug);
   const fallback = marketingFallbacks[product.slug] ?? defaultMarketing;
   const trustExperience = await getCheckoutTrustExperience();
-  const marketing = integrateTrustSignals(mergeMarketingContent(fallback, page), trustExperience);
+  const marketing = integrateTrustSignals(
+    mergeMarketingContent(fallback, page),
+    trustExperience,
+    product.slug,
+  );
 
   return {
     title: `${product.title} | SMPLAT`,
@@ -383,7 +395,11 @@ export default async function ProductDetailPage({ params }: PageProps) {
     fetchPricingExperiments(),
   ]);
   const fallback = marketingFallbacks[product.slug] ?? defaultMarketing;
-  const marketing = integrateTrustSignals(mergeMarketingContent(fallback, page), trustExperience);
+  const marketing = integrateTrustSignals(
+    mergeMarketingContent(fallback, page),
+    trustExperience,
+    product.slug,
+  );
   const relevantExperiments = filterExperimentsForRecommendations(
     recommendationSnapshot.recommendations,
     experiments,

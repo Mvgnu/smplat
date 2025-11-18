@@ -1,5 +1,6 @@
 'use client';
 
+import Image from "next/image";
 import {
   useCallback,
   useEffect,
@@ -282,10 +283,13 @@ export function AssetUploadForm({ productId, csrfToken }: AssetUploadFormProps) 
               className="flex flex-col gap-4 rounded-2xl border border-white/15 bg-black/60 p-4 md:flex-row md:items-start"
             >
               {draft.previewUrl ? (
-                <img
+                <Image
                   src={draft.previewUrl}
-                  alt=""
+                  alt={draft.altText?.trim() || draft.file.name || "Asset preview"}
+                  width={96}
+                  height={96}
                   className="h-24 w-24 flex-none rounded-xl border border-white/10 object-cover"
+                  unoptimized
                 />
               ) : (
                 <div className="flex h-24 w-24 flex-none items-center justify-center rounded-xl border border-white/10 text-xs uppercase tracking-[0.3em] text-white/40">

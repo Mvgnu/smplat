@@ -1,0 +1,228 @@
+name: Guardrail Workflow Telemetry Export
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+env:
+  GUARDRAIL_WORKFLOW_EXPORT_URL: ${{ secrets.GUARDRAIL_WORKFLOW_EXPORT_URL }}
+  GUARDRAIL_WORKFLOW_EXPORT_BUCKET: ${{ secrets.GUARDRAIL_WORKFLOW_EXPORT_BUCKET }}
+  GUARDRAIL_WORKFLOW_EXPORT_S3_PREFIX: ${{ secrets.GUARDRAIL_WORKFLOW_EXPORT_S3_PREFIX }}
+  AWS_REGION: ${{ secrets.GUARDRAIL_WORKFLOW_EXPORT_AWS_REGION }}
+  SLACK_WEBHOOK_URL: ${{ secrets.GUARDRAIL_WORKFLOW_EXPORT_SLACK_WEBHOOK }}
+  GUARDRAIL_WORKFLOW_EXPORT_STATUS_S3_URI: ${{ secrets.GUARDRAIL_WORKFLOW_EXPORT_STATUS_S3_URI }}
+
+jobs:
+  export:
+    name: Stream guardrail workflow telemetry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download guardrail workflow events
+        id: download
+        env:
+          CURL_OUTPUT: guardrail-workflow-events.ndjson
+          HEADER_FILE: guardrail-workflow-headers.txt
+        run: |
+          if [ -z "$GUARDRAIL_WORKFLOW_EXPORT_URL" ]; then
+            echo "GUARDRAIL_WORKFLOW_EXPORT_URL is not configured" >&2
+            exit 1
+          fi
+
+          tmpfile=$(mktemp)
+          header_file=$(mktemp)
+          status=$(curl -sS -w "%{http_code}" -D "$header_file" -o "$tmpfile" "$GUARDRAIL_WORKFLOW_EXPORT_URL")
+          if [ "$status" -eq 404 ]; then
+            echo "No guardrail workflow events returned (404). Skipping upload."
+            echo "skip_upload=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$status" -ne 200 ]; then
+            echo "Unexpected status $status from export endpoint" >&2
+            cat "$tmpfile" >&2
+            exit 1
+          fi
+
+          mv "$tmpfile" "$CURL_OUTPUT"
+          mv "$header_file" "$HEADER_FILE"
+          echo "skip_upload=false" >> "$GITHUB_OUTPUT"
+          events=$(grep -i "X-Guardrail-Workflow-Events:" "$HEADER_FILE" | tail -n1 | awk '{print $2}' | tr -d '\r')
+          if [ -z "$events" ]; then
+            events=$(wc -l < "$CURL_OUTPUT")
+          fi
+          echo "event_count=$events" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        if: steps.download.outputs.skip_upload != 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.GUARDRAIL_WORKFLOW_EXPORT_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.GUARDRAIL_WORKFLOW_EXPORT_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload NDJSON to S3
+        if: steps.download.outputs.skip_upload != 'true'
+        id: upload
+        env:
+          BUCKET: ${{ env.GUARDRAIL_WORKFLOW_EXPORT_BUCKET }}
+          PREFIX: ${{ env.GUARDRAIL_WORKFLOW_EXPORT_S3_PREFIX }}
+        run: |
+          if [ -z "$BUCKET" ]; then
+            echo "GUARDRAIL_WORKFLOW_EXPORT_BUCKET is not configured" >&2
+            exit 1
+          fi
+          timestamp=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+          key="guardrail-workflow/${timestamp}-${GITHUB_RUN_ID}.ndjson"
+          if [ -n "$PREFIX" ]; then
+            key="${PREFIX%/}/$key"
+          fi
+          aws s3 cp guardrail-workflow-events.ndjson "s3://$BUCKET/$key" --content-type application/x-ndjson
+          echo "s3_key=$key" >> "$GITHUB_OUTPUT"
+          echo "download_url=https://$BUCKET.s3.${AWS_REGION:-us-east-1}.amazonaws.com/$key" >> "$GITHUB_OUTPUT"
+
+      - name: Persist NDJSON artifact
+        if: steps.download.outputs.skip_upload != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardrail-workflow-events
+          path: guardrail-workflow-events.ndjson
+          if-no-files-found: error
+
+      - name: Publish export status snapshot
+        if: steps.download.outputs.skip_upload != 'true' && env.GUARDRAIL_WORKFLOW_EXPORT_STATUS_S3_URI != ''
+        env:
+          STATUS_URI: ${{ env.GUARDRAIL_WORKFLOW_EXPORT_STATUS_S3_URI }}
+          BUCKET: ${{ env.GUARDRAIL_WORKFLOW_EXPORT_BUCKET }}
+          REGION: ${{ env.AWS_REGION }}
+          S3_KEY: ${{ steps.upload.outputs.s3_key }}
+          DOWNLOAD_URL: ${{ steps.upload.outputs.download_url }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+
+          const lines = fs.readFileSync("guardrail-workflow-events.ndjson", "utf8").split("\n").filter(Boolean);
+          const actionMap = new Map();
+          const attachmentTotals = { upload: 0, remove: 0, copy: 0, tag: 0 };
+          const providerMap = new Map();
+          let lastEventAt = null;
+
+          for (const line of lines) {
+            try {
+              const event = JSON.parse(line);
+              if (!event || typeof event !== "object") continue;
+              const action = event.workflowAction ?? "unknown";
+              const timestamp = typeof event.recordedAt === "string" ? event.recordedAt : null;
+              const previous = actionMap.get(action) ?? { count: 0, lastOccurredAt: null };
+              previous.count += 1;
+              if (!previous.lastOccurredAt || (timestamp && timestamp > previous.lastOccurredAt)) {
+                previous.lastOccurredAt = timestamp;
+              }
+              actionMap.set(action, previous);
+
+              if (timestamp && (!lastEventAt || timestamp > lastEventAt)) {
+                lastEventAt = timestamp;
+              }
+
+              if (action.startsWith("attachment.")) {
+                if (action === "attachment.upload") attachmentTotals.upload += 1;
+                if (action === "attachment.remove") attachmentTotals.remove += 1;
+                if (action === "attachment.copy") attachmentTotals.copy += 1;
+                if (action === "attachment.tag") attachmentTotals.tag += 1;
+              }
+
+              const providerKey = event.providerId ?? `unknown-${event.providerName ?? "n/a"}`;
+              const providerStats = providerMap.get(providerKey) ?? {
+                providerId: event.providerId ?? null,
+                providerName: event.providerName ?? null,
+                totalActions: 0,
+                lastAction: action,
+                lastActionAt: timestamp,
+              };
+              providerStats.totalActions += 1;
+              if (!providerStats.lastActionAt || (timestamp && timestamp > providerStats.lastActionAt)) {
+                providerStats.lastActionAt = timestamp;
+                providerStats.lastAction = action;
+              }
+              providerMap.set(providerKey, providerStats);
+            } catch {
+              continue;
+            }
+          }
+
+          const actionCounts = Array.from(actionMap.entries())
+            .map(([action, meta]) => ({ action, count: meta.count, lastOccurredAt: meta.lastOccurredAt }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 10);
+
+          const providerActivity = Array.from(providerMap.values())
+            .sort((a, b) => {
+              if (a.lastActionAt && b.lastActionAt) {
+                return b.lastActionAt.localeCompare(a.lastActionAt);
+              }
+              if (a.lastActionAt) return -1;
+              if (b.lastActionAt) return 1;
+              return b.totalActions - a.totalActions;
+            })
+            .slice(0, 5);
+
+          const payload = {
+            syncedAt: lastEventAt ?? new Date().toISOString(),
+            events: lines.length,
+            downloadUrl: process.env.DOWNLOAD_URL ?? null,
+            workflowUrl: process.env.WORKFLOW_URL ?? null,
+            s3Key: process.env.S3_KEY ?? null,
+            metrics: {
+              actionCounts,
+              attachmentTotals,
+              providerActivity,
+            },
+          };
+
+          fs.writeFileSync("guardrail-workflow-export-status.json", JSON.stringify(payload));
+          NODE
+
+          aws s3 cp guardrail-workflow-export-status.json "$STATUS_URI" --content-type application/json
+
+      - name: Notify success
+        if: success() && env.SLACK_WEBHOOK_URL != '' && steps.download.outputs.skip_upload != 'true'
+        env:
+          EVENT_COUNT: ${{ steps.download.outputs.event_count }}
+          S3_KEY: ${{ steps.upload.outputs.s3_key }}
+        run: |
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          cat <<JSON > slack_success.json
+          {
+            "text": ":white_check_mark: Guardrail workflow telemetry export succeeded\n- Events: ${EVENT_COUNT}\n- Artifact: s3://${GUARDRAIL_WORKFLOW_EXPORT_BUCKET}/${S3_KEY}\n- Run: ${run_url}"
+          }
+JSON
+          curl -X POST -H 'Content-type: application/json' --data @slack_success.json "$SLACK_WEBHOOK_URL"
+
+      - name: Notify skipped export
+        if: success() && env.SLACK_WEBHOOK_URL != '' && steps.download.outputs.skip_upload == 'true'
+        run: |
+          payload=$(cat <<'JSON'
+          {
+            "text": ":information_source: Guardrail workflow telemetry export skipped (no events found)\n- Run: '"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+          }
+JSON
+          )
+          echo "$payload" > slack_skip.json
+          curl -X POST -H 'Content-type: application/json' --data @slack_skip.json "$SLACK_WEBHOOK_URL"
+
+      - name: Notify failure
+        if: failure() && env.SLACK_WEBHOOK_URL != '' && steps.download.outputs.skip_upload != 'true'
+        run: |
+          payload=$(cat <<'JSON'
+          {
+            "text": ":rotating_light: Guardrail workflow telemetry export failed\n- Run: '"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+          }
+JSON
+          )
+          echo "$payload" > slack_failure.json
+          curl -X POST -H 'Content-type: application/json' --data @slack_failure.json "$SLACK_WEBHOOK_URL"

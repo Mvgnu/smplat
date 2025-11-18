@@ -1,12 +1,34 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
+import {
+  buildDeliveryProofInsights,
+  extractMetricNumber,
+  formatFollowerValue,
+  formatRelativeTimestamp,
+  formatSignedNumber,
+  type DeliveryProofInsight,
+} from "@/lib/delivery-proof-insights";
 import { formatAppliedAddOnLabel } from "@/lib/product-pricing";
+import { isPricingExperimentCopyEnabled } from "@/lib/pricing-experiments";
 import { requireRole } from "@/server/auth/policies";
 import { fetchClientOrderHistory } from "@/server/orders/client-orders";
-import { buildOrderJsonDownloadHref, getOrderDownloadFilename } from "@/lib/orders/receipt-exports";
+import {
+  buildOrderJsonDownloadHref,
+  getOrderDownloadFilename,
+  type BuildOrderReceiptOptions,
+} from "@/lib/orders/receipt-exports";
 import { CopyReceiptLinkButton } from "@/components/orders/copy-receipt-link-button";
 import { summarizeProviderAutomationTelemetry } from "@/lib/provider-service-insights";
 import type { FulfillmentProviderOrder, FulfillmentProviderOrderReplayEntry } from "@/types/fulfillment";
+import { Sparkles, Users } from "lucide-react";
+import { formatPlatformContextLabel } from "@/lib/platform-context";
+import type { ClientOrderHistoryRecord } from "@/server/orders/client-orders";
+import { fetchReceiptStorageComponent, type ReceiptStorageComponent } from "@/server/health/readiness";
+import { fetchGuardrailWorkflowTelemetrySummary } from "@/server/reporting/guardrail-workflow-telemetry";
+import type { GuardrailWorkflowTelemetrySummary } from "@/types/reporting";
+import type { QuickOrderTelemetryContext } from "@/types/quick-order";
+import { QuickOrderTelemetryCard } from "./QuickOrderTelemetryCard";
 
 export const metadata: Metadata = {
   title: "Orders",
@@ -83,7 +105,92 @@ const describeReplayTimestamp = (entry: FulfillmentProviderOrderReplayEntry) => 
   return "Awaiting run";
 };
 
-export default async function AccountOrdersPage() {
+type OrderPricingExperimentDisplay = {
+  slug: string;
+  name: string;
+  variantName: string;
+  isControl: boolean;
+  assignmentStrategy: string | null;
+  status: string | null;
+  featureFlagKey: string | null;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const readPricingExperimentAttribute = (
+  attributes: Record<string, unknown> | null | undefined,
+): OrderPricingExperimentDisplay | null => {
+  if (!attributes || !isRecord(attributes)) {
+    return null;
+  }
+  const payload =
+    (attributes as Record<string, unknown>).pricingExperiment ??
+    (attributes as Record<string, unknown>).pricing_experiment;
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const slug = typeof payload.slug === "string" ? payload.slug : null;
+  const variantKey = typeof payload.variantKey === "string" ? payload.variantKey : null;
+  if (!slug || !variantKey) {
+    return null;
+  }
+  const variantName =
+    typeof payload.variantName === "string"
+      ? payload.variantName
+      : typeof payload.variant_key === "string"
+        ? payload.variant_key
+        : variantKey;
+  const assignmentStrategy =
+    typeof payload.assignmentStrategy === "string"
+      ? payload.assignmentStrategy
+      : typeof payload.assignment_strategy === "string"
+        ? payload.assignment_strategy
+        : null;
+  return {
+    slug,
+    name: typeof payload.name === "string" ? payload.name : slug,
+    variantName,
+    isControl:
+      typeof payload.isControl === "boolean"
+        ? payload.isControl
+        : typeof payload.is_control === "boolean"
+          ? payload.is_control
+          : false,
+    assignmentStrategy,
+    status: typeof payload.status === "string" ? payload.status : null,
+    featureFlagKey:
+      typeof payload.featureFlagKey === "string"
+        ? payload.featureFlagKey
+        : typeof payload.feature_flag_key === "string"
+          ? payload.feature_flag_key
+          : null,
+  };
+};
+
+const collectOrderPricingExperiments = (
+  items: Array<{ attributes: Record<string, unknown> | null }>,
+): OrderPricingExperimentDisplay[] => {
+  const segments = new Map<string, OrderPricingExperimentDisplay>();
+  items.forEach((item) => {
+    const segment = readPricingExperimentAttribute(item.attributes);
+    if (segment) {
+      segments.set(segment.slug, segment);
+    }
+  });
+  return Array.from(segments.values());
+};
+
+const buildLoyaltyExperimentHref = (slug: string): string =>
+  `/account/loyalty?experiment=${encodeURIComponent(slug)}`;
+
+type AccountOrdersPageProps = {
+  searchParams?: {
+    experiment?: string;
+  };
+};
+
+export default async function AccountOrdersPage({ searchParams }: AccountOrdersPageProps) {
   const { session } = await requireRole("member", {
     context: {
       route: "storefront.account.orders.page",
@@ -96,7 +203,24 @@ export default async function AccountOrdersPage() {
     throw new Error("Account orders page requires an authenticated user.");
   }
 
-  const orders = await fetchClientOrderHistory(userId, 25);
+  const [orders, receiptStorageStatus, workflowTelemetry] = await Promise.all([
+    fetchClientOrderHistory(userId, 25, { includeDeliveryProof: true }),
+    fetchReceiptStorageComponent(),
+    fetchGuardrailWorkflowTelemetrySummary().catch(() => null),
+  ]);
+  const quickOrderContext = buildQuickOrderTelemetryContext(orders);
+  const experimentSlug =
+    typeof searchParams?.experiment === "string" && searchParams.experiment.trim().length > 0
+      ? searchParams.experiment.trim().toLowerCase()
+      : null;
+
+  const filteredOrders =
+    experimentSlug && experimentSlug.length > 0
+      ? orders.filter((order) => {
+          const experiments = collectOrderPricingExperiments(order.items);
+          return experiments.some((experiment) => experiment.slug.toLowerCase() === experimentSlug);
+        })
+      : orders;
 
   return (
     <div className="space-y-8 text-white">
@@ -109,7 +233,37 @@ export default async function AccountOrdersPage() {
         </p>
       </section>
 
-      {orders.length === 0 ? (
+      {experimentSlug ? (
+        <section className="rounded-3xl border border-amber-400/40 bg-amber-500/10 p-6 text-sm text-white/80">
+          <p className="text-xs uppercase tracking-[0.3em] text-amber-200/80">Experiment filter</p>
+          <p className="mt-2">
+            Showing orders linked to <span className="font-semibold text-white">{searchParams?.experiment}</span>. Use the loyalty hub to inspect nudges + ledger
+            entries for the same slug or clear this filter below.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            <Link
+              href={`/account/loyalty?experiment=${encodeURIComponent(searchParams?.experiment ?? "")}`}
+              className="inline-flex items-center justify-center rounded-full border border-white/40 px-4 py-2 font-semibold uppercase tracking-[0.2em] text-white/80 transition hover:border-white/60 hover:text-white"
+            >
+              View loyalty context
+            </Link>
+            <Link
+              href="/account/orders"
+              className="inline-flex items-center justify-center rounded-full border border-transparent px-4 py-2 font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:text-white"
+            >
+              Clear filter
+            </Link>
+          </div>
+        </section>
+      ) : null}
+
+      <QuickOrderTelemetryCard
+        context={quickOrderContext}
+        receiptStatus={receiptStorageStatus}
+        workflowTelemetry={workflowTelemetry}
+      />
+
+      {filteredOrders.length === 0 ? (
         <section className="rounded-3xl border border-dashed border-white/20 bg-black/30 p-10 text-center text-white/60">
           <p className="text-sm uppercase tracking-[0.3em] text-white/40">No orders yet</p>
           <p className="mt-3 text-base text-white">
@@ -119,15 +273,36 @@ export default async function AccountOrdersPage() {
         </section>
       ) : (
         <div className="space-y-6">
-          {orders.map((order) => {
-            const downloadHref = buildOrderJsonDownloadHref(order);
+          {filteredOrders.map((order) => {
+            const receiptOptions: BuildOrderReceiptOptions = {
+              deliveryProof: order.deliveryProof ?? null,
+              deliveryProofAggregates: order.deliveryProofAggregates ?? null,
+            };
+            const downloadHref = buildOrderJsonDownloadHref(order, receiptOptions);
             const downloadFilename = getOrderDownloadFilename(order);
+            const pdfHref = order.receiptStorageUrl ?? `/api/orders/${order.id}/receipt`;
             const providerOrders = Array.isArray(order.providerOrders) ? order.providerOrders : [];
             const providerTelemetry = providerOrders.length
               ? summarizeProviderAutomationTelemetry(providerOrders)
               : null;
             const loyaltyProjection =
               typeof order.loyaltyProjectionPoints === "number" ? order.loyaltyProjectionPoints : null;
+            const pricingExperiments = collectOrderPricingExperiments(order.items);
+            const visiblePricingExperiments = pricingExperiments.filter((experiment) =>
+              isPricingExperimentCopyEnabled(experiment.status, experiment.featureFlagKey)
+            );
+            const deliveryProofInsights = buildDeliveryProofInsights(
+              order.items.map((item) => ({
+                id: item.id,
+                productId: item.productId,
+                productTitle: item.productTitle,
+                platformContext: item.platformContext,
+              })),
+              {
+                proof: order.deliveryProof,
+                aggregates: order.deliveryProofAggregates,
+              }
+            );
             return (
             <article key={order.id} className="space-y-4 rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
               <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -154,18 +329,92 @@ export default async function AccountOrdersPage() {
                     >
                       Download JSON
                     </a>
+                    <a
+                      href={pdfHref}
+                      className="inline-flex items-center justify-center rounded-full border border-white/30 px-4 py-2 font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/60 hover:text-white"
+                    >
+                      Download PDF
+                    </a>
                   </div>
                 </div>
               </header>
               {loyaltyProjection != null ? (
                 <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
                   This order earned approximately {formatPoints(loyaltyProjection)} loyalty points.
+                  {visiblePricingExperiments.length > 0 ? (
+                    <>
+                      {" "}
+                      Triggered by{" "}
+                      <span className="font-semibold">
+                        {visiblePricingExperiments[0].variantName} · {visiblePricingExperiments[0].name}
+                      </span>
+                      .{" "}
+                      <Link
+                        href={buildLoyaltyExperimentHref(visiblePricingExperiments[0].slug)}
+                        className="text-emerald-200 underline-offset-4 hover:underline"
+                      >
+                        Review loyalty context
+                      </Link>
+                      .
+                    </>
+                  ) : null}
                 </div>
               ) : (
                 <div className="rounded-2xl border border-dashed border-white/20 px-4 py-3 text-xs text-white/60">
                   Loyalty projection will appear on upcoming orders as soon as checkout records the points estimate.
                 </div>
               )}
+
+              {(() => {
+                if (visiblePricingExperiments.length === 0) {
+                  return null;
+                }
+                return (
+                  <div className="rounded-2xl border border-amber-300/30 bg-amber-300/5 px-4 py-3 text-sm text-white/70">
+                    <p className="text-xs uppercase tracking-[0.3em] text-amber-200/80">Pricing experiments</p>
+                    <p className="mt-1">
+                      These services ran through the dynamic pricing lab. Variant badges stay visible while the
+                      experiment status + feature flag allow storefront copy, loyalty digests, and concierge scripts to
+                      stay in sync.
+                    </p>
+                    <ul className="mt-3 space-y-2">
+                      {visiblePricingExperiments.map((experiment) => (
+                        <li
+                          key={experiment.slug}
+                          className="space-y-1 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-white">{experiment.name}</p>
+                              <p className="text-white/60">
+                                {experiment.isControl ? "Control cohort" : "Challenger cohort"}
+                                {experiment.status ? ` · ${experiment.status}` : ""}
+                                {experiment.featureFlagKey ? ` · Flag ${experiment.featureFlagKey}` : ""}
+                              </p>
+                            </div>
+                            <span
+                              className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.3em] text-amber-100"
+                              title={experiment.assignmentStrategy ?? undefined}
+                            >
+                              <Sparkles className="h-3 w-3" aria-hidden="true" />
+                              Triggered by {experiment.variantName}
+                            </span>
+                          </div>
+                          {experiment.assignmentStrategy ? (
+                            <p className="text-white/60">Assignment: {experiment.assignmentStrategy}</p>
+                          ) : null}
+                          <Link
+                            href={buildLoyaltyExperimentHref(experiment.slug)}
+                            className="inline-flex text-[11px] font-semibold text-emerald-200 underline-offset-4 hover:underline"
+                          >
+                            View loyalty context
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
 
               {order.items.length === 0 ? (
                 <p className="text-sm text-white/60">No items were captured for this order.</p>
@@ -177,6 +426,7 @@ export default async function AccountOrdersPage() {
                       Boolean(blueprint?.options?.length) ||
                       Boolean(blueprint?.addOns?.length) ||
                       Boolean(blueprint?.subscriptionPlan);
+                    const experimentMeta = readPricingExperimentAttribute(item.attributes);
 
                     return (
                       <section key={item.id} className="space-y-3 rounded-2xl border border-white/10 bg-black/30 p-4">
@@ -191,6 +441,20 @@ export default async function AccountOrdersPage() {
                             {formatCurrency(item.totalPrice, order.currency)}
                           </span>
                         </div>
+                        {item.platformContext ? (
+                          <div className="flex flex-wrap gap-2 text-[0.65rem] uppercase tracking-[0.2em] text-white/50">
+                            <span className="inline-flex items-center gap-2 rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-sky-100">
+                              <Users className="h-3 w-3" aria-hidden="true" />
+                              {formatPlatformContextLabel(item.platformContext)}
+                            </span>
+                          </div>
+                        ) : null}
+                        {experimentMeta ? (
+                          <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-300/10 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-amber-100">
+                            <Sparkles className="h-3 w-3" aria-hidden="true" />
+                            {experimentMeta.name} · {experimentMeta.variantName}
+                          </div>
+                        ) : null}
 
                         {blueprint?.options?.length ? (
                           <div className="space-y-2">
@@ -342,6 +606,14 @@ export default async function AccountOrdersPage() {
                   })}
                 </div>
               )}
+
+              {deliveryProofInsights.length ? (
+                <AccountDeliveryProofInsights
+                  insights={deliveryProofInsights}
+                  generatedAt={order.deliveryProof?.generatedAt ?? null}
+                  windowDays={order.deliveryProofAggregates?.windowDays ?? null}
+                />
+              ) : null}
 
               {providerOrders.length ? (
                 <section
@@ -498,4 +770,188 @@ function RefillTimeline({
       </ul>
     </div>
   );
+}
+
+function AccountDeliveryProofInsights({
+  insights,
+  generatedAt,
+  windowDays,
+}: {
+  insights: DeliveryProofInsight[];
+  generatedAt: string | null;
+  windowDays: number | null;
+}) {
+  if (!insights.length) {
+    return null;
+  }
+  const refreshed = formatRelativeTimestamp(generatedAt);
+  return (
+    <section className="space-y-3 rounded-2xl border border-white/10 bg-black/30 p-4">
+      <div className="flex flex-col gap-1">
+        <p className="text-xs uppercase tracking-[0.3em] text-white/40">Delivery proof</p>
+        <p className="text-sm text-white/60">
+          Before/after snapshots sync directly from automation. If a line is still ramping, we show aggregate lift so you
+          always see trustworthy context.
+        </p>
+        {refreshed ? (
+          <p className="text-xs text-white/50">Last refreshed {refreshed}.</p>
+        ) : null}
+      </div>
+      <div className="space-y-3">
+        {insights.map((insight) => (
+          <AccountDeliveryProofInsightCard
+            key={insight.item.id}
+            insight={insight}
+            windowDays={windowDays}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AccountDeliveryProofInsightCard({ insight, windowDays }: { insight: DeliveryProofInsight; windowDays: number | null }) {
+  const baselineFollowers = extractMetricNumber(insight.proof?.baseline, "followerCount");
+  const latestFollowers = extractMetricNumber(insight.proof?.latest, "followerCount");
+  const deltaFollowers =
+    baselineFollowers != null && latestFollowers != null ? latestFollowers - baselineFollowers : null;
+  const baselineCaptured = formatRelativeTimestamp(insight.proof?.baseline?.recordedAt ?? null);
+  const latestCaptured = formatRelativeTimestamp(insight.proof?.latest?.recordedAt ?? null);
+  const followerAggregate =
+    insight.aggregate?.metrics.find((metric) => metric.metricKey === "followerCount") ?? null;
+  const sampleTextParts: string[] = [];
+  if (insight.aggregate?.sampleSize) {
+    sampleTextParts.push(`n=${insight.aggregate.sampleSize}`);
+  }
+  if (windowDays && windowDays > 0) {
+    sampleTextParts.push(`${windowDays}-day window`);
+  }
+  return (
+    <article className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-4">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-white">{insight.item.productTitle}</p>
+          <p className="text-xs text-white/60">
+            {insight.proof?.account?.handle
+              ? `@${insight.proof.account.handle} · ${insight.proof.account.platform ?? "Unknown platform"}`
+              : insight.item.platformContext?.handle
+                ? `Awaiting link for ${insight.item.platformContext.handle}`
+                : "No linked account"}
+          </p>
+        </div>
+        {latestCaptured ? (
+          <p className="text-[0.6rem] uppercase tracking-[0.3em] text-white/40">Latest {latestCaptured}</p>
+        ) : null}
+      </div>
+      {insight.proof ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/40">Baseline</p>
+            <p className="text-2xl font-semibold text-white">{formatFollowerValue(baselineFollowers)}</p>
+            {baselineCaptured ? (
+              <p className="text-[0.6rem] uppercase tracking-[0.3em] text-white/40">Captured {baselineCaptured}</p>
+            ) : null}
+          </div>
+          <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/40">Latest</p>
+            <p className="text-2xl font-semibold text-white">{formatFollowerValue(latestFollowers)}</p>
+            {latestCaptured ? (
+              <p className="text-[0.6rem] uppercase tracking-[0.3em] text-white/40">Captured {latestCaptured}</p>
+            ) : null}
+            {insight.proof.latest?.warnings?.length ? (
+              <p className="mt-1 text-xs text-amber-200">Warnings: {insight.proof.latest.warnings.join(", ")}</p>
+            ) : null}
+          </div>
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <p className="text-xs uppercase tracking-[0.3em] text-white/40">Delta</p>
+            <p className="text-2xl font-semibold text-white">{formatSignedNumber(deltaFollowers)}</p>
+            <p className="text-[0.6rem] uppercase tracking-[0.3em] text-white/40">Follower lift</p>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-white/15 bg-black/10 p-3 text-sm text-white/60">
+          Automation is lining up the first delivery snapshot for this item. We’ll email the receipt update once metrics
+          land.
+        </div>
+      )}
+      {followerAggregate ? (
+        <p className="text-xs text-white/60">
+          {!insight.proof
+            ? "While we capture your live metrics, campaigns with similar blueprints average"
+            : "Benchmarks show"}{" "}
+          {followerAggregate.formattedDelta ??
+            (typeof followerAggregate.deltaAverage === "number"
+              ? formatSignedNumber(followerAggregate.deltaAverage)
+              : "steady movement")}
+          {followerAggregate.formattedPercent ? ` (${followerAggregate.formattedPercent})` : ""} follower change{followerAggregate.formattedLatest ? ` with latest avg ${followerAggregate.formattedLatest}` : ""}.
+          {sampleTextParts.length ? ` Sample ${sampleTextParts.join(" · ")}.` : ""}
+        </p>
+      ) : null}
+    </article>
+  );
+}
+
+function buildQuickOrderTelemetryContext(
+  orders: ClientOrderHistoryRecord[],
+): QuickOrderTelemetryContext | null {
+  for (const order of orders) {
+    if (!order.items?.length) {
+      continue;
+    }
+    const insights = buildDeliveryProofInsights(
+      order.items.map((item) => ({
+        id: item.id,
+        productId: item.productId,
+        productTitle: item.productTitle,
+        platformContext: item.platformContext,
+      })),
+      {
+        proof: order.deliveryProof,
+        aggregates: order.deliveryProofAggregates,
+      },
+    );
+    if (!insights.length) {
+      continue;
+    }
+    const prioritized = insights.find((entry) => entry.proof) ?? insights[0];
+    const sourceItem = order.items.find((item) => item.id === prioritized.item.id) ?? null;
+    const baselineFollowers = extractMetricNumber(prioritized.proof?.baseline, "followerCount");
+    const latestFollowers = extractMetricNumber(prioritized.proof?.latest, "followerCount");
+    const delta =
+      baselineFollowers != null && latestFollowers != null
+        ? latestFollowers - baselineFollowers
+        : latestFollowers ?? baselineFollowers;
+    const providerOrders = Array.isArray(order.providerOrders) ? order.providerOrders : [];
+    const providerTelemetry = providerOrders.length
+      ? summarizeProviderAutomationTelemetry(providerOrders as FulfillmentProviderOrder[])
+      : null;
+
+    const platformHandleFromProof = prioritized.proof?.account?.handle
+      ? `@${prioritized.proof.account.handle}`
+      : null;
+    const platformHandle = platformHandleFromProof ?? sourceItem?.platformContext?.handle ?? prioritized.item.platformContext?.handle ?? null;
+    const platformType = prioritized.proof?.account?.platform
+      ? prioritized.proof.account.platform.toLowerCase()
+      : sourceItem?.platformContext?.platformType ?? prioritized.item.platformContext?.platformType ?? null;
+
+    return {
+      productTitle: prioritized.item.productTitle,
+      productId: prioritized.item.productId,
+      platformLabel:
+        prioritized.proof?.account?.handle && prioritized.proof?.account?.platform
+          ? `@${prioritized.proof.account.handle} · ${prioritized.proof.account.platform}`
+          : formatPlatformContextLabel(prioritized.item.platformContext ?? sourceItem?.platformContext) ?? "Active platform",
+      platformHandle,
+      platformType,
+      platformContextId: sourceItem?.platformContext?.id ?? prioritized.item.platformContext?.id ?? null,
+      followerBaseline: formatFollowerValue(baselineFollowers),
+      followerDelta: formatSignedNumber(delta),
+      lastSnapshotRelative: formatRelativeTimestamp(
+        prioritized.proof?.latest?.recordedAt ?? prioritized.proof?.baseline?.recordedAt ?? null,
+      ),
+      providerTelemetry,
+      selection: sourceItem?.selectedOptions ?? null,
+    };
+  }
+  return null;
 }

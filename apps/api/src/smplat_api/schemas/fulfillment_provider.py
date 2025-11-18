@@ -390,6 +390,8 @@ class FulfillmentProviderOrderResponse(BaseModel):
 
 class FulfillmentProviderOrderRefillRequest(BaseModel):
     amount: float | None = Field(default=None, ge=0)
+    note: str | None = Field(default=None, max_length=500)
+    actorLabel: str | None = Field(default=None, alias="actorLabel")
 
 
 class FulfillmentProviderOrderReplayRequest(BaseModel):
@@ -426,6 +428,7 @@ class ProviderAutomationRuleSummary(_CamelModel):
 class ProviderAutomationRunStatus(_CamelModel):
     ran_at: datetime = Field(alias="ranAt")
     summary: dict[str, Any]
+    metadata: dict[str, Any] | None = None
 
 
 class ProviderAutomationStatusResponse(_CamelModel):

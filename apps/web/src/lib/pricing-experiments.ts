@@ -10,6 +10,16 @@ export function isPricingExperimentEnabled(experiment: PricingExperiment): boole
   );
 }
 
+export function isPricingExperimentCopyEnabled(
+  status: string | null | undefined,
+  featureFlagKey: string | null | undefined
+): boolean {
+  if (!status) {
+    return false;
+  }
+  return CUSTOMER_VISIBLE_STATUSES.has(status.toLowerCase()) && isFeatureFlagEnabled(featureFlagKey);
+}
+
 export function filterEnabledPricingExperiments(
   experiments: PricingExperiment[],
 ): PricingExperiment[] {

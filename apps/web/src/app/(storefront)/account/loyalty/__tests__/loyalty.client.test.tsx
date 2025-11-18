@@ -12,6 +12,23 @@ import type {
 } from "@smplat/types";
 
 import { LoyaltyHubClient } from "../loyalty.client";
+import { StorefrontStateProvider } from "@/context/storefront-state";
+import { DEFAULT_STOREFRONT_STATE } from "@/shared/storefront-state";
+
+jest.mock("next/navigation", () => {
+  const actual = jest.requireActual("next/navigation");
+  return {
+    ...actual,
+    useRouter: () => ({
+      replace: jest.fn(),
+      push: jest.fn(),
+      prefetch: jest.fn(),
+      refresh: jest.fn(),
+      back: jest.fn(),
+      forward: jest.fn()
+    })
+  };
+});
 
 jest.mock("../loyalty.actions", () => ({
   requestRedemption: jest.fn(async () => ({
@@ -200,18 +217,20 @@ const baseTimeline: LoyaltyTimelineResult = {
 
 function renderClient(overrides: Partial<React.ComponentProps<typeof LoyaltyHubClient>> = {}) {
   return render(
-    <LoyaltyHubClient
-      ledger={baseLedger}
-      member={baseMember}
-      redemptions={baseRedemptions}
-      referrals={baseReferrals}
-      rewards={baseRewards}
-      nextActions={baseNextActions}
-      nudges={baseNudges}
-      timeline={baseTimeline}
-      csrfToken="token"
-      {...overrides}
-    />
+    <StorefrontStateProvider initialState={DEFAULT_STOREFRONT_STATE}>
+      <LoyaltyHubClient
+        ledger={baseLedger}
+        member={baseMember}
+        redemptions={baseRedemptions}
+        referrals={baseReferrals}
+        rewards={baseRewards}
+        nextActions={baseNextActions}
+        nudges={baseNudges}
+        timeline={baseTimeline}
+        csrfToken="token"
+        {...overrides}
+      />
+    </StorefrontStateProvider>
   );
 }
 
@@ -238,4 +257,14 @@ test("filters timeline by campaign slug", () => {
 
   expect(screen.getByText(/Nudge acknowledged/)).toBeInTheDocument();
   expect(screen.queryByText(/Invite rc-123/)).not.toBeInTheDocument();
+});
+
+test("renders experiment context banner when focus experiment is provided", () => {
+  renderClient({ focusExperimentSlug: "checkout_recovery" });
+
+  expect(screen.getByText(/experiment context/i)).toBeInTheDocument();
+  expect(screen.getByDisplayValue("checkout_recovery")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /clear experiment focus/i }));
+  expect(screen.queryByText(/experiment context/i)).not.toBeInTheDocument();
 });

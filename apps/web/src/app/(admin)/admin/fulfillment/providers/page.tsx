@@ -12,6 +12,7 @@ import { getOrCreateCsrfToken } from "@/server/security/csrf";
 import { runAutomationReplayAction, runAutomationAlertAction } from "@/server/actions/provider-automation";
 import { fetchBlueprintMetrics, type BlueprintMetrics } from "@/server/reporting/blueprint-metrics";
 import { fetchPresetEventAnalytics, type PresetEventAnalytics } from "@/server/analytics/preset-events";
+import { fetchGuardrailFollowUps } from "@/server/reporting/guardrail-followups";
 
 // meta: route: admin/fulfillment/providers
 
@@ -62,6 +63,23 @@ export default async function AdminFulfillmentProvidersPage() {
     }),
   );
   const ordersByProvider = Object.fromEntries(ordersEntries);
+  const followUpsEntries = await Promise.all(
+    providers.map(async (provider) => {
+      try {
+        const feed = await fetchGuardrailFollowUps({ providerId: provider.id, limit: 5 });
+        return [provider.id, feed] as const;
+      } catch {
+        return [
+          provider.id,
+          {
+            entries: [],
+            nextCursor: null,
+          },
+        ] as const;
+      }
+    }),
+  );
+  const followUpsByProvider = Object.fromEntries(followUpsEntries);
   const providerCohortWindows = blueprintMetrics.presetProviderEngagements.windows;
   const providerLoadAlerts = blueprintMetrics.providerLoadAlerts ?? [];
   const presetAlerts = (presetEventAnalytics.alerts ?? []) as PresetAlertEntry[];
@@ -81,6 +99,7 @@ export default async function AdminFulfillmentProvidersPage() {
       <ProviderCatalogClient
         providers={providers}
         ordersByProvider={ordersByProvider}
+        followUpsByProvider={followUpsByProvider}
         csrfToken={csrfToken}
         automationStatus={automationStatus}
         automationHistory={automationHistory}

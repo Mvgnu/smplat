@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 
 import { MainNav, SiteFooter } from "@/components/layout";
+import { ChunkRecoveryListener } from "@/components/layout/ChunkRecoveryListener";
 import { QueryProvider } from "@/components/providers/QueryProvider";
+import { StorefrontStateProvider } from "@/context/storefront-state";
+import { getStorefrontStateFromCookies } from "@/server/storefront/state";
 
 import "./globals.css";
 
@@ -25,16 +28,21 @@ type RootLayoutProps = {
 };
 
 export default function RootLayout({ children }: RootLayoutProps) {
+  const storefrontState = getStorefrontStateFromCookies();
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background text-foreground antialiased">
-        <QueryProvider>
-          <div className="flex min-h-screen flex-col">
-            <MainNav />
-            <div className="flex-1">{children}</div>
-            <SiteFooter />
-          </div>
-        </QueryProvider>
+        <StorefrontStateProvider initialState={storefrontState}>
+          <QueryProvider>
+            <ChunkRecoveryListener />
+            <div className="flex min-h-screen flex-col">
+              <MainNav />
+              <div className="flex-1">{children}</div>
+              <SiteFooter />
+            </div>
+          </QueryProvider>
+        </StorefrontStateProvider>
       </body>
     </html>
   );

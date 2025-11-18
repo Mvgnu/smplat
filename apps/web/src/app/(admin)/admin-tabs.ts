@@ -37,6 +37,11 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     description: "Tune guardrails and rewards"
   },
   {
+    href: "/admin/reports",
+    label: "Reporting",
+    description: "Export telemetry and insights"
+  },
+  {
     href: "/admin/onboarding",
     label: "Operations",
     description: "Guide manual outreach"

@@ -1,0 +1,99 @@
+name: Onboarding Experiment Export
+
+on:
+  schedule:
+    - cron: "15 * * * *"
+  workflow_dispatch:
+
+env:
+  API_BASE_URL: ${{ secrets.ONBOARDING_EXPORT_API_BASE_URL }}
+  DATABASE_URL: ${{ secrets.ONBOARDING_EXPORT_DATABASE_URL }}
+  ANALYTICS_SEGMENTS_WEBHOOK: ${{ secrets.ANALYTICS_SEGMENTS_WEBHOOK }}
+  ONBOARDING_EXPORT_CURSOR_S3_URI: ${{ secrets.ONBOARDING_EXPORT_CURSOR_S3_URI }}
+  AWS_REGION: ${{ secrets.ONBOARDING_EXPORT_AWS_REGION }}
+  SLACK_WEBHOOK_URL: ${{ secrets.ONBOARDING_EXPORT_SLACK_WEBHOOK }}
+
+jobs:
+  export:
+    name: Stream onboarding experiment events
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Poetry
+        run: pipx install poetry
+      - name: Install backend dependencies
+        working-directory: apps/api
+        run: poetry install --only main --no-root
+      - name: Configure AWS credentials
+        if: env.ONBOARDING_EXPORT_CURSOR_S3_URI != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.ONBOARDING_EXPORT_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.ONBOARDING_EXPORT_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Download cursor checkpoint
+        if: env.ONBOARDING_EXPORT_CURSOR_S3_URI != ''
+        run: |
+          aws s3 cp "$ONBOARDING_EXPORT_CURSOR_S3_URI" onboarding_export_cursor.json || echo "No cursor checkpoint found; starting fresh"
+      - name: Export onboarding experiment events
+        working-directory: apps/api
+        run: |
+          poetry run python ../../tooling/scripts/export_onboarding_pricing_segments.py \
+            --limit 1000 \
+            --sink webhook \
+            --cursor-store file \
+            --cursor-store-path ../../onboarding_export_cursor.json
+      - name: Upload cursor checkpoint
+        if: env.ONBOARDING_EXPORT_CURSOR_S3_URI != ''
+        run: aws s3 cp onboarding_export_cursor.json "$ONBOARDING_EXPORT_CURSOR_S3_URI"
+      - name: Notify success
+        if: success() && env.SLACK_WEBHOOK_URL != ''
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          data = {}
+          path = Path("onboarding_export_cursor.json")
+          if path.exists():
+              try:
+                  data = json.loads(path.read_text())
+              except json.JSONDecodeError:
+                  data = {}
+
+          rows = data.get("rows", "unknown")
+          cursor = data.get("cursor", "unknown")
+          updated = data.get("updatedAt", "unknown")
+          server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+          repo = os.environ.get("GITHUB_REPOSITORY", "smplat/smplat")
+          run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
+          run_url = f"{server}/{repo}/actions/runs/{run_id}"
+          message = {
+              "text": (
+                  ":white_check_mark: Onboarding experiment export succeeded\n"
+                  f"- Rows: {rows}\n- Next cursor: {cursor}\n- Updated: {updated}\n"
+                  f"- Run: {run_url}"
+              )
+          }
+          Path("slack_payload.json").write_text(json.dumps(message))
+          PY
+          curl -X POST -H 'Content-type: application/json' --data @slack_payload.json "$SLACK_WEBHOOK_URL"
+      - name: Notify failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        run: |
+          payload=$(cat <<'JSON'
+          {
+            "text": ":rotating_light: Onboarding experiment export failed\n- Run: '"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+          }
+JSON
+          )
+          echo "$payload" > slack_failure.json
+          curl -X POST -H 'Content-type: application/json' --data @slack_failure.json "$SLACK_WEBHOOK_URL"

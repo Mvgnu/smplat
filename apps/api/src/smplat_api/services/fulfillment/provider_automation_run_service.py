@@ -78,18 +78,32 @@ class ProviderAutomationRunService:
             summary.setdefault("nextScheduledAt", next_eta.isoformat())
         if run.alerts_sent is not None:
             summary.setdefault("alertsSent", run.alerts_sent)
+
+        metadata_payload: dict[str, Any] | None = None
         metadata = run.metadata_json
         if isinstance(metadata, Mapping):
-            alerts_digest = metadata.get("alertsDigest")
+            metadata_payload = dict(metadata)
+            alerts_digest = metadata_payload.get("alertsDigest")
             if alerts_digest is not None and "alertsDigest" not in summary:
                 summary["alertsDigest"] = alerts_digest
-            load_alerts_digest = metadata.get("loadAlertsDigest")
+            load_alerts_digest = metadata_payload.get("loadAlertsDigest")
             if load_alerts_digest is not None and "loadAlertsDigest" not in summary:
                 summary["loadAlertsDigest"] = load_alerts_digest
-        return {
+            auto_paused = metadata_payload.get("autoPausedProviders")
+            if isinstance(auto_paused, list):
+                summary.setdefault("autoPausedProviders", auto_paused)
+                summary.setdefault("autoPaused", len(auto_paused))
+            auto_resumed = metadata_payload.get("autoResumedProviders")
+            if isinstance(auto_resumed, list):
+                summary.setdefault("autoResumedProviders", auto_resumed)
+                summary.setdefault("autoResumed", len(auto_resumed))
+        payload: dict[str, Any] = {
             "ranAt": created_at.isoformat(),
             "summary": summary,
         }
+        if metadata_payload:
+            payload["metadata"] = metadata_payload
+        return payload
 
     @staticmethod
     def _ensure_timezone(value: datetime) -> datetime:

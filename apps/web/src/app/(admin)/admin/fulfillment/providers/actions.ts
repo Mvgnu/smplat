@@ -602,9 +602,13 @@ export async function triggerProviderRefillAction(
 
   try {
     const amount = parseOptionalNumber(formData.get("amount"));
-    const payload: { amount?: number | null } = {};
+    const payload: { amount?: number | null; note?: string } = {};
     if (amount !== undefined) {
       payload.amount = amount;
+    }
+    const note = formData.get("note");
+    if (typeof note === "string" && note.trim().length > 0) {
+      payload.note = note.trim();
     }
     await triggerProviderOrderRefill(providerId, providerOrderId, payload);
     revalidatePath("/admin/fulfillment/providers");

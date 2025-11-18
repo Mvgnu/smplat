@@ -1,5 +1,7 @@
 import "server-only";
 
+import type { GuardrailFollowUpStatus } from "@/types/reporting";
+
 // meta: module: onboarding-journeys-client
 
 const apiBaseUrl =
@@ -28,6 +30,14 @@ export type OnboardingJourneyPayload = {
   tasks: OnboardingTaskPayload[];
 };
 
+export type JourneyPricingExperimentSegment = {
+  slug: string;
+  variantKey: string;
+  variantName?: string | null;
+  isControl?: boolean;
+  assignmentStrategy?: string | null;
+};
+
 export type OperatorJourneySummary = {
   journeyId: string;
   orderId: string;
@@ -43,6 +53,7 @@ export type OperatorJourneySummary = {
   completedTasks: number;
   overdueTasks: number;
   awaitingArtifacts: number;
+  pricingExperiments: OperatorJourneyPricingExperiment[];
 };
 
 export type OperatorJourneyAggregates = {
@@ -96,6 +107,29 @@ export type OperatorNudgeOpportunity = {
   message: string;
 };
 
+export type OperatorJourneyPricingExperiment = {
+  slug: string;
+  variantKey: string;
+  variantName?: string | null;
+  isControl?: boolean | null;
+  assignmentStrategy?: string | null;
+  status?: string | null;
+  featureFlagKey?: string | null;
+  recordedAt?: string | null;
+};
+
+export type ProviderAutomationOrderItemReference = {
+  orderItemId: string;
+  orderItemLabel: string | null;
+};
+
+export type OperatorJourneyProviderAutomation = {
+  providerId: string;
+  providerName?: string | null;
+  orderItems: ProviderAutomationOrderItemReference[];
+  guardrailStatus?: GuardrailFollowUpStatus | null;
+};
+
 export type OperatorJourneyDetail = {
   journeyId: string;
   orderId: string;
@@ -110,6 +144,8 @@ export type OperatorJourneyDetail = {
   artifacts: OperatorArtifact[];
   interactions: OperatorInteraction[];
   nudgeOpportunities: OperatorNudgeOpportunity[];
+  pricingExperiments: OperatorJourneyPricingExperiment[];
+  providerAutomation: OperatorJourneyProviderAutomation[];
 };
 
 export type OperatorJourneySummaryResponse = {
@@ -218,12 +254,37 @@ export async function recordOnboardingReferral(
   }
 }
 
+export async function recordJourneyPricingExperiments(
+  orderId: string,
+  experiments: JourneyPricingExperimentSegment[]
+): Promise<void> {
+  assertOrder(orderId);
+  if (!checkoutApiKey || experiments.length === 0) {
+    return;
+  }
+
+  const response = await fetch(
+    `${apiBaseUrl}/api/v1/orders/${orderId}/onboarding/pricing-experiments`,
+    {
+      method: "POST",
+      headers: defaultHeaders,
+      body: JSON.stringify({ experiments })
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to record pricing experiment segments: ${response.statusText}`);
+  }
+}
+
 export async function fetchOperatorJourneys(
   params: {
     status?: string[];
     stalled?: boolean;
     referrals?: boolean;
     search?: string | null;
+    experimentSlug?: string | null;
+    experimentVariant?: string | null;
     limit?: number;
   } = {}
 ): Promise<OperatorJourneySummaryResponse> {
@@ -243,6 +304,12 @@ export async function fetchOperatorJourneys(
   }
   if (params.search) {
     url.searchParams.set("search", params.search);
+  }
+  if (params.experimentSlug) {
+    url.searchParams.set("experimentSlug", params.experimentSlug);
+  }
+  if (params.experimentVariant) {
+    url.searchParams.set("experimentVariant", params.experimentVariant);
   }
   if (params.limit) {
     url.searchParams.set("limit", String(params.limit));

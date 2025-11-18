@@ -1,0 +1,190 @@
+name: Quick-Order Telemetry Export
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+env:
+  QUICK_ORDER_EXPORT_URL: ${{ secrets.QUICK_ORDER_EXPORT_URL }}
+  QUICK_ORDER_EXPORT_BUCKET: ${{ secrets.QUICK_ORDER_EXPORT_BUCKET }}
+  QUICK_ORDER_EXPORT_S3_PREFIX: ${{ secrets.QUICK_ORDER_EXPORT_S3_PREFIX }}
+  AWS_REGION: ${{ secrets.QUICK_ORDER_EXPORT_AWS_REGION }}
+  SLACK_WEBHOOK_URL: ${{ secrets.QUICK_ORDER_EXPORT_SLACK_WEBHOOK }}
+  QUICK_ORDER_EXPORT_STATUS_S3_URI: ${{ secrets.QUICK_ORDER_EXPORT_STATUS_S3_URI }}
+
+jobs:
+  export:
+    name: Stream quick-order telemetry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download quick-order events
+        id: download
+        env:
+          CURL_OUTPUT: quick-order-events.ndjson
+          HEADER_FILE: quick-order-headers.txt
+        run: |
+          if [ -z "$QUICK_ORDER_EXPORT_URL" ]; then
+            echo "QUICK_ORDER_EXPORT_URL is not configured" >&2
+            exit 1
+          fi
+
+          tmpfile=$(mktemp)
+          header_file=$(mktemp)
+          status=$(curl -sS -w "%{http_code}" -D "$header_file" -o "$tmpfile" "$QUICK_ORDER_EXPORT_URL")
+          if [ "$status" -eq 404 ]; then
+            echo "No quick-order events returned (404). Skipping upload."
+            echo "skip_upload=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$status" -ne 200 ]; then
+            echo "Unexpected status $status from export endpoint" >&2
+            cat "$tmpfile" >&2
+            exit 1
+          fi
+
+          mv "$tmpfile" "$CURL_OUTPUT"
+          mv "$header_file" "$HEADER_FILE"
+          echo "skip_upload=false" >> "$GITHUB_OUTPUT"
+          events=$(grep -i "X-Quick-Order-Events:" "$HEADER_FILE" | tail -n1 | awk '{print $2}' | tr -d '\r')
+          if [ -z "$events" ]; then
+            events=$(wc -l < "$CURL_OUTPUT")
+          fi
+          echo "event_count=$events" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        if: steps.download.outputs.skip_upload != 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.QUICK_ORDER_EXPORT_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.QUICK_ORDER_EXPORT_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload NDJSON to S3
+        if: steps.download.outputs.skip_upload != 'true'
+        id: upload
+        env:
+          BUCKET: ${{ env.QUICK_ORDER_EXPORT_BUCKET }}
+          PREFIX: ${{ env.QUICK_ORDER_EXPORT_S3_PREFIX }}
+        run: |
+          if [ -z "$BUCKET" ]; then
+            echo "QUICK_ORDER_EXPORT_BUCKET is not configured" >&2
+            exit 1
+          fi
+          timestamp=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+          key="quick-order/${timestamp}-${GITHUB_RUN_ID}.ndjson"
+          if [ -n "$PREFIX" ]; then
+            key="${PREFIX%/}/$key"
+          fi
+          aws s3 cp quick-order-events.ndjson "s3://$BUCKET/$key" --content-type application/x-ndjson
+          echo "s3_key=$key" >> "$GITHUB_OUTPUT"
+          echo "download_url=https://$BUCKET.s3.${AWS_REGION:-us-east-1}.amazonaws.com/$key" >> "$GITHUB_OUTPUT"
+
+      - name: Persist NDJSON artifact
+        if: steps.download.outputs.skip_upload != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-order-events
+          path: quick-order-events.ndjson
+          if-no-files-found: error
+
+      - name: Publish export status snapshot
+        if: steps.download.outputs.skip_upload != 'true' && env.QUICK_ORDER_EXPORT_STATUS_S3_URI != ''
+        env:
+          STATUS_URI: ${{ env.QUICK_ORDER_EXPORT_STATUS_S3_URI }}
+          BUCKET: ${{ env.QUICK_ORDER_EXPORT_BUCKET }}
+          REGION: ${{ env.AWS_REGION }}
+          S3_KEY: ${{ steps.upload.outputs.s3_key }}
+          DOWNLOAD_URL: ${{ steps.upload.outputs.download_url }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+
+          const input = fs.readFileSync("quick-order-events.ndjson", "utf8").split("\n").filter(Boolean);
+          let startCount = 0;
+          let completeCount = 0;
+          let abortCount = 0;
+          let lastEventAt = null;
+          for (const line of input) {
+            try {
+              const event = JSON.parse(line);
+              if (!event || typeof event !== "object") continue;
+              const name = event.name;
+              if (name === "quick_order.start") {
+                startCount += 1;
+              } else if (name === "quick_order.complete") {
+                completeCount += 1;
+              } else if (name === "quick_order.abort") {
+                abortCount += 1;
+              }
+              if (typeof event.recordedAt === "string") {
+                const ts = Date.parse(event.recordedAt);
+                if (Number.isFinite(ts) && (!lastEventAt || ts > Date.parse(lastEventAt))) {
+                  lastEventAt = new Date(ts).toISOString();
+                }
+              }
+            } catch {
+              continue;
+            }
+          }
+          const completionRate = startCount > 0 ? Math.round((completeCount / startCount) * 100) : null;
+          const payload = {
+            syncedAt: lastEventAt ?? new Date().toISOString(),
+            events: input.length,
+            downloadUrl: process.env.DOWNLOAD_URL ?? null,
+            workflowUrl: process.env.WORKFLOW_URL ?? null,
+            metrics: {
+              startCount,
+              completeCount,
+              abortCount,
+              completionRate,
+            },
+          };
+          fs.writeFileSync("quick-order-export-status.json", JSON.stringify(payload));
+          NODE
+
+          aws s3 cp quick-order-export-status.json "$STATUS_URI" --content-type application/json
+
+      - name: Notify success
+        if: success() && env.SLACK_WEBHOOK_URL != '' && steps.download.outputs.skip_upload != 'true'
+        env:
+          EVENT_COUNT: ${{ steps.download.outputs.event_count }}
+          S3_KEY: ${{ steps.upload.outputs.s3_key }}
+        run: |
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          cat <<JSON > slack_success.json
+          {
+            "text": ":white_check_mark: Quick-order telemetry export succeeded\n- Events: ${EVENT_COUNT}\n- Artifact: s3://${QUICK_ORDER_EXPORT_BUCKET}/${S3_KEY}\n- Run: ${run_url}"
+          }
+JSON
+          curl -X POST -H 'Content-type: application/json' --data @slack_success.json "$SLACK_WEBHOOK_URL"
+
+      - name: Notify skipped export
+        if: success() && env.SLACK_WEBHOOK_URL != '' && steps.download.outputs.skip_upload == 'true'
+        run: |
+          payload=$(cat <<'JSON'
+          {
+            "text": ":information_source: Quick-order telemetry export skipped (no events found)\n- Run: '"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+          }
+JSON
+          )
+          echo "$payload" > slack_skip.json
+          curl -X POST -H 'Content-type: application/json' --data @slack_skip.json "$SLACK_WEBHOOK_URL"
+
+      - name: Notify failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        run: |
+          payload=$(cat <<'JSON'
+          {
+            "text": ":rotating_light: Quick-order telemetry export failed\n- Run: '"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+          }
+JSON
+          )
+          echo "$payload" > slack_failure.json
+          curl -X POST -H 'Content-type: application/json' --data @slack_failure.json "$SLACK_WEBHOOK_URL"

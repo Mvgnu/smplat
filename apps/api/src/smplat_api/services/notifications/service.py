@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterable, Optional, Sequence
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from typing import Any, Iterable, Mapping, Optional, Sequence
 from uuid import UUID
 
 from loguru import logger
@@ -25,8 +26,19 @@ from smplat_api.models.payment import Payment
 from smplat_api.models.user import User
 from smplat_api.models.notification import NotificationPreference
 from smplat_api.models.invoice import Invoice, InvoiceLineItem, InvoiceStatusEnum
+from smplat_api.services.delivery_proof import (
+    DeliveryProofAggregatesEnvelope,
+    OrderDeliveryProofResponse,
+    fetch_delivery_proof_aggregates,
+    fetch_order_delivery_proof,
+)
+from smplat_api.services.provider_telemetry import (
+    ProviderAutomationTelemetrySummary,
+    serialize_provider_automation_telemetry,
+)
 
 from .backend import (
+    EmailAttachment,
     EmailBackend,
     SMTPEmailBackend,
     InMemoryEmailBackend,
@@ -37,6 +49,8 @@ from .backend import (
 )
 from .templates import (
     RenderedTemplate,
+    build_pricing_experiment_html,
+    build_pricing_experiment_text,
     render_invoice_overdue,
     render_fulfillment_completion,
     render_fulfillment_retry,
@@ -45,6 +59,7 @@ from .templates import (
     render_payment_success,
     render_weekly_digest,
 )
+from ..orders.receipt_artifacts import ReceiptAttachmentService
 
 
 @dataclass
@@ -86,11 +101,13 @@ class NotificationService:
         backend: Optional[EmailBackend] = None,
         sms_backend: Optional[SMSBackend] = None,
         push_backend: Optional[PushBackend] = None,
+        receipt_service: Optional[ReceiptAttachmentService] = None,
     ) -> None:
         self._db = db_session
         self._backend = backend or self._build_default_backend()
         self._sms_backend = sms_backend or InMemorySMSBackend()
         self._push_backend = push_backend or InMemoryPushBackend()
+        self._receipt_service = receipt_service or ReceiptAttachmentService(db_session)
         self._events: list[NotificationEvent] = []
 
     @property
@@ -134,30 +151,40 @@ class NotificationService:
         if self._backend is None:
             return
 
-        contact = await self._resolve_order_contact(order)
+        order_with_items = order
+        stmt = select(Order).options(selectinload(Order.items)).where(Order.id == order.id)
+        result = await self._db.execute(stmt)
+        fetched = result.scalar_one_or_none()
+        if fetched:
+            order_with_items = fetched
+
+        contact = await self._resolve_order_contact(order_with_items)
         if contact is None:
             return
 
-        preferences = await self._get_preferences(order.user_id)
+        preferences = await self._get_preferences(order_with_items.user_id)
         if not preferences.order_updates:
             return
 
         prev_label = (
             previous_status.value.replace("_", " ").title() if previous_status else "Created"
         )
-        new_label = order.status.value.replace("_", " ").title()
+        new_label = order_with_items.status.value.replace("_", " ").title()
 
-        subject = f"Order {order.order_number} is now {new_label}"
+        subject = f"Order {order_with_items.order_number} is now {new_label}"
         body_lines = [
             f"Hi {contact.display_name or 'there'},",
             "",
-            f"Your order {order.order_number} has moved from {prev_label} to {new_label}.",
-            f"Total value: €{float(order.total):.2f}",
+            f"Your order {order_with_items.order_number} has moved from {prev_label} to {new_label}.",
+            f"Total value: €{float(order_with_items.total):.2f}",
         ]
         if trigger:
             body_lines.append(f"Trigger: {trigger}")
-        if order.notes:
-            body_lines.extend(["", "Latest notes:", order.notes])
+        if order_with_items.notes:
+            body_lines.extend(["", "Latest notes:", order_with_items.notes])
+        experiment_text = build_pricing_experiment_text(order_with_items.items)
+        if experiment_text:
+            body_lines.extend([""] + experiment_text)
         body_lines.extend(
             [
                 "",
@@ -170,17 +197,19 @@ class NotificationService:
         text_body = "\n".join(body_lines)
 
         notes_html = ""
-        if order.notes:
+        if order_with_items.notes:
             notes_html = f"""
     <p><strong>Latest notes:</strong></p>
-    <p>{order.notes}</p>"""
+    <p>{order_with_items.notes}</p>"""
         trigger_html = f"<p><strong>Trigger:</strong> {trigger}</p>" if trigger else ""
+        experiment_html = build_pricing_experiment_html(order_with_items.items)
         html_body = f"""<html>
   <body>
     <p>Hi {contact.display_name or 'there'},</p>
-    <p>Your order <strong>{order.order_number}</strong> has moved from <strong>{prev_label}</strong> to <strong>{new_label}</strong>.</p>
-    <p>Total value: €{float(order.total):.2f}</p>
+    <p>Your order <strong>{order_with_items.order_number}</strong> has moved from <strong>{prev_label}</strong> to <strong>{new_label}</strong>.</p>
+    <p>Total value: €{float(order_with_items.total):.2f}</p>
     {trigger_html}{notes_html}
+    {experiment_html}
     <p>You can review your order progress by logging into the SMPLAT dashboard.</p>
     <p>Thanks,<br />The SMPLAT Team</p>
   </body>
@@ -191,10 +220,10 @@ class NotificationService:
             RenderedTemplate(subject=subject, text_body=text_body, html_body=html_body),
             event_type="order_status_update",
             metadata={
-                "order_id": str(order.id),
-                "order_number": order.order_number,
+                "order_id": str(order_with_items.id),
+                "order_number": order_with_items.order_number,
                 "previous_status": previous_status.value if previous_status else None,
-                "current_status": order.status.value,
+                "current_status": order_with_items.status.value,
                 "trigger": trigger,
             },
         )
@@ -292,7 +321,35 @@ class NotificationService:
         result = await self._db.execute(stmt)
         order_with_items = result.scalar_one_or_none() or order
 
-        template = render_payment_success(order_with_items, payment, contact.display_name)
+        delivery_proof: OrderDeliveryProofResponse | None = None
+        aggregates: DeliveryProofAggregatesEnvelope | None = None
+        try:
+            delivery_proof = await fetch_order_delivery_proof(self._db, order_with_items.id)
+        except Exception as error:  # pragma: no cover - defensive guard
+            logger.warning("Failed to fetch delivery proof for notification", order_id=order.id, error=error)
+        product_ids = {
+            item.product_id
+            for item in order_with_items.items
+            if getattr(item, "product_id", None) is not None
+        }
+        if product_ids:
+            try:
+                aggregates = await fetch_delivery_proof_aggregates(
+                    self._db,
+                    product_ids=list(product_ids),
+                    window_days=90,
+                    limit_per_product=25,
+                )
+            except Exception as error:  # pragma: no cover - defensive guard
+                logger.warning("Failed to fetch delivery proof aggregates for notification", order_id=order.id, error=error)
+
+        template = render_payment_success(
+            order_with_items,
+            payment,
+            contact.display_name,
+            delivery_proof=delivery_proof,
+            aggregates=aggregates,
+        )
         metadata = {
             "order_id": str(order.id),
             "order_number": order.order_number,
@@ -300,7 +357,35 @@ class NotificationService:
             "amount": str(payment.amount),
             "currency": payment.currency.value if hasattr(payment.currency, "value") else str(payment.currency),
         }
-        await self._deliver(contact, template, event_type="payment_success", metadata=metadata)
+        attachments: list[EmailAttachment] = []
+        if self._receipt_service:
+            try:
+                receipt_attachment = await self._receipt_service.build_attachment(order_with_items)
+            except Exception as error:  # pragma: no cover - defensive guard
+                logger.warning("Failed to prepare receipt attachment", order_id=order.id, error=error)
+                receipt_attachment = None
+            if receipt_attachment:
+                attachments.append(
+                    EmailAttachment(
+                        filename=receipt_attachment.filename,
+                        content_type=receipt_attachment.content_type,
+                        payload=receipt_attachment.payload,
+                    )
+                )
+                if receipt_attachment.storage_key:
+                    metadata["receipt_storage_key"] = receipt_attachment.storage_key
+                if receipt_attachment.public_url:
+                    metadata["receipt_storage_url"] = receipt_attachment.public_url
+                if receipt_attachment.uploaded_at:
+                    metadata["receipt_storage_uploaded_at"] = receipt_attachment.uploaded_at.isoformat()
+
+        await self._deliver(
+            contact,
+            template,
+            event_type="payment_success",
+            metadata=metadata,
+            attachments=attachments or None,
+        )
 
     async def send_fulfillment_retry(self, order: Order, task: FulfillmentTask) -> None:
         """Notify customer when a fulfillment task is scheduled for retry."""
@@ -347,20 +432,16 @@ class NotificationService:
         if not preferences.fulfillment_alerts:
             return
 
-        order_with_tasks = order
-        if not getattr(order_with_tasks, "items", None):
-            stmt = (
-                select(Order)
-                .options(selectinload(Order.items).selectinload(OrderItem.fulfillment_tasks))
-                .where(Order.id == order.id)
-            )
-            result = await self._db.execute(stmt)
-            fetched = result.scalar_one_or_none()
-            if fetched:
-                order_with_tasks = fetched
+        stmt = (
+            select(Order)
+            .options(selectinload(Order.items).selectinload(OrderItem.fulfillment_tasks))
+            .where(Order.id == order.id)
+        )
+        result = await self._db.execute(stmt)
+        order_with_tasks = result.scalar_one_or_none() or order
 
         completed_tasks: list[FulfillmentTask] = []
-        for item in getattr(order_with_tasks, "items", []):
+        for item in getattr(order_with_tasks, "items", []) or []:
             for task in getattr(item, "fulfillment_tasks", []):
                 if task.status == FulfillmentTaskStatusEnum.COMPLETED:
                     completed_tasks.append(task)
@@ -411,6 +492,12 @@ class NotificationService:
         *,
         highlighted_orders: Iterable[Order],
         pending_actions: Sequence[str],
+        conversion_metrics: Sequence[dict[str, object]] | None = None,
+        automation_actions: Sequence[dict[str, object]] | None = None,
+        conversion_cursor: str | None = None,
+        conversion_href: str | None = None,
+        provider_telemetry: ProviderAutomationTelemetrySummary | None = None,
+        workflow_telemetry: Mapping[str, Any] | None = None,
     ) -> None:
         """Send weekly digest with key actions."""
         if self._backend is None or not user.email:
@@ -423,16 +510,33 @@ class NotificationService:
         contact = _OrderContact(email=user.email, display_name=user.display_name)
         orders_list = list(highlighted_orders)
         pending_list = list(pending_actions)
+        conversion_payload = list(conversion_metrics or [])
+        automation_payload = list(automation_actions or [])
         template = render_weekly_digest(
             user,
             highlighted_orders=orders_list,
             pending_actions=pending_list,
+            conversion_metrics=conversion_payload,
+            automation_actions=automation_payload,
+            conversion_cursor=conversion_cursor,
+            conversion_href=conversion_href,
+            provider_telemetry=provider_telemetry,
+            workflow_telemetry=workflow_telemetry,
         )
         metadata = {
             "user_id": str(user.id) if user.id else None,
             "pending_actions": pending_list,
             "orders": [order.order_number for order in orders_list],
+            "conversion_snapshot": _sanitize_conversion_snapshot_for_metadata(conversion_payload),
+            "automation_actions": automation_payload,
+            "conversionCursor": conversion_cursor,
+            "conversionHref": conversion_href,
         }
+        telemetry_payload = serialize_provider_automation_telemetry(provider_telemetry)
+        if telemetry_payload:
+            metadata["providerTelemetry"] = telemetry_payload
+        if workflow_telemetry:
+            metadata["workflowTelemetry"] = workflow_telemetry
         await self._deliver(contact, template, event_type="weekly_digest", metadata=metadata)
 
     def use_in_memory_backend(self) -> InMemoryEmailBackend:
@@ -768,6 +872,7 @@ class NotificationService:
         metadata: dict[str, Any],
         reply_to: str | None = None,
         channel: str = "email",
+        attachments: Sequence[EmailAttachment] | None = None,
     ) -> None:
         """Send using active backend and record emitted event."""
         if self._backend is None:
@@ -779,6 +884,7 @@ class NotificationService:
             template.text_body,
             body_html=template.html_body,
             reply_to=reply_to,
+            attachments=attachments,
         )
         self._record_event(
             channel=channel,
@@ -789,3 +895,61 @@ class NotificationService:
             event_type=event_type,
             metadata=metadata,
         )
+
+
+def _sanitize_conversion_snapshot_for_metadata(
+    metrics: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a JSON-serializable snapshot of the conversion metrics."""
+
+    snapshot: list[dict[str, Any]] = []
+    for metric in metrics:
+        slug = metric.get("slug")
+        if not isinstance(slug, str):
+            continue
+        slug_value = slug.strip()
+        if not slug_value:
+            continue
+        snapshot.append(
+            {
+                "slug": slug_value,
+                "orderTotal": _coerce_float(metric.get("orderTotal")),
+                "orderCurrency": _coerce_string(metric.get("orderCurrency")),
+                "orderCount": _coerce_int(metric.get("orderCount")),
+                "journeyCount": _coerce_int(metric.get("journeyCount")),
+                "loyaltyPoints": _coerce_int(metric.get("loyaltyPoints")),
+                "lastActivity": _coerce_iso_timestamp(metric.get("lastActivity")),
+            }
+        )
+    return snapshot
+
+
+def _coerce_string(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    return None
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        numeric = float(value)
+        return numeric if numeric > 0 else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _coerce_iso_timestamp(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return None

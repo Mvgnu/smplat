@@ -60,6 +60,16 @@ export function OrderStatusForm({ orderId, currentStatus, csrfToken }: OrderStat
         </select>
       </label>
 
+      <label className="flex flex-col gap-2">
+        <span className="text-xs uppercase tracking-[0.3em] text-white/40">Operator notes</span>
+        <textarea
+          name="notes"
+          placeholder="Describe why the state is changing…"
+          className="min-h-[96px] rounded-lg border border-white/15 bg-black/60 px-3 py-2 text-sm text-white outline-none transition focus:border-white/50"
+          maxLength={500}
+        />
+      </label>
+
       {state.error && (
         <div className="rounded-lg border border-red-400/40 bg-red-500/10 px-3 py-2 text-xs text-red-100">
           {state.error}

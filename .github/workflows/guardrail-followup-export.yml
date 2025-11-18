@@ -1,0 +1,103 @@
+name: Guardrail Follow-Up Export
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+  workflow_dispatch:
+
+env:
+  DATABASE_URL: ${{ secrets.GUARDRAIL_EXPORT_DATABASE_URL }}
+  ANALYTICS_GUARDRAIL_WEBHOOK: ${{ secrets.ANALYTICS_GUARDRAIL_WEBHOOK }}
+  GUARDRAIL_EXPORT_CURSOR_S3_URI: ${{ secrets.GUARDRAIL_EXPORT_CURSOR_S3_URI }}
+  AWS_REGION: ${{ secrets.GUARDRAIL_EXPORT_AWS_REGION }}
+  SLACK_WEBHOOK_URL: ${{ secrets.GUARDRAIL_EXPORT_SLACK_WEBHOOK }}
+
+jobs:
+  export:
+    name: Stream guardrail follow-ups
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Poetry
+        run: pipx install poetry
+      - name: Install backend dependencies
+        working-directory: apps/api
+        run: poetry install --only main --no-root
+      - name: Configure AWS credentials
+        if: env.GUARDRAIL_EXPORT_CURSOR_S3_URI != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.GUARDRAIL_EXPORT_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.GUARDRAIL_EXPORT_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Download cursor checkpoint
+        if: env.GUARDRAIL_EXPORT_CURSOR_S3_URI != ''
+        run: |
+          aws s3 cp "$GUARDRAIL_EXPORT_CURSOR_S3_URI" guardrail_followups_cursor.json || echo "No cursor checkpoint found; starting fresh"
+      - name: Export guardrail follow-ups
+        working-directory: apps/api
+        run: |
+          poetry run python ../../tooling/scripts/export_guardrail_followups.py \
+            --limit 1000 \
+            --sink webhook \
+            --cursor-store file \
+            --cursor-store-path ../../guardrail_followups_cursor.json
+      - name: Upload cursor checkpoint
+        if: env.GUARDRAIL_EXPORT_CURSOR_S3_URI != ''
+        run: aws s3 cp guardrail_followups_cursor.json "$GUARDRAIL_EXPORT_CURSOR_S3_URI"
+      - name: Persist cursor artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardrail-followups-cursor
+          path: guardrail_followups_cursor.json
+          if-no-files-found: warn
+      - name: Notify success
+        if: success() && env.SLACK_WEBHOOK_URL != ''
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("guardrail_followups_cursor.json")
+          payload = {}
+          if path.exists():
+              try:
+                  payload = json.loads(path.read_text())
+              except json.JSONDecodeError:
+                  payload = {}
+          rows = payload.get("rows", "unknown")
+          cursor = payload.get("cursor", "unknown")
+          updated = payload.get("updatedAt", "unknown")
+          server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+          repo = os.environ.get("GITHUB_REPOSITORY", "smplat/smplat")
+          run_id = os.environ.get("GITHUB_RUN_ID", "unknown")
+          run_url = f"{server}/{repo}/actions/runs/{run_id}"
+          message = {
+              "text": (
+                  ":white_check_mark: Guardrail follow-up export succeeded\n"
+                  f"- Rows: {rows}\n- Next cursor: {cursor}\n- Updated: {updated}\n"
+                  f"- Run: {run_url}"
+              )
+          }
+          Path("slack_payload.json").write_text(json.dumps(message))
+          PY
+          curl -X POST -H 'Content-type: application/json' --data @slack_payload.json "$SLACK_WEBHOOK_URL"
+      - name: Notify failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        run: |
+          payload=$(cat <<'JSON'
+          {
+            "text": ":rotating_light: Guardrail follow-up export failed\n- Run: '"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+          }
+JSON
+          )
+          echo "$payload" > slack_failure.json
+          curl -X POST -H 'Content-type: application/json' --data @slack_failure.json "$SLACK_WEBHOOK_URL"

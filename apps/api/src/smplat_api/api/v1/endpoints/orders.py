@@ -3,9 +3,9 @@
 import re
 from typing import List, Dict, Any, Optional, Sequence
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field
 from loguru import logger
@@ -14,12 +14,27 @@ from decimal import Decimal
 from smplat_api.api.dependencies.security import require_checkout_api_key
 from smplat_api.db.session import get_session
 from smplat_api.models.order import Order, OrderItem, OrderStatusEnum, OrderSourceEnum
-from smplat_api.models.product import Product
+from smplat_api.models.order_state_event import (
+    OrderStateActorTypeEnum,
+    OrderStateEvent,
+    OrderStateEventTypeEnum,
+)
 from smplat_api.models.fulfillment import FulfillmentProviderOrder
 from smplat_api.models.customer_profile import CurrencyEnum
 from smplat_api.services.fulfillment import FulfillmentService, ProviderAutomationService
 from smplat_api.services.orders.acceptance import BundleAcceptanceService
+from smplat_api.services.orders.state_machine import (
+    InvalidOrderTransitionError,
+    OrderStateMachine,
+    OrderNotFoundError,
+)
 from smplat_api.schemas.fulfillment_provider import FulfillmentProviderOrderResponse
+from smplat_api.services.delivery_proof import (
+    DeliveryProofAggregatesEnvelope,
+    OrderDeliveryProofResponse,
+    fetch_delivery_proof_aggregates,
+    fetch_order_delivery_proof,
+)
 
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -34,6 +49,10 @@ class OrderItemCreate(BaseModel):
     total_price: Decimal = Field(..., ge=0, description="Total item price")
     selected_options: Optional[Dict[str, Any]] = Field(None, description="Selected product options")
     attributes: Optional[Dict[str, Any]] = Field(None, description="Additional item attributes")
+    platform_context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Platform metadata captured at checkout for this line item",
+    )
 
 
 class OrderCreate(BaseModel):
@@ -59,6 +78,14 @@ class OrderItemResponse(BaseModel):
     total_price: float
     selected_options: Optional[Dict[str, Any]]
     attributes: Optional[Dict[str, Any]]
+    platform_context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Platform metadata persisted for the order item",
+    )
+    customer_social_account_id: Optional[str] = Field(default=None, description="Linked social account identifier")
+    baseline_metrics: Optional[Dict[str, Any]] = None
+    delivery_snapshots: Optional[Dict[str, Any]] = None
+    target_metrics: Optional[Dict[str, Any]] = None
 
 
 class OrderResponse(BaseModel):
@@ -76,6 +103,18 @@ class OrderResponse(BaseModel):
     loyalty_projection_points: Optional[int] = Field(
         None, description="Projected loyalty points for this order"
     )
+    receipt_storage_key: Optional[str] = Field(
+        default=None,
+        description="Object storage key for the generated receipt PDF.",
+    )
+    receipt_storage_url: Optional[str] = Field(
+        default=None,
+        description="Public URL for the stored receipt PDF when available.",
+    )
+    receipt_storage_uploaded_at: Optional[str] = Field(
+        default=None,
+        description="Timestamp when the receipt PDF was last uploaded to storage.",
+    )
     created_at: str
     updated_at: str
     items: List[OrderItemResponse]
@@ -86,6 +125,28 @@ class OrderStatusUpdate(BaseModel):
     """Request model for updating order status."""
     status: str = Field(..., description="New order status")
     notes: Optional[str] = Field(None, description="Status update notes")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Optional metadata recorded alongside the event.")
+    actorType: Optional[str] = Field(
+        default="operator",
+        description="Actor classification (system|operator|admin|automation|provider).",
+    )
+    actorId: Optional[str] = Field(default=None, description="Optional identifier for the actor performing the update.")
+    actorLabel: Optional[str] = Field(default=None, description="Human-readable actor display name.")
+
+
+class OrderStateEventResponse(BaseModel):
+    """Timeline entry describing a state change, refill, refund, or operator note."""
+
+    id: str
+    eventType: str = Field(..., description="Event category (state_change, refill, refund, etc.)")
+    actorType: Optional[str] = None
+    actorId: Optional[str] = None
+    actorLabel: Optional[str] = None
+    fromStatus: Optional[str] = Field(default=None, description="Previous order status value.")
+    toStatus: Optional[str] = Field(default=None, description="New order status value.")
+    notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    createdAt: str
 
 
 @router.post(
@@ -187,7 +248,8 @@ async def create_order(
                 unit_price=item_data.unit_price,
                 total_price=item_data.total_price,
                 selected_options=item_data.selected_options,
-                attributes=item_data.attributes
+                attributes=item_data.attributes,
+                platform_context=item_data.platform_context,
             )
 
             db.add(order_item)
@@ -369,7 +431,11 @@ async def list_orders_for_user(
         raise HTTPException(status_code=500, detail="Failed to list orders for user")
 
 
-@router.patch("/{order_id}/status", response_model=OrderResponse)
+@router.patch(
+    "/{order_id}/status",
+    response_model=OrderResponse,
+    dependencies=[Depends(require_checkout_api_key)],
+)
 async def update_order_status(
     order_id: UUID,
     status_update: OrderStatusUpdate,
@@ -389,15 +455,40 @@ async def update_order_status(
         HTTPException: If order not found or invalid status
     """
     try:
-        # Validate status
         try:
             new_status = OrderStatusEnum(status_update.status.lower())
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid status: {status_update.status}"
+                detail=f"Invalid status: {status_update.status}",
             )
-        
+
+        actor_type = _parse_actor_type(status_update.actorType)
+        metadata = status_update.metadata or {}
+        state_machine = OrderStateMachine(db)
+        note_text = status_update.notes.strip() if isinstance(status_update.notes, str) else None
+        if note_text:
+            await db.execute(
+                update(Order)
+                    .where(Order.id == order_id)
+                    .values(notes=note_text)
+            )
+
+        try:
+            await state_machine.transition(
+                order_id=order_id,
+                target_status=new_status,
+                actor_type=actor_type,
+                actor_id=status_update.actorId,
+                actor_label=status_update.actorLabel,
+                notes=status_update.notes,
+                metadata=metadata,
+            )
+        except OrderNotFoundError:
+            raise HTTPException(status_code=404, detail="Order not found")
+        except InvalidOrderTransitionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         stmt = (
             select(Order)
             .options(selectinload(Order.items).selectinload(OrderItem.provider_orders))
@@ -405,38 +496,80 @@ async def update_order_status(
         )
         result = await db.execute(stmt)
         order = result.scalar_one_or_none()
-        
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-        
-        # Update order
-        order.status = new_status
-        if status_update.notes:
-            order.notes = status_update.notes
-            
-        await db.commit()
-        await db.refresh(order)
-        
-        logger.info(
-            "Updated order status",
-            order_id=str(order_id),
-            old_status=order.status.value,
-            new_status=new_status.value
-        )
-        
+
         automation = ProviderAutomationService(db)
         provider_orders = await automation.list_orders_for_order(order.id)
         return _order_to_response(order, provider_orders=provider_orders)
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(
             "Failed to update order status",
             order_id=str(order_id),
-            error=str(e)
+            error=str(e),
         )
         raise HTTPException(status_code=500, detail="Failed to update order status")
+
+
+@router.get(
+    "/{order_id}/state-events",
+    response_model=List[OrderStateEventResponse],
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def list_order_state_events(
+    order_id: UUID,
+    db: AsyncSession = Depends(get_session),
+) -> List[OrderStateEventResponse]:
+    """Return the chronological audit log for an order."""
+
+    machine = OrderStateMachine(db)
+    exists = await db.scalar(select(Order.id).where(Order.id == order_id))
+    if not exists:
+        raise HTTPException(status_code=404, detail="Order not found")
+    events = await machine.list_events(order_id)
+    return [_serialize_state_event(event) for event in events]
+
+
+@router.get(
+    "/{order_id}/delivery-proof",
+    response_model=OrderDeliveryProofResponse,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def get_order_delivery_proof(
+    order_id: UUID,
+    db: AsyncSession = Depends(get_session),
+) -> OrderDeliveryProofResponse:
+    """Aggregate social account baselines + delivery snapshots for every order item."""
+
+    proof = await fetch_order_delivery_proof(db, order_id)
+    if not proof:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    return proof
+
+
+@router.get(
+    "/delivery-proof/metrics",
+    response_model=DeliveryProofAggregatesEnvelope,
+    dependencies=[Depends(require_checkout_api_key)],
+)
+async def list_delivery_proof_metrics(
+    db: AsyncSession = Depends(get_session),
+    product_ids: List[UUID] = Query(default_factory=list, alias="productId"),
+    window_days: int = Query(90, ge=1, le=365, alias="windowDays"),
+    limit_per_product: int = Query(50, ge=1, le=250, alias="limitPerProduct"),
+) -> DeliveryProofAggregatesEnvelope:
+    """Aggregate delivery proof metrics per product for storefront trust surfacing."""
+
+    return await fetch_delivery_proof_aggregates(
+        db,
+        product_ids=product_ids or None,
+        window_days=window_days,
+        limit_per_product=limit_per_product,
+    )
 
 
 def _order_to_response(
@@ -476,6 +609,11 @@ def _order_to_response(
         currency=order.currency.value,
         notes=order.notes,
         loyalty_projection_points=order.loyalty_projection_points,
+        receipt_storage_key=order.receipt_storage_key,
+        receipt_storage_url=order.receipt_storage_url,
+        receipt_storage_uploaded_at=order.receipt_storage_uploaded_at.isoformat()
+        if order.receipt_storage_uploaded_at
+        else None,
         created_at=order.created_at.isoformat(),
         updated_at=order.updated_at.isoformat(),
         items=[
@@ -487,13 +625,41 @@ def _order_to_response(
                 unit_price=float(item.unit_price),
                 total_price=float(item.total_price),
                 selected_options=item.selected_options,
-                attributes=item.attributes
+                attributes=item.attributes,
+                platform_context=item.platform_context,
+                customer_social_account_id=str(item.customer_social_account_id) if item.customer_social_account_id else None,
+                baseline_metrics=item.baseline_metrics if isinstance(item.baseline_metrics, dict) else None,
+                delivery_snapshots=item.delivery_snapshots if isinstance(item.delivery_snapshots, dict) else None,
+                target_metrics=item.target_metrics if isinstance(item.target_metrics, dict) else None,
             )
             for item in order.items
         ],
         provider_orders=provider_entries,
     )
 
+
+def _parse_actor_type(value: str | None) -> OrderStateActorTypeEnum | None:
+    if not value:
+        return None
+    try:
+        return OrderStateActorTypeEnum(value.lower())
+    except ValueError:
+        return None
+
+
+def _serialize_state_event(event: OrderStateEvent) -> OrderStateEventResponse:
+    return OrderStateEventResponse(
+        id=str(event.id),
+        eventType=event.event_type.value,
+        actorType=event.actor_type.value if event.actor_type else None,
+        actorId=event.actor_id,
+        actorLabel=event.actor_label,
+        fromStatus=event.from_status,
+        toStatus=event.to_status,
+        notes=event.notes,
+        metadata=event.metadata_json if isinstance(event.metadata_json, dict) else {},
+        createdAt=event.created_at.isoformat(),
+    )
 
 _LOYALTY_NOTE_REGEX = re.compile(r"loyaltyProjection=(\d+)", re.IGNORECASE)
 

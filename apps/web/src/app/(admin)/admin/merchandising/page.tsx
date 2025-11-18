@@ -18,7 +18,7 @@ import { OptionMatrixEditor } from "./option-matrix-editor";
 import { fetchCatalogBundles } from "@/server/catalog/bundles";
 import { fetchProductDetail, fetchProductSummaries } from "@/server/catalog/products";
 import { getOrCreateCsrfToken } from "@/server/security/csrf";
-import { fetchBlueprintMetrics } from "@/server/reporting/blueprint-metrics";
+import { fetchBlueprintMetrics, type BlueprintMetrics } from "@/server/reporting/blueprint-metrics";
 import {
   fetchPresetEventAnalytics,
   type PresetAnalyticsBreakdowns,
@@ -165,7 +165,7 @@ const [
     day: "numeric",
   });
   const blueprintLongWindowLabel = `${longBlueprintMetrics.window.days}-day baseline`;
-  const topPresets = blueprintMetrics.presets.slice(0, 5);
+  const topBlueprintPresets = blueprintMetrics.presets.slice(0, 5);
   const topAddOns = blueprintMetrics.addOns.slice(0, 5);
   const topProviders = blueprintMetrics.providerEngagements.slice(0, 5);
   const providerLoadAlerts = blueprintMetrics.providerLoadAlerts.slice(0, 4);
@@ -205,7 +205,7 @@ const [
     presetTotals.preset_cta_apply + presetTotals.preset_configurator_apply - presetTotals.preset_configurator_clear;
   const presetTimeline = presetEventAnalytics.timeline.slice(-10);
   const presetBreakdowns = presetEventAnalytics.breakdowns?.presets ?? [];
-  const topPresets = presetBreakdowns.slice(0, 3);
+  const topPresetBreakdowns = presetBreakdowns.slice(0, 3);
   const riskyPresets =
     presetEventAnalytics.breakdowns?.riskyPresets ??
     presetBreakdowns
@@ -253,7 +253,7 @@ const [
           <AdminKpiCard
             label="Preset selections"
             value={integerFormatter.format(presetSelectionsTotal)}
-            footer={`${topPresets.length} unique presets`}
+            footer={`${topBlueprintPresets.length} unique presets`}
             change={presetSelectionsChange}
           />
           <AdminKpiCard
@@ -298,7 +298,7 @@ const [
             title="Top presets"
             caption="Marketing CTA & configurator applies"
             emptyLabel="No preset interactions yet."
-            items={topPresets.map((preset, index) => ({
+            items={topBlueprintPresets.map((preset, index) => ({
               id: preset.presetId || `preset-${index}`,
               label: preset.label ?? preset.presetId,
               value: `${integerFormatter.format(preset.selections)} selections`,
@@ -384,7 +384,7 @@ const [
           />
         </div>
         <PresetAnalyticsTimeline entries={presetTimeline} />
-        <PresetBreakdownHighlights topPresets={topPresets} riskyPresets={riskyPresets} />
+        <PresetBreakdownHighlights topPresets={topPresetBreakdowns} riskyPresets={riskyPresets} />
         <PresetSourceBreakdownCard entries={channelBreakdown} />
         <ProviderAutomationRunbookCard
           entry={providerAutomationHighlight}
@@ -948,7 +948,7 @@ function PresetSourceBreakdownCard({ entries }: PresetSourceBreakdownCardProps) 
 }
 
 type ProviderAutomationRunbookCardProps = {
-  entry: BlueprintProviderMetric | undefined;
+  entry: BlueprintMetrics["providerEngagements"][number] | undefined;
   windowLabel: string;
   windowDays: number;
 };
@@ -999,12 +999,3 @@ function ProviderAutomationRunbookCard({ entry, windowLabel, windowDays }: Provi
     </article>
   );
 }
-  const longOrdersRunRate = computeRunRate(longBlueprintMetrics.orders.total, longBlueprintMetrics.window.days);
-  const longPresetRunRate = computeRunRate(
-    longBlueprintMetrics.presets.reduce((sum, entry) => sum + entry.selections, 0),
-    longBlueprintMetrics.window.days,
-  );
-  const longRevenueRunRate = computeRunRate(
-    longBlueprintMetrics.orders.itemRevenue,
-    longBlueprintMetrics.window.days,
-  );

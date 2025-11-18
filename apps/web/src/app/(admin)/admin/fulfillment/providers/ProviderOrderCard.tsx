@@ -104,6 +104,15 @@ export function ProviderOrderCard({
               <span className="text-white/50">No manual refills yet.</span>
             )}
           </div>
+          <label className="md:col-span-2 flex flex-col gap-1">
+            Timeline note
+            <textarea
+              name="note"
+              maxLength={500}
+              placeholder="Why is this refill needed? This message is stored on the order timeline."
+              className="min-h-[72px] rounded-lg border border-white/10 bg-black/60 px-3 py-1.5 text-white focus:border-white/40 focus:outline-none"
+            />
+          </label>
         </div>
         <div className="flex flex-col items-end gap-2">
           <input type="hidden" name="csrfToken" value={csrfToken} />

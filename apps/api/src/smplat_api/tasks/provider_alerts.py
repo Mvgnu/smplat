@@ -6,6 +6,8 @@ import argparse
 import asyncio
 from typing import Any, Mapping
 
+import httpx
+
 from loguru import logger
 
 from smplat_api.core.settings import settings
@@ -70,19 +72,29 @@ async def _record_alert_run_history(summary: Mapping[str, Any]) -> None:
     try:
         async with async_session() as session:  # type: ignore[arg-type]
             service = ProviderAutomationRunService(session)
-            metadata: dict[str, Any] | None = None
+            metadata: dict[str, Any] = {}
             digest = summary.get("alertsDigest")
             if isinstance(digest, list):
-                metadata = {"alertsDigest": digest}
+                metadata["alertsDigest"] = digest
             load_digest = summary.get("loadAlertsDigest")
             if isinstance(load_digest, list):
-                if metadata is None:
-                    metadata = {}
                 metadata["loadAlertsDigest"] = load_digest
+            auto_paused = summary.get("autoPausedProviders")
+            if isinstance(auto_paused, list):
+                metadata["autoPausedProviders"] = auto_paused
+            auto_resumed = summary.get("autoResumedProviders")
+            if isinstance(auto_resumed, list):
+                metadata["autoResumedProviders"] = auto_resumed
+            workflow_summary = summary.get("workflowTelemetry")
+            if not isinstance(workflow_summary, Mapping):
+                workflow_summary = await _fetch_guardrail_workflow_summary()
+            if workflow_summary:
+                metadata["workflowTelemetry"] = workflow_summary
+            metadata_payload = metadata if metadata else None
             await service.record_run(
                 run_type=ProviderAutomationRunTypeEnum.ALERT,
                 summary=dict(summary),
-                metadata=metadata,
+                metadata=metadata_payload,
                 alerts_sent=_safe_int(summary.get("alertsSent")),
             )
     except Exception as exc:  # pragma: no cover
@@ -94,3 +106,21 @@ def _safe_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+async def _fetch_guardrail_workflow_summary() -> Mapping[str, Any] | None:
+    url = settings.guardrail_workflow_telemetry_summary_url
+    if not url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url, timeout=10)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, Mapping):
+                return dict(payload)
+    except httpx.HTTPError as exc:  # pragma: no cover - observational
+        logger.warning("Failed to fetch guardrail workflow telemetry summary", error=str(exc))
+    except ValueError:  # pragma: no cover - defensive
+        logger.warning("Guardrail workflow telemetry summary payload could not be parsed")
+    return None

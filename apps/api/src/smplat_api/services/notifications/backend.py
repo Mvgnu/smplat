@@ -6,7 +6,7 @@ import asyncio
 import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
-from typing import List, Optional, Protocol
+from typing import List, Optional, Protocol, Sequence
 
 
 class EmailBackend(Protocol):
@@ -20,6 +20,7 @@ class EmailBackend(Protocol):
         *,
         body_html: str | None = None,
         reply_to: str | None = None,
+        attachments: Sequence["EmailAttachment"] | None = None,
     ) -> None:
         ...
 
@@ -43,6 +44,15 @@ class PushBackend(Protocol):
         metadata: Optional[dict[str, str]] = None,
     ) -> None:
         ...
+
+
+@dataclass(slots=True)
+class EmailAttachment:
+    """Binary attachment payload for transactional emails."""
+
+    filename: str
+    content_type: str
+    payload: bytes
 
 
 class SMTPEmailBackend:
@@ -73,6 +83,7 @@ class SMTPEmailBackend:
         *,
         body_html: str | None = None,
         reply_to: str | None = None,
+        attachments: Sequence[EmailAttachment] | None = None,
     ) -> None:
         """Send email asynchronously by offloading blocking call."""
 
@@ -85,6 +96,7 @@ class SMTPEmailBackend:
         message.set_content(body_text)
         if body_html:
             message.add_alternative(body_html, subtype="html")
+        _attach_files(message, attachments)
 
         await asyncio.to_thread(self._send, message)
 
@@ -120,6 +132,7 @@ class InMemoryEmailBackend:
         *,
         body_html: str | None = None,
         reply_to: str | None = None,
+        attachments: Sequence[EmailAttachment] | None = None,
     ) -> None:
         message = EmailMessage()
         message["To"] = recipient
@@ -129,6 +142,7 @@ class InMemoryEmailBackend:
         message.set_content(body_text)
         if body_html:
             message.add_alternative(body_html, subtype="html")
+        _attach_files(message, attachments)
         self.sent_messages.append(message)
 
 
@@ -169,4 +183,21 @@ class InMemoryPushBackend:
                 "body": body,
                 "metadata": metadata or {},
             }
+        )
+
+
+def _attach_files(message: EmailMessage, attachments: Sequence[EmailAttachment] | None) -> None:
+    if not attachments:
+        return
+    for attachment in attachments:
+        content_type = attachment.content_type or "application/octet-stream"
+        if "/" in content_type:
+            maintype, subtype = content_type.split("/", 1)
+        else:
+            maintype, subtype = "application", "octet-stream"
+        message.add_attachment(
+            attachment.payload,
+            maintype=maintype,
+            subtype=subtype,
+            filename=attachment.filename,
         )

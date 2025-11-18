@@ -22,6 +22,10 @@ type ProductsPageProps = {
     q?: string;
     category?: string;
     sort?: string;
+    platform?: string;
+    quickOrderProductId?: string;
+    quickOrderProductTitle?: string;
+    quickOrderSessionId?: string;
   };
 };
 
@@ -175,7 +179,15 @@ function Filters({ categories, query, selectedCategory, selectedSort }: FiltersP
   );
 }
 
-function ProductGrid({ products }: { products: Product[] }) {
+function ProductGrid({
+  products,
+  highlightProductId,
+  quickOrderSessionId,
+}: {
+  products: Product[];
+  highlightProductId?: string | null;
+  quickOrderSessionId?: string | null;
+}) {
   if (products.length === 0) {
     return (
       <div className="rounded-3xl border border-white/10 bg-white/5 p-12 text-center backdrop-blur">
@@ -189,11 +201,17 @@ function ProductGrid({ products }: { products: Product[] }) {
 
   return (
     <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-3">
-      {products.map((product) => (
-        <div
-          key={product.id}
-          className="group rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur transition-all hover:border-white/20 hover:bg-white/10"
-        >
+      {products.map((product) => {
+        const isHighlighted = highlightProductId === product.id;
+        const highlightClass = isHighlighted
+          ? "border-emerald-400/60 bg-emerald-500/10 shadow-lg shadow-emerald-500/20"
+          : "border-white/10 bg-white/5";
+        return (
+          <div
+            key={product.id}
+            id={isHighlighted ? "quick-order-product" : undefined}
+            className={`group rounded-3xl border p-8 backdrop-blur transition-all hover:border-white/20 hover:bg-white/10 ${highlightClass}`}
+          >
           <div className="mb-6">
             <span className="inline-block rounded-full bg-blue-500/20 px-3 py-1 text-sm font-medium text-blue-300">
               {product.category.charAt(0).toUpperCase() + product.category.slice(1)}
@@ -216,14 +234,22 @@ function ProductGrid({ products }: { products: Product[] }) {
             </div>
 
             <Link
-              href={`/products/${product.slug}`}
+              href={(() => {
+                if (!isHighlighted || !quickOrderSessionId) {
+                  return `/products/${product.slug}`;
+                }
+                const params = new URLSearchParams();
+                params.set("quickOrderSessionId", quickOrderSessionId);
+                return `/products/${product.slug}?${params.toString()}`;
+              })()}
               className="rounded-full bg-white px-6 py-2 text-sm font-semibold text-black transition hover:bg-white/90"
             >
               View details
             </Link>
           </div>
-        </div>
-      ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -409,6 +435,19 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
   const query = searchParams?.q?.trim().toLowerCase();
   const category = searchParams?.category?.trim().toLowerCase();
   const sort = searchParams?.sort?.toLowerCase() ?? "featured";
+  const quickOrderProductId = searchParams?.quickOrderProductId?.trim();
+  const quickOrderProductTitle = searchParams?.quickOrderProductTitle?.trim();
+  const quickOrderPlatform = searchParams?.platform?.trim();
+  const quickOrderSessionId = searchParams?.quickOrderSessionId?.trim() ?? null;
+  const highlightedProduct =
+    quickOrderProductId != null
+      ? products.find(
+          (product) =>
+            product.id === quickOrderProductId ||
+            product.slug === quickOrderProductId ||
+            product.title.toLowerCase() === quickOrderProductId.toLowerCase(),
+        ) ?? null
+      : null;
 
   const filteredProducts = products.filter((product) => {
     const matchesCategory = category ? product.category.toLowerCase() === category : true;
@@ -476,6 +515,51 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
           Professional social media growth solutions tailored to your goals.
         </p>
       </header>
+
+      {quickOrderProductId || quickOrderProductTitle || quickOrderPlatform ? (
+        <section className="space-y-3 rounded-3xl border border-emerald-400/30 bg-emerald-500/10 p-6 text-white/80">
+          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/80">Quick-order context</p>
+          {highlightedProduct ? (
+            <>
+              <p className="text-lg text-white">
+                We preselected <span className="font-semibold">{highlightedProduct.title}</span>
+                {quickOrderPlatform ? ` for ${quickOrderPlatform}` : ""}. Review the service details below, then configure the blueprint to send your order.
+              </p>
+              <div className="flex flex-wrap gap-3 text-xs">
+                <Link
+                  href={(() => {
+                    const params = new URLSearchParams();
+                    if (quickOrderPlatform) {
+                      params.set("platform", quickOrderPlatform);
+                    }
+                    if (quickOrderSessionId) {
+                      params.set("quickOrderSessionId", quickOrderSessionId);
+                    }
+                    const query = params.toString();
+                    return query.length > 0
+                      ? `/products/${highlightedProduct.slug}?${query}`
+                      : `/products/${highlightedProduct.slug}`;
+                  })()}
+                  className="inline-flex items-center justify-center rounded-full border border-white/40 px-4 py-2 font-semibold uppercase tracking-[0.2em] text-white/90 transition hover:border-white/70 hover:text-white"
+                >
+                  Open product builder
+                </Link>
+                <Link
+                  href="/products"
+                  className="inline-flex items-center justify-center rounded-full border border-transparent px-4 py-2 font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:text-white"
+                >
+                  Clear quick-order filter
+                </Link>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-white/70">
+              Quick-order parameters referenced “{quickOrderProductTitle ?? quickOrderProductId ?? "unknown"}”, but we
+              couldn’t find a matching service. Browse the catalog below or use the filters to refine your search.
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <Filters
         categories={categories}
@@ -551,7 +635,11 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
       ) : null}
 
       <Suspense fallback={<div className="text-sm text-white/60">Loading catalog…</div>}>
-        <ProductGrid products={sortedProducts} />
+        <ProductGrid
+          products={sortedProducts}
+          highlightProductId={highlightedProduct?.id ?? null}
+          quickOrderSessionId={quickOrderSessionId}
+        />
       </Suspense>
 
       <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur">
